@@ -11,6 +11,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../database/prisma.service';
+import { OrganizationsService } from '../organizations/organizations.service';
 import { EmailService } from '../email/email.service';
 import { EmailTemplate } from '../email/email.types';
 import { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
@@ -46,6 +47,7 @@ export class AuthService {
         private readonly jwtService: JwtService,
         private readonly configService: ConfigService,
         private readonly emailService: EmailService,
+        private readonly organizationsService: OrganizationsService,
     ) {
         this.jwtConfig = this.configService.get<JwtConfig>('jwt')!;
     }
@@ -246,9 +248,16 @@ export class AuthService {
 
         await this.verifyOtpCode(user.id, dto.code, 'EMAIL_VERIFICATION');
 
-        await this.prisma.user.update({
-            where: { id: user.id },
-            data: { emailVerified: true },
+        // Mark the account verified and provision the starter organization in a
+        // single transaction: either the user ends up with an organization and
+        // a project, or nothing is written and they can request a fresh code.
+        await this.prisma.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: user.id },
+                data: { emailVerified: true },
+            });
+
+            await this.organizationsService.provisionForUser(user, tx);
         });
 
         // Generate tokens so user is logged in after verification

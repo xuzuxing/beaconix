@@ -714,6 +714,8 @@ Beacon sends transactional emails via [Resend](https://resend.com) with branded 
 
 All templates use a consistent layout with the Beacon branding header, responsive design, and XSS-safe HTML escaping.
 
+In development (`NODE_ENV=development`) `EmailService` runs in dev mode: nothing is sent through Resend, the recipient, subject, payload and rendered HTML are printed to the application console instead. Set `EMAIL_DEV_MODE=false` to force real sending, or run `pnpm test:resend` to verify delivery with the standalone script.
+
 ---
 
 ## Security
@@ -917,10 +919,13 @@ cp .env.example .env
 | `THROTTLE_TTL` | No | Rate limit window in seconds (default: `60`) |
 | `THROTTLE_LIMIT` | No | Max requests per window (default: `10`) |
 | `UPLOADTHING_TOKEN` | Yes | UploadThing API token |
-| `RESEND_API_KEY` | Yes | Resend email service API key |
+| `RESEND_API_KEY` | Yes¹ | Resend email service API key |
 | `RESEND_FROM_EMAIL` | No | Sender email address |
 | `RESEND_FROM_NAME` | No | Sender display name (default: `Beacon`) |
+| `EMAIL_DEV_MODE` | No | Print emails to the console instead of sending them (default: `true` when `NODE_ENV=development`) |
 | `CORS_ORIGINS` | No | Comma-separated allowed origins |
+
+¹ Not required while `EMAIL_DEV_MODE` is enabled (the default in development).
 
 ### Running the Application
 

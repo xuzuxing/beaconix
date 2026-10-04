@@ -55,6 +55,7 @@ Each feature is a standard Nest module (`*.module.ts` / `*.controller.ts` / `*.s
 - **`email`**: transactional email via Resend.
 - **`attachments`**: file upload via UploadThing — the route handler is mounted directly on the Express instance in `main.ts` at `/api/uploadthing`, **outside** the Nest router.
 - **`notifications`**: in-app + real-time via Server-Sent Events (SSE).
+- **`organizations`**: tenant CRUD, plus the onboarding bootstrap. `OrganizationsService.provisionForUser` creates a starter organization (user as `OWNER`, plus the matching `Membership`) and its first project. It is idempotent (skips users who already belong to any org) and is called from `AuthService.verifyEmail` inside the same transaction that flips `emailVerified`, so a verified user always ends up with a usable organization.
 
 ### Data layer
 - Prisma schema: `prisma/schema.prisma` (18 models). Connects to PostgreSQL via the `@prisma/adapter-pg` driver adapter. Prisma config lives in `prisma.config.ts`, not `package.json`.
