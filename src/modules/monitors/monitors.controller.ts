@@ -82,7 +82,10 @@ export class MonitorsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member' })
     @ApiNotFoundResponse({ description: 'Monitor not found' })
-    async findOne(@Param('projectId') projectId: string, @Param('id') id: string) {
+    async findOne(
+        @Param('projectId') projectId: string,
+        @Param('id') id: string,
+    ) {
         return this.monitorsService.findOne(projectId, id);
     }
 
@@ -129,7 +132,10 @@ export class MonitorsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Monitor not found' })
-    async pause(@Param('projectId') projectId: string, @Param('id') id: string) {
+    async pause(
+        @Param('projectId') projectId: string,
+        @Param('id') id: string,
+    ) {
         return this.monitorsService.pause(projectId, id);
     }
 
@@ -149,7 +155,10 @@ export class MonitorsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Monitor not found' })
-    async resume(@Param('projectId') projectId: string, @Param('id') id: string) {
+    async resume(
+        @Param('projectId') projectId: string,
+        @Param('id') id: string,
+    ) {
         return this.monitorsService.resume(projectId, id);
     }
 
@@ -168,7 +177,10 @@ export class MonitorsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Monitor not found' })
-    async remove(@Param('projectId') projectId: string, @Param('id') id: string) {
+    async remove(
+        @Param('projectId') projectId: string,
+        @Param('id') id: string,
+    ) {
         return this.monitorsService.softDelete(projectId, id);
     }
 
@@ -188,7 +200,10 @@ export class MonitorsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Monitor not found' })
-    async restore(@Param('projectId') projectId: string, @Param('id') id: string) {
+    async restore(
+        @Param('projectId') projectId: string,
+        @Param('id') id: string,
+    ) {
         return this.monitorsService.restore(projectId, id);
     }
 }

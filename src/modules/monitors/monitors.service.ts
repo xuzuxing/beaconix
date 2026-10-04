@@ -176,7 +176,9 @@ export class MonitorsService {
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    private async ensureProjectExists(projectId: string): Promise<ProjectModel> {
+    private async ensureProjectExists(
+        projectId: string,
+    ): Promise<ProjectModel> {
         const project = await this.prisma.project.findFirst({
             where: {
                 id: projectId,

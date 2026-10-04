@@ -410,11 +410,15 @@ describe('CheckerService', () => {
             ]);
             prisma.checkLog.count.mockResolvedValue(1);
 
-            const result = await service.listCheckLogs('project-1', 'monitor-1', {
-                success: false,
-                page: 1,
-                limit: 5,
-            });
+            const result = await service.listCheckLogs(
+                'project-1',
+                'monitor-1',
+                {
+                    success: false,
+                    page: 1,
+                    limit: 5,
+                },
+            );
 
             expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
                 where: { monitorId: 'monitor-1', success: false },
