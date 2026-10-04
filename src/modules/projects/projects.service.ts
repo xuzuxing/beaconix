@@ -7,10 +7,14 @@ import {
 import { PrismaService } from '../../database/prisma.service';
 import { CreateProjectDto, UpdateProjectDto } from './dto';
 import { ProjectEntity } from './entities';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class ProjectsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly notificationsService: NotificationsService,
+    ) {}
 
     async create(orgId: string, userId: string, dto: CreateProjectDto) {
         // Enforce unique key per organization
@@ -79,6 +83,15 @@ export class ProjectsService {
             data: { status: 'ARCHIVED' },
         });
 
+        // Notify every org member about the archive (fire-and-forget)
+        this.notifyOrgMembers(project.organizationId, {
+            type: 'PROJECT_ARCHIVED',
+            title: `Project "${updated.name}" has been archived`,
+            body: 'The project is now read-only. Restore it to make changes again.',
+            resourceType: 'Project',
+            resourceId: projectId,
+        }).catch(() => {});
+
         return new ProjectEntity(updated);
     }
 
@@ -115,6 +128,27 @@ export class ProjectsService {
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
+
+    private async notifyOrgMembers(
+        organizationId: string,
+        dto: {
+            type: 'PROJECT_ARCHIVED';
+            title: string;
+            body: string;
+            resourceType: string;
+            resourceId: string;
+        },
+    ) {
+        const members = await this.prisma.membership.findMany({
+            where: { organizationId },
+            select: { userId: true },
+        });
+
+        await this.notificationsService.createAndEmitMany(
+            members.map((m) => m.userId),
+            dto,
+        );
+    }
 
     private async ensureProjectExists(orgId: string, projectId: string) {
         const project = await this.prisma.project.findFirst({

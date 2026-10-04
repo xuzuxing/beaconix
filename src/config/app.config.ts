@@ -9,6 +9,8 @@ export interface AppConfig {
     isDevelopment: boolean;
     isTest: boolean;
     corsOrigins: string[];
+    /** Base URL of the web client, used to build links inside emails. */
+    webUrl: string;
 }
 
 export const appConfig = registerAs('app', (): AppConfig => {
@@ -24,5 +26,6 @@ export const appConfig = registerAs('app', (): AppConfig => {
         corsOrigins: rawOrigins
             ? rawOrigins.split(',').map((o) => o.trim())
             : [],
+        webUrl: optionalEnv('APP_WEB_URL', 'http://localhost:3000'),
     };
 });

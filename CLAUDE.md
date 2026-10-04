@@ -32,7 +32,7 @@ pnpm prisma:db:seed     # seed (tsx prisma/seed.ts)
 pnpm prisma:studio
 ```
 
-CI (`.github/workflows/ci.yml`) runs on Node 22 and gates PRs to `main`/`dev` with: prisma generate → type-check → lint → build. Match all four locally before pushing. Pre-commit hooks run via Husky.
+CI (`.github/workflows/ci.yml`) runs on Node 22 and gates PRs to `master` with: prisma generate → type-check → lint → build. Match all four locally before pushing. Pre-commit hooks run via Husky.
 
 ## Architecture
 
@@ -69,4 +69,4 @@ Typed config via `@nestjs/config` `registerAs` factories in `src/config/` (`app`
 - Prettier: **4-space indent**, single quotes, trailing commas (`all`). TypeScript strict-ish (`strictNullChecks` on, `noImplicitAny` off). Match the existing style; run `pnpm format` / `pnpm lint`.
 - New endpoints: decorate with Swagger (`@ApiTags`, `@ApiOperation`, response decorators) as existing controllers do — the live docs are generated from these.
 - Mark unauthenticated routes with `@Public()`; get the current user with `@CurrentUser()`; guard tenant routes with `OrgMemberGuard`/`RolesGuard`; audit mutations with `@AuditLog()`.
-- Branching: work off `dev`; PRs target `main`.
+- Branching: work off `master`; PRs target `master` (squash merged after CI passes).

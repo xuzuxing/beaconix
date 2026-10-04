@@ -1,6 +1,6 @@
 ## Supported Versions
 
-As Beacon is currently in active development, only the latest version on the `main` branch receives security updates.
+As Beacon is currently in active development, only the latest version on the `master` branch receives security updates.
 
 ## Reporting a Vulnerability
 

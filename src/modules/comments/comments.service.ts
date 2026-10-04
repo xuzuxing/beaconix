@@ -46,7 +46,7 @@ export class CommentsService {
     }
 
     async create(taskId: string, userId: string, dto: CreateCommentDto) {
-        await this.ensureTaskExists(taskId);
+        const task = await this.ensureTaskExists(taskId);
 
         if (dto.parentId) {
             const parent = await this.prisma.comment.findFirst({
@@ -69,27 +69,46 @@ export class CommentsService {
             },
         });
 
-        // Notify task watchers about the new comment (fire-and-forget)
+        // Notify task watchers and mentioned members (fire-and-forget).
+        // Mentioned members get a MENTION notification instead of TASK_COMMENTED.
+        const mentionedUserIds = await this.findMentionedUserIds(
+            dto.body,
+            task.projectId,
+            userId,
+        );
+        const mentioned = new Set(mentionedUserIds);
+
         const watchers = await this.prisma.taskWatcher.findMany({
             where: { taskId },
             select: { userId: true },
         });
         const watcherIds = watchers
             .map((w) => w.userId)
-            .filter((id) => id !== userId);
+            .filter((id) => id !== userId && !mentioned.has(id));
+
+        const preview = dto.body.replace(/\s+/g, ' ').trim().slice(0, 100);
 
         if (watcherIds.length > 0) {
-            const task = await this.prisma.task.findUnique({
-                where: { id: taskId },
-                select: { number: true, title: true },
-            });
             this.notificationsService
                 .createAndEmitMany(watcherIds, {
                     type: 'TASK_COMMENTED' as const,
-                    title: `New comment on task #${task?.number ?? ''}`,
-                    body: `${dto.body.substring(0, 100)}`,
+                    title: `New comment on task #${task.number}`,
+                    body: preview,
                     resourceType: 'Task',
                     resourceId: taskId,
+                })
+                .catch(() => {});
+        }
+
+        if (mentionedUserIds.length > 0) {
+            this.notificationsService
+                .createAndEmitMany(mentionedUserIds, {
+                    type: 'MENTION' as const,
+                    title: `You were mentioned on task #${task.number}`,
+                    body: preview,
+                    resourceType: 'Task',
+                    resourceId: taskId,
+                    meta: { commentId: comment.id },
                 })
                 .catch(() => {});
         }
@@ -146,6 +165,55 @@ export class CommentsService {
     }
 
     // ── PRIVATE HELPERS ─────────────────────────────────────────────────
+
+    /**
+     * Resolve `@display name` mentions to organization members of the task's
+     * project. Matching is case-insensitive, the mention must not be preceded
+     * or followed by another word character (`foo@Ann.com` is not a mention,
+     * `@Ann` does not match `@Anna`). The comment author is never notified
+     * about mentioning themselves.
+     */
+    private async findMentionedUserIds(
+        body: string,
+        projectId: string,
+        authorId: string,
+    ): Promise<string[]> {
+        if (!body.includes('@')) return [];
+
+        const project = await this.prisma.project.findUnique({
+            where: { id: projectId },
+            select: { organizationId: true },
+        });
+        if (!project) return [];
+
+        const members = await this.prisma.membership.findMany({
+            where: { organizationId: project.organizationId },
+            select: { userId: true, user: { select: { name: true } } },
+        });
+
+        const mentioned: string[] = [];
+
+        for (const member of members) {
+            if (member.userId === authorId) continue;
+
+            const name = member.user.name?.trim();
+            if (!name) continue;
+
+            if (this.mentionsName(body, name)) {
+                mentioned.push(member.userId);
+            }
+        }
+
+        return mentioned;
+    }
+
+    private mentionsName(body: string, name: string): boolean {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(
+            `(?:^|[^\\p{L}\\p{N}_])@${escaped}(?![\\p{L}\\p{N}_])`,
+            'iu',
+        ).test(body);
+    }
 
     private async ensureTaskExists(taskId: string) {
         const task = await this.prisma.task.findFirst({

@@ -19,6 +19,10 @@ import {
     TaskActivityEntity,
 } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';
+import { EmailService } from '../email/email.service';
+import { EmailTemplate } from '../email/email.types';
+import type { AppConfig } from '../../config';
+import { ConfigService } from '@nestjs/config';
 
 // Shared select for user relations
 const userSelect = {
@@ -28,11 +32,24 @@ const userSelect = {
     avatarUrl: true,
 } as const;
 
+// Human-readable labels for the fields tracked by buildActivityRecords
+const TRACKED_FIELD_LABELS: Record<string, string> = {
+    title: 'title',
+    description: 'description',
+    priority: 'priority',
+    status: 'status',
+    storyPoints: 'story points',
+    dueDate: 'due date',
+    parentTaskId: 'parent task',
+};
+
 @Injectable()
 export class TasksService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
+        private readonly emailService: EmailService,
+        private readonly configService: ConfigService,
     ) {}
 
     // ── CRUD ────────────────────────────────────────────────────────────
@@ -283,6 +300,8 @@ export class TasksService {
             data.completedAt = null;
         }
 
+        let changedFields: string[] = [];
+
         const task = await this.prisma.$transaction(async (tx) => {
             const updated = await tx.task.update({
                 where: { id: taskId },
@@ -304,11 +323,19 @@ export class TasksService {
                 await tx.taskActivity.createMany({ data: activities });
             }
 
+            changedFields = activities.map((a) => a.field);
+
             return updated;
         });
 
-        // Notify watchers on status change (fire-and-forget)
-        if (dto.status && dto.status !== existing.status) {
+        // Notify watchers about the change (fire-and-forget).
+        // Status changes get their own type; any other field change is TASK_UPDATED.
+        const statusChanged = !!dto.status && dto.status !== existing.status;
+        const otherChangedFields = changedFields.filter(
+            (field) => field !== 'status',
+        );
+
+        if (statusChanged || otherChangedFields.length > 0) {
             const watchers = await this.prisma.taskWatcher.findMany({
                 where: { taskId },
                 select: { userId: true },
@@ -317,11 +344,21 @@ export class TasksService {
                 .map((w) => w.userId)
                 .filter((id) => id !== userId);
 
+            const labels = otherChangedFields.map(
+                (field) => TRACKED_FIELD_LABELS[field] ?? field,
+            );
+
             this.notificationsService
                 .createAndEmitMany(watcherIds, {
-                    type: 'TASK_STATUS_CHANGED' as const,
-                    title: `Task #${existing.number} status changed to ${dto.status}`,
-                    body: `"${existing.title}" was moved to ${dto.status}`,
+                    type: statusChanged
+                        ? ('TASK_STATUS_CHANGED' as const)
+                        : ('TASK_UPDATED' as const),
+                    title: statusChanged
+                        ? `Task #${existing.number} status changed to ${dto.status}`
+                        : `Task #${existing.number} was updated`,
+                    body: statusChanged
+                        ? `"${existing.title}" was moved to ${dto.status}`
+                        : `"${existing.title}" - changed: ${labels.join(', ')}`,
                     resourceType: 'Task',
                     resourceId: taskId,
                 })
@@ -440,7 +477,7 @@ export class TasksService {
             return updated;
         });
 
-        // Notify assignee (fire-and-forget)
+        // Notify assignee (fire-and-forget): in-app notification + email
         if (dto.assignedToId && dto.assignedToId !== userId) {
             this.notificationsService
                 .createAndEmit(dto.assignedToId, {
@@ -451,6 +488,18 @@ export class TasksService {
                     resourceId: taskId,
                 })
                 .catch(() => {});
+
+            if (task.assignedTo) {
+                const { webUrl } = this.configService.get<AppConfig>('app')!;
+                this.emailService
+                    .send(EmailTemplate.TASK_ASSIGNED, {
+                        to: task.assignedTo.email,
+                        name: task.assignedTo.name,
+                        taskTitle: existing.title,
+                        taskUrl: `${webUrl}/tasks/${taskId}`,
+                    })
+                    .catch(() => {});
+            }
         }
 
         return new TaskEntity(task);
@@ -783,20 +832,11 @@ export class TasksService {
             newValue: string | null;
         }> = [];
 
-        const trackedFields: Array<{
-            key: keyof UpdateTaskDto;
-            label: string;
-        }> = [
-            { key: 'title', label: 'title' },
-            { key: 'description', label: 'description' },
-            { key: 'priority', label: 'priority' },
-            { key: 'status', label: 'status' },
-            { key: 'storyPoints', label: 'story points' },
-            { key: 'dueDate', label: 'due date' },
-            { key: 'parentTaskId', label: 'parent task' },
-        ];
+        const trackedFields = Object.entries(TRACKED_FIELD_LABELS) as Array<
+            [keyof UpdateTaskDto, string]
+        >;
 
-        for (const { key, label } of trackedFields) {
+        for (const [key, label] of trackedFields) {
             if (dto[key] !== undefined) {
                 const oldVal = existing[key];
                 const newVal = dto[key];

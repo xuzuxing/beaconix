@@ -748,20 +748,15 @@ Beacon follows a structured development workflow from local development through 
 ```mermaid
 gitGraph
     commit id: "initial"
-    branch dev
-    checkout dev
-    commit id: "feat: task module"
     branch feat/task-dependencies
     commit id: "add dependency model"
     commit id: "add dependency endpoints"
-    checkout dev
+    checkout master
     merge feat/task-dependencies id: "PR #12 merged" tag: "squash"
     branch fix/token-expiry
     commit id: "fix refresh token edge case"
-    checkout dev
+    checkout master
     merge fix/token-expiry id: "PR #13 merged" tag: "squash"
-    checkout main
-    merge dev id: "Release v1.2" tag: "v1.2"
 ```
 
 **Branch naming conventions:**
@@ -775,7 +770,7 @@ gitGraph
 | `refactor/` | Code restructuring |
 | `test/` | Adding or updating tests |
 
-**Branch protection rules on `main` and `dev`:**
+**Branch protection rules on `master`:**
 - Pull request required (no direct pushes)
 - Status checks must pass (CI pipeline)
 - Squash merge enforced
@@ -805,12 +800,12 @@ Current configuration in `.github/dependabot.yml`:
 
 | Ecosystem | Scope | Schedule | Notes |
 |---|---|---|---|
-| `npm` | Root workspace (`/`) | Weekly (Monday, 04:00 UTC) | Target branch: `dev`; auto-rebase; labels (`dependencies`, `security`); commit prefix `chore(deps)` with scope; grouped updates for `@nestjs/*`, `prisma`, `@prisma/*` |
-| `github-actions` | Repository workflows | Monthly (Monday, 05:00 UTC) | Target branch: `dev`; auto-rebase; labels (`dependencies`, `github-actions`); commit prefix `chore(ci)` with scope |
+| `npm` | Root workspace (`/`) | Weekly (Monday, 04:00 UTC) | Target branch: `master`; auto-rebase; labels (`dependencies`, `security`); commit prefix `chore(deps)` with scope; grouped updates for `@nestjs/*`, `prisma`, `@prisma/*` |
+| `github-actions` | Repository workflows | Monthly (Monday, 05:00 UTC) | Target branch: `master`; auto-rebase; labels (`dependencies`, `github-actions`); commit prefix `chore(ci)` with scope |
 
 **Branch strategy:**
-- Dependabot PRs target `dev` first.
-- Changes are promoted to `main` through normal `dev -> main` release PR flow.
+- Dependabot PRs target `master` directly.
+- Updates are merged like any other PR, after CI passes.
 
 **PR conventions:**
 - Dependabot rebases update PRs automatically when needed.
@@ -823,11 +818,11 @@ Current configuration in `.github/dependabot.yml`:
 
 ### CI Pipeline
 
-GitHub Actions runs on every push to `dev` and on pull requests targeting `main` or `dev`:
+GitHub Actions runs on every push to `master` and on pull requests targeting `master`:
 
 ```mermaid
 graph TD
-    PR["Pull Request / Push to dev"] --> CI["GitHub Actions CI"]
+    PR["Pull Request / Push to master"] --> CI["GitHub Actions CI"]
 
     CI --> CHECKOUT["Checkout Code"]
     CHECKOUT --> NODE["Setup Node.js 22"]
@@ -850,18 +845,13 @@ graph TD
 ```mermaid
 graph TD
     DEV["Developer pushes to feature branch"]
-    DEV --> PR["Opens PR to dev"]
+    DEV --> PR["Opens PR to master"]
     PR --> CI["CI Pipeline Runs<br/>(type-check, lint, build)"]
     CI -->|pass| REVIEW["Code Review"]
-    REVIEW --> MERGE_DEV["Merge to dev"]
+    REVIEW --> MERGE["Squash merge to master"]
 
-    MERGE_DEV --> CI2["CI Runs on dev"]
-    CI2 -->|pass| PR_MAIN["Open PR: dev → main"]
-
-    PR_MAIN --> CI3["CI Pipeline Runs on PR"]
-    CI3 -->|pass| MERGE_MAIN["Merge to main"]
-
-    MERGE_MAIN --> RENDER["Render Deployment<br/>(Manual trigger after CI passes)"]
+    MERGE --> CI2["CI Runs on master after merge"]
+    CI2 -->|pass| RENDER["Render Deployment<br/>(Manual trigger after CI passes)"]
 
     subgraph "Render Build"
         RENDER --> DOCKER["Docker Multi-Stage Build"]
