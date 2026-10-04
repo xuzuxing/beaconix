@@ -12,7 +12,8 @@ import type { ResendConfig } from '../../config';
             inject: [ConfigService],
             useFactory: (config: ConfigService) => {
                 const resend = config.get<ResendConfig>('resend')!;
-                return new Resend(resend.apiKey);
+                // In dev mode emails are only logged, so the key may be absent.
+                return new Resend(resend.apiKey || 're_dev_placeholder');
             },
         },
         EmailService,

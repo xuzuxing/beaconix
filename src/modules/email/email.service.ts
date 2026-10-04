@@ -10,6 +10,7 @@ import { escapeHtml } from '../../common/utils/otp.util';
 export class EmailService {
     private readonly logger = new Logger(EmailService.name);
     private readonly from: string;
+    private readonly devMode: boolean;
 
     constructor(
         @Inject('RESEND_CLIENT') private readonly resend: Resend,
@@ -17,6 +18,7 @@ export class EmailService {
     ) {
         const resendCfg = this.configService.get<ResendConfig>('resend')!;
         this.from = `${resendCfg.fromName} <${resendCfg.fromEmail}>`;
+        this.devMode = resendCfg.devMode;
     }
 
     async send<T extends EmailTemplate>(
@@ -25,8 +27,14 @@ export class EmailService {
     ): Promise<void> {
         const to = (payload as Record<string, unknown>).to as string;
         const { subject, html } = this.buildEmail(template, payload);
-        this.logger.log(`Payload: ${JSON.stringify(payload)}`);
         const masked = to.replace(/^(..)[^@]*/, '$1***');
+
+        if (this.devMode) {
+            this.printToConsole(template, to, subject, html, payload);
+            return;
+        }
+
+        this.logger.log(`Payload: ${JSON.stringify(payload)}`);
 
         this.logger.log(`Sending "${template}" email to "${masked}"`);
 
@@ -46,6 +54,36 @@ export class EmailService {
 
         this.logger.log(
             `Email "${template}" sent to "${masked}" (id: ${data?.id})`,
+        );
+    }
+
+    /**
+     * Dev mode: never hits Resend — prints the rendered email to the console so
+     * it can be inspected (e.g. to grab a verification code or an invite link).
+     */
+    private printToConsole<T extends EmailTemplate>(
+        template: T,
+        to: string,
+        subject: string,
+        html: string,
+        payload: EmailPayloadMap[T],
+    ): void {
+        const divider = '-'.repeat(72);
+        this.logger.log(
+            [
+                '',
+                divider,
+                `[DEV] "${template}" email NOT sent — console output instead`,
+                divider,
+                `To:      ${to}`,
+                `From:    ${this.from}`,
+                `Subject: ${subject}`,
+                `Payload: ${JSON.stringify(payload)}`,
+                divider,
+                html,
+                divider,
+                '',
+            ].join('\n'),
         );
     }
 
