@@ -714,7 +714,7 @@ Beacon sends transactional emails via [Resend](https://resend.com) with branded 
 
 All templates use a consistent layout with the Beacon branding header, responsive design, and XSS-safe HTML escaping.
 
-In development (`NODE_ENV=development`) `EmailService` runs in dev mode: nothing is sent through Resend, the recipient, subject, payload and rendered HTML are printed to the application console instead. Set `EMAIL_DEV_MODE=false` to force real sending, or run `pnpm test:resend` to verify delivery with the standalone script.
+In development (`NODE_ENV=development`) `EmailService` runs in dev mode: nothing is sent through Resend, the recipient, subject, payload and rendered HTML are printed to the application console instead. Use a non-development `NODE_ENV` with `RESEND_API_KEY` configured to send real email, or run `pnpm test:resend` to verify delivery with the standalone script.
 
 ---
 
@@ -922,10 +922,9 @@ cp .env.example .env
 | `RESEND_API_KEY` | Yes¹ | Resend email service API key |
 | `RESEND_FROM_EMAIL` | No | Sender email address |
 | `RESEND_FROM_NAME` | No | Sender display name (default: `Beacon`) |
-| `EMAIL_DEV_MODE` | No | Print emails to the console instead of sending them (default: `true` when `NODE_ENV=development`) |
 | `CORS_ORIGINS` | No | Comma-separated allowed origins |
 
-¹ Not required while `EMAIL_DEV_MODE` is enabled (the default in development).
+¹ Not required when `NODE_ENV=development`, because application emails are printed to stdout instead of sent.
 
 ### Running the Application
 

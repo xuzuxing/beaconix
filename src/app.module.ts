@@ -32,6 +32,11 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { EmailModule } from './modules/email/email.module';
 import { CronModule } from './modules/cron/cron.module';
+import { MonitorsModule } from './modules/monitors/monitors.module';
+import { ProbesModule } from './modules/probes/probes.module';
+import { CheckerModule } from './modules/checker/checker.module';
+import { StateModule } from './modules/state/state.module';
+import { NotifierModule } from './modules/notifier/notifier.module';
 
 @Module({
     imports: [
@@ -89,6 +94,11 @@ import { CronModule } from './modules/cron/cron.module';
         AuditLogsModule,
         NotificationsModule,
         CronModule,
+        MonitorsModule,
+        ProbesModule,
+        CheckerModule,
+        StateModule,
+        NotifierModule,
     ],
     controllers: [AppController],
     providers: [

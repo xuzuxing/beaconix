@@ -4,6 +4,7 @@ import {
     Head,
     HttpCode,
     HttpStatus,
+    Render,
     Res,
 } from '@nestjs/common';
 import {
@@ -133,6 +134,17 @@ export class AppController {
     })
     async getHealth(): Promise<HealthStatus> {
         return this.appService.getHealth();
+    }
+
+    @Get('monitor-test')
+    @Public()
+    @Render('monitor-test')
+    monitorTestPage() {
+        return {
+            title: 'Beacon Monitor Test',
+            apiBase: '/api',
+            renderedAt: new Date().toISOString(),
+        };
     }
 
     @Head()

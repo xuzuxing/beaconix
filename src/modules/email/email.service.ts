@@ -3,22 +3,29 @@ import { ConfigService } from '@nestjs/config';
 import type { Resend } from 'resend';
 import { EmailTemplate } from './email.types';
 import type { EmailPayloadMap } from './email.types';
-import type { ResendConfig } from '../../config';
+import type { AppConfig, ResendConfig } from '../../config';
 import { escapeHtml } from '../../common/utils/otp.util';
 
 @Injectable()
 export class EmailService {
     private readonly logger = new Logger(EmailService.name);
     private readonly from: string;
-    private readonly devMode: boolean;
+    private readonly isDevelopment: boolean;
 
     constructor(
         @Inject('RESEND_CLIENT') private readonly resend: Resend,
         private readonly configService: ConfigService,
     ) {
+        const appCfg = this.configService.get<AppConfig>('app')!;
         const resendCfg = this.configService.get<ResendConfig>('resend')!;
         this.from = `${resendCfg.fromName} <${resendCfg.fromEmail}>`;
-        this.devMode = resendCfg.devMode;
+        this.isDevelopment = appCfg.isDevelopment;
+
+        if (this.isDevelopment) {
+            this.logger.log(
+                'Email dev mode is enabled; emails will be printed to stdout.',
+            );
+        }
     }
 
     async send<T extends EmailTemplate>(
@@ -29,7 +36,7 @@ export class EmailService {
         const { subject, html } = this.buildEmail(template, payload);
         const masked = to.replace(/^(..)[^@]*/, '$1***');
 
-        if (this.devMode) {
+        if (this.isDevelopment) {
             this.printToConsole(template, to, subject, html, payload);
             return;
         }
@@ -69,7 +76,9 @@ export class EmailService {
         payload: EmailPayloadMap[T],
     ): void {
         const divider = '-'.repeat(72);
-        this.logger.log(
+        // Use console.log directly so dev-mode emails are visible even when
+        // Nest logger output is filtered or redirected by the runner.
+        console.log(
             [
                 '',
                 divider,
@@ -151,6 +160,16 @@ export class EmailService {
             case EmailTemplate.PASSWORD_RESET_OTP:
                 result = this.buildPasswordResetOtpEmail(
                     payload as EmailPayloadMap[EmailTemplate.PASSWORD_RESET_OTP],
+                );
+                break;
+            case EmailTemplate.MONITOR_DOWN:
+                result = this.buildMonitorDownEmail(
+                    payload as EmailPayloadMap[EmailTemplate.MONITOR_DOWN],
+                );
+                break;
+            case EmailTemplate.MONITOR_RECOVER:
+                result = this.buildMonitorRecoverEmail(
+                    payload as EmailPayloadMap[EmailTemplate.MONITOR_RECOVER],
                 );
                 break;
             default:
@@ -298,6 +317,54 @@ export class EmailService {
                     <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; background: #f4f4f5; padding: 16px 32px; border-radius: 8px; display: inline-block; font-family: monospace;">${code}</span>
                 </div>
                 <p style="color: #6b7280; font-size: 14px;">This code expires in ${payload.expiresInMinutes} minutes. If you didn't request a password reset, you can safely ignore this email.</p>
+            `,
+        };
+    }
+
+    private buildMonitorDownEmail(
+        payload: EmailPayloadMap[EmailTemplate.MONITOR_DOWN],
+    ) {
+        const monitorName = escapeHtml(payload.monitorName);
+        const target = escapeHtml(payload.target);
+        const previousStatus = escapeHtml(payload.previousStatus);
+        const status = escapeHtml(payload.status);
+        const error = escapeHtml(payload.error);
+        const latency = escapeHtml(payload.latency);
+        const checkedAt = escapeHtml(payload.checkedAt);
+        return {
+            subject: `[${payload.status}] ${payload.monitorName} is not healthy`,
+            html: `
+                <h2>Monitor alert</h2>
+                <p><strong>${monitorName}</strong> reported <strong>${status}</strong> (was ${previousStatus}).</p>
+                <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                    <tr><td style="padding:6px 0; color:#6b7280;">Target</td><td style="padding:6px 0;">${target}</td></tr>
+                    <tr><td style="padding:6px 0; color:#6b7280;">Latency</td><td style="padding:6px 0;">${latency}</td></tr>
+                    <tr><td style="padding:6px 0; color:#6b7280;">Error</td><td style="padding:6px 0;">${error}</td></tr>
+                    <tr><td style="padding:6px 0; color:#6b7280;">Checked at</td><td style="padding:6px 0;">${checkedAt}</td></tr>
+                </table>
+            `,
+        };
+    }
+
+    private buildMonitorRecoverEmail(
+        payload: EmailPayloadMap[EmailTemplate.MONITOR_RECOVER],
+    ) {
+        const monitorName = escapeHtml(payload.monitorName);
+        const target = escapeHtml(payload.target);
+        const previousStatus = escapeHtml(payload.previousStatus);
+        const status = escapeHtml(payload.status);
+        const latency = escapeHtml(payload.latency);
+        const checkedAt = escapeHtml(payload.checkedAt);
+        return {
+            subject: `[RECOVERED] ${payload.monitorName} is back up`,
+            html: `
+                <h2>Monitor recovered</h2>
+                <p><strong>${monitorName}</strong> is healthy again (<strong>${status}</strong>, was ${previousStatus}).</p>
+                <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                    <tr><td style="padding:6px 0; color:#6b7280;">Target</td><td style="padding:6px 0;">${target}</td></tr>
+                    <tr><td style="padding:6px 0; color:#6b7280;">Latency</td><td style="padding:6px 0;">${latency}</td></tr>
+                    <tr><td style="padding:6px 0; color:#6b7280;">Checked at</td><td style="padding:6px 0;">${checkedAt}</td></tr>
+                </table>
             `,
         };
     }

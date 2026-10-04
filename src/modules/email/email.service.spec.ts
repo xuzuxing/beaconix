@@ -3,18 +3,38 @@ import { ConfigService } from '@nestjs/config';
 import type { Resend } from 'resend';
 import { EmailService } from './email.service';
 import { EmailTemplate } from './email.types';
-import type { ResendConfig } from '../../config';
+import type { AppConfig, ResendConfig } from '../../config';
 
 const baseConfig: ResendConfig = {
     apiKey: 're_test_key',
     fromEmail: 'noreply@test.dev',
     fromName: 'Beacon',
-    devMode: false,
 };
 
-function createService(resendConfig: Partial<ResendConfig> = {}) {
+const baseAppConfig: AppConfig = {
+    name: 'beacon',
+    port: 3000,
+    env: 'production',
+    isProduction: true,
+    isDevelopment: false,
+    isTest: false,
+    corsOrigins: [],
+    webUrl: 'http://localhost:3000',
+};
+
+function createService({
+    resendConfig = {},
+    appConfig = {},
+}: {
+    resendConfig?: Partial<ResendConfig>;
+    appConfig?: Partial<AppConfig>;
+} = {}) {
     const configService = {
-        get: jest.fn(() => ({ ...baseConfig, ...resendConfig })),
+        get: jest.fn((key: string) => {
+            if (key === 'app') return { ...baseAppConfig, ...appConfig };
+            if (key === 'resend') return { ...baseConfig, ...resendConfig };
+            return undefined;
+        }),
     } as unknown as ConfigService;
 
     const emails = {
@@ -39,7 +59,9 @@ describe('EmailService', () => {
 
     describe('dev mode', () => {
         it('does not call Resend', async () => {
-            const { service, emails } = createService({ devMode: true });
+            const { service, emails } = createService({
+                appConfig: { isDevelopment: true },
+            });
 
             await service.send(EmailTemplate.EMAIL_VERIFICATION, payload);
 
@@ -48,9 +70,11 @@ describe('EmailService', () => {
 
         it('prints the email to the console', async () => {
             const logSpy = jest
-                .spyOn(Logger.prototype, 'log')
+                .spyOn(console, 'log')
                 .mockImplementation(() => undefined);
-            const { service } = createService({ devMode: true });
+            const { service } = createService({
+                appConfig: { isDevelopment: true },
+            });
 
             await service.send(EmailTemplate.EMAIL_VERIFICATION, payload);
 
@@ -70,7 +94,7 @@ describe('EmailService', () => {
             jest.spyOn(Logger.prototype, 'log').mockImplementation(
                 () => undefined,
             );
-            const { service, emails } = createService({ devMode: false });
+            const { service, emails } = createService();
 
             await service.send(EmailTemplate.EMAIL_VERIFICATION, payload);
 
@@ -91,7 +115,7 @@ describe('EmailService', () => {
             jest.spyOn(Logger.prototype, 'error').mockImplementation(
                 () => undefined,
             );
-            const { service, emails } = createService({ devMode: false });
+            const { service, emails } = createService();
             emails.send.mockResolvedValue({
                 data: null,
                 error: { message: 'boom' },

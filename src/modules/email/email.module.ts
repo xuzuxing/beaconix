@@ -2,7 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 import { EmailService } from './email.service';
-import type { ResendConfig } from '../../config';
+import type { AppConfig, ResendConfig } from '../../config';
 
 @Global()
 @Module({
@@ -11,8 +11,15 @@ import type { ResendConfig } from '../../config';
             provide: 'RESEND_CLIENT',
             inject: [ConfigService],
             useFactory: (config: ConfigService) => {
+                const app = config.get<AppConfig>('app')!;
                 const resend = config.get<ResendConfig>('resend')!;
-                // In dev mode emails are only logged, so the key may be absent.
+
+                if (!app.isDevelopment && !resend.apiKey) {
+                    throw new Error(
+                        'Missing required environment variable: RESEND_API_KEY',
+                    );
+                }
+
                 return new Resend(resend.apiKey || 're_dev_placeholder');
             },
         },

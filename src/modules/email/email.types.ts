@@ -7,6 +7,8 @@ export enum EmailTemplate {
     TASK_OVERDUE = 'task-overdue',
     EMAIL_VERIFICATION = 'email-verification',
     PASSWORD_RESET_OTP = 'password-reset-otp',
+    MONITOR_DOWN = 'monitor-down',
+    MONITOR_RECOVER = 'monitor-recover',
 }
 
 export interface EmailPayloadMap {
@@ -60,4 +62,18 @@ export interface EmailPayloadMap {
         code: string;
         expiresInMinutes: number;
     };
+    [EmailTemplate.MONITOR_DOWN]: MonitorEmailPayload;
+    [EmailTemplate.MONITOR_RECOVER]: MonitorEmailPayload;
+}
+
+/** Shared payload for the monitoring alert / recovery emails. */
+export interface MonitorEmailPayload {
+    to: string;
+    monitorName: string;
+    target: string;
+    status: string;
+    previousStatus: string;
+    error: string;
+    latency: string;
+    checkedAt: string;
 }

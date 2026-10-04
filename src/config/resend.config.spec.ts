@@ -4,7 +4,11 @@ import type { ResendConfig } from './resend.config';
 const loadConfig = () =>
     (resendConfig as unknown as () => ResendConfig)() satisfies ResendConfig;
 
-const ENV_KEYS = ['NODE_ENV', 'EMAIL_DEV_MODE', 'RESEND_API_KEY'] as const;
+const ENV_KEYS = [
+    'RESEND_API_KEY',
+    'RESEND_FROM_EMAIL',
+    'RESEND_FROM_NAME',
+] as const;
 const originalEnv: Record<string, string | undefined> = {};
 
 function restoreEnv() {
@@ -26,45 +30,29 @@ describe('resendConfig', () => {
 
     afterEach(restoreEnv);
 
-    it('enables dev mode in development without requiring an API key', () => {
-        process.env.NODE_ENV = 'development';
-        delete process.env.EMAIL_DEV_MODE;
+    it('loads an optional API key', () => {
+        process.env.RESEND_API_KEY = 're_test_key';
+
+        const config = loadConfig();
+
+        expect(config.apiKey).toBe('re_test_key');
+    });
+
+    it('allows an empty API key because EmailModule validates by app environment', () => {
         delete process.env.RESEND_API_KEY;
 
         const config = loadConfig();
 
-        expect(config.devMode).toBe(true);
         expect(config.apiKey).toBe('');
     });
 
-    it('requires an API key in production', () => {
-        process.env.NODE_ENV = 'production';
-        delete process.env.EMAIL_DEV_MODE;
-        delete process.env.RESEND_API_KEY;
-
-        expect(() => loadConfig()).toThrow(
-            'Missing required environment variable: RESEND_API_KEY',
-        );
-    });
-
-    it('lets EMAIL_DEV_MODE=false force real sending in development', () => {
-        process.env.NODE_ENV = 'development';
-        process.env.EMAIL_DEV_MODE = 'false';
-        process.env.RESEND_API_KEY = 're_dev_key';
+    it('uses default sender details when env values are omitted', () => {
+        delete process.env.RESEND_FROM_EMAIL;
+        delete process.env.RESEND_FROM_NAME;
 
         const config = loadConfig();
 
-        expect(config.devMode).toBe(false);
-        expect(config.apiKey).toBe('re_dev_key');
-    });
-
-    it('lets EMAIL_DEV_MODE=true suppress sending in production', () => {
-        process.env.NODE_ENV = 'production';
-        process.env.EMAIL_DEV_MODE = 'true';
-        delete process.env.RESEND_API_KEY;
-
-        const config = loadConfig();
-
-        expect(config.devMode).toBe(true);
+        expect(config.fromEmail).toBe('noreply@mail.khaledsaeed.tech');
+        expect(config.fromName).toBe('Beacon');
     });
 });
