@@ -19,7 +19,11 @@ import { TransformInterceptor } from './common/interceptors';
 import { uploadRouter } from './modules/attachments/upload.router';
 
 async function bootstrap() {
-    const app = await NestFactory.create<NestExpressApplication>(AppModule);
+    // `rawBody` is required to verify WeChat Pay V3 signatures, which cover the
+    // exact bytes of the callback payload.
+    const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+        rawBody: true,
+    });
     const configService = app.get(ConfigService);
     const appConfig = configService.get<AppConfig>('app')!;
     const logger = new Logger('Bootstrap');

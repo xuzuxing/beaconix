@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 import type { RedisConfig } from '../../config';
+import { WechatModule } from '../../infra/wechat/wechat.module';
 import { StateModule } from '../state/state.module';
 import { NotificationChannelsController } from './notification-channels.controller';
 import { NotificationChannelsService } from './notification-channels.service';
@@ -19,6 +20,7 @@ import {
 @Module({
     imports: [
         StateModule,
+        WechatModule,
         BullModule.forRootAsync({
             inject: [ConfigService],
             useFactory: (config: ConfigService) => {

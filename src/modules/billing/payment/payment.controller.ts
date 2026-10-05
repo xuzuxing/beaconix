@@ -6,7 +6,9 @@ import {
     HttpStatus,
     Param,
     Post,
+    Req,
 } from '@nestjs/common';
+import type { RawBodyRequest } from '@nestjs/common';
 import {
     ApiBearerAuth,
     ApiBody,
@@ -16,10 +18,29 @@ import {
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { CurrentUser, Public } from '../../../common/decorators';
 import type { JwtPayload } from '../../../common/interfaces/jwt-payload.interface';
 import { CreatePaymentDto } from './dto';
+import type { PaymentCallbackHeaders } from './payment-provider.interface';
 import { PaymentService } from './payment.service';
+
+/** Case-insensitive header lookup for Express/Nest header bags. */
+function readHeader(
+    headers: PaymentCallbackHeaders | undefined,
+    name: string,
+): string | undefined {
+    if (!headers) return undefined;
+
+    const target = name.toLowerCase();
+
+    for (const [key, value] of Object.entries(headers)) {
+        if (key.toLowerCase() !== target) continue;
+        return Array.isArray(value) ? value[0] : value;
+    }
+
+    return undefined;
+}
 
 @ApiTags('Billing / Payment')
 @ApiBearerAuth('access-token')
@@ -48,15 +69,25 @@ export class PaymentController {
     @Public()
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'WeChat Pay callback (idempotent)' })
-    @ApiBody({ description: 'WeChat Pay decrypted callback body' })
+    @ApiBody({
+        description:
+            'WeChat Pay notification envelope with an encrypted resource',
+    })
     @ApiOkResponse({ description: '{ code: "SUCCESS" | "FAIL" }' })
     async wechatCallback(
-        @Headers('wechatpay-signature') signature: string,
+        @Req() request: RawBodyRequest<Request>,
+        @Headers() headers: PaymentCallbackHeaders,
         @Body() body: unknown,
     ) {
+        // WeChat signs the exact bytes it sent, so verification must use the raw
+        // payload captured by `rawBody: true` — never a re-serialized object.
+        const rawBody =
+            request.rawBody?.toString('utf8') ?? JSON.stringify(body);
+
         return this.paymentService.handleWechatCallback(
-            JSON.stringify(body),
-            signature,
+            rawBody,
+            readHeader(headers, 'wechatpay-signature') ?? '',
+            headers,
         );
     }
 }

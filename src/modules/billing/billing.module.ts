@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { WechatModule } from '../../infra/wechat/wechat.module';
 import { SharedSubscriptionModule } from '../../shared/subscription/subscription.module';
 import { QuotaModule } from '../../shared/quota/quota.module';
 import { OrderController } from './order/order.controller';
@@ -16,7 +17,7 @@ import { SubscriptionExpiryService } from './subscription/subscription-expiry.se
 import { SubscriptionService } from './subscription/subscription.service';
 
 @Module({
-    imports: [SharedSubscriptionModule, QuotaModule],
+    imports: [SharedSubscriptionModule, QuotaModule, WechatModule],
     controllers: [
         PlanController,
         SubscriptionController,

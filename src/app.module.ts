@@ -14,11 +14,13 @@ import {
     redisConfig,
     resendConfig,
     throttlerConfig,
+    wechatConfig,
     JwtConfig,
     ThrottlerConfig,
 } from './config';
 import { PrismaModule } from './infra/database/prisma.module';
 import { RedisModule } from './infra/redis/redis.module';
+import { WechatModule } from './infra/wechat/wechat.module';
 import { JwtAuthGuard } from './common/guards';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -62,6 +64,7 @@ import { LoggerModule } from './infra/logging/logger.module';
                 redisConfig,
                 resendConfig,
                 throttlerConfig,
+                wechatConfig,
             ],
         }),
         JwtModule.registerAsync({
@@ -97,6 +100,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         ClsModule,
         LoggerModule,
         RedisModule,
+        WechatModule,
         // business
         EmailModule,
         AuthModule,

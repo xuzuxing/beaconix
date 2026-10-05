@@ -14,7 +14,10 @@ import {
 import type { OrderModel } from '../../../generated/prisma/models';
 import { CreatePaymentDto } from './dto';
 import { PaymentProviderFactory } from './payment-provider.factory';
-import type { PaymentProviderPayParams } from './payment-provider.interface';
+import type {
+    PaymentCallbackHeaders,
+    PaymentProviderPayParams,
+} from './payment-provider.interface';
 
 type OrderForPayment = OrderModel;
 
@@ -60,8 +63,17 @@ export class PaymentService {
     }
 
     /** Idempotent WeChat callback: a repeated SUCCESS callback is a no-op. */
-    async handleWechatCallback(rawBody: string, signature: string) {
-        return this.handleCallback(PaymentChannel.WECHAT, rawBody, signature);
+    async handleWechatCallback(
+        rawBody: string,
+        signature: string,
+        headers?: PaymentCallbackHeaders,
+    ) {
+        return this.handleCallback(
+            PaymentChannel.WECHAT,
+            rawBody,
+            signature,
+            headers,
+        );
     }
 
     /** Channel-agnostic callback processing through the provider factory. */
@@ -69,9 +81,14 @@ export class PaymentService {
         channel: PaymentChannel,
         rawBody: string,
         signature: string,
+        headers?: PaymentCallbackHeaders,
     ) {
         const provider = this.paymentProviderFactory.get(channel);
-        const callback = await provider.verifyCallback(rawBody, signature);
+        const callback = await provider.verifyCallback(
+            rawBody,
+            signature,
+            headers,
+        );
 
         if (callback.trade_state !== 'SUCCESS') {
             return { code: 'FAIL', message: 'trade_state is not SUCCESS' };

@@ -19,6 +19,12 @@ export interface PaymentProviderCallbackResult {
     [key: string]: unknown;
 }
 
+/** Header bag of the incoming callback request (Express `req.headers`). */
+export type PaymentCallbackHeaders = Record<
+    string,
+    string | string[] | undefined
+>;
+
 /**
  * A payment channel adapter. Add a new provider (Alipay, Stripe, ...) by
  * implementing this interface and registering it in PaymentProviderFactory.
@@ -31,9 +37,16 @@ export interface PaymentProvider {
         input: PaymentProviderCreateInput,
     ): Promise<PaymentProviderPayParams>;
 
-    /** Verifies and decodes an async payment callback body. */
+    /**
+     * Verifies and decodes an async payment callback body.
+     *
+     * `rawBody` must be the exact bytes the provider signed. Channels that
+     * need more than the signature header (WeChat Pay V3 needs timestamp,
+     * nonce and serial too) read them from `headers`.
+     */
     verifyCallback(
         rawBody: string,
         signature: string,
+        headers?: PaymentCallbackHeaders,
     ): Promise<PaymentProviderCallbackResult>;
 }

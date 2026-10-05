@@ -1,0 +1,9 @@
+{
+  "apiUrl": "https://api.example.com/api",
+  "key": "replace_with_probe_id_from_backend",
+  "token": "replace_with_probe_secret_from_backend",
+  "intervalSeconds": 60,
+  "timeoutMs": 5000,
+  "maxResultsPerReport": 100,
+  "allowInsecure": false
+}
