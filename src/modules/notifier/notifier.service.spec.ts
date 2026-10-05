@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { NotifierService } from './notifier.service';
-import type { PrismaService } from '../../database/prisma.service';
+import type { PrismaService } from '../../infra/database/prisma.service';
 import type { StateService } from '../state/state.service';
 
 const monitorRow = {

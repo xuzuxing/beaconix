@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { assertChannelConfig } from './channel-config';
 import {
     CreateNotificationChannelDto,

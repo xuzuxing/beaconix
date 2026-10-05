@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AdminModule } from '../admin/admin.module';
 import { NotifierModule } from '../notifier/notifier.module';
 import { StateModule } from '../state/state.module';
 import { CheckerController } from './checker.controller';
@@ -7,7 +8,7 @@ import { CheckerService } from './checker.service';
 import { HttpChecker, TcpChecker } from './checkers';
 
 @Module({
-    imports: [StateModule, NotifierModule],
+    imports: [StateModule, NotifierModule, AdminModule],
     controllers: [CheckerController],
     providers: [CheckerService, CheckerScheduler, HttpChecker, TcpChecker],
     exports: [CheckerService, HttpChecker, TcpChecker],

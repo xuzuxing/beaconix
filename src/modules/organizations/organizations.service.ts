@@ -7,7 +7,7 @@ import {
     Logger,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
 import {
     CreateOrganizationDto,

@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { CheckerService } from './checker.service';
-import type { PrismaService } from '../../database/prisma.service';
+import type { PrismaService } from '../../infra/database/prisma.service';
 import type { StateService } from '../state/state.service';
 import type { NotifierService } from '../notifier/notifier.service';
 
@@ -55,6 +55,7 @@ function createService() {
             count: jest.fn(),
         },
         probeResult: { findMany: jest.fn().mockResolvedValue([]) },
+        probeExecution: { create: jest.fn() },
     };
     const stateService = {
         record: jest.fn().mockResolvedValue({
@@ -76,6 +77,9 @@ function createService() {
     };
     const httpChecker = { check: jest.fn().mockResolvedValue(checkResult) };
     const tcpChecker = { check: jest.fn().mockResolvedValue(checkResult) };
+    const systemProbeScheduler = {
+        getAssignedProbes: jest.fn().mockResolvedValue([]),
+    };
 
     const service = new CheckerService(
         prisma as unknown as PrismaService,
@@ -83,6 +87,7 @@ function createService() {
         notifierService as unknown as NotifierService,
         httpChecker as never,
         tcpChecker,
+        systemProbeScheduler as never,
     );
 
     return {
@@ -92,6 +97,7 @@ function createService() {
         notifierService,
         httpChecker,
         tcpChecker,
+        systemProbeScheduler,
     };
 }
 
@@ -137,6 +143,33 @@ describe('CheckerService', () => {
                 ssl: undefined,
             });
             expect(notifierService.notifyTransition).toHaveBeenCalledTimes(1);
+            expect(prisma.probeExecution.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    probeId: null,
+                    monitorId: 'monitor-1',
+                    target: 'https://api.example.com/health',
+                    trigger: 'MANUAL',
+                    status: 'SUCCESS',
+                    success: true,
+                    latency: 12,
+                    error: null,
+                    requestMeta: {
+                        source: 'LOCAL',
+                        monitorType: 'HTTP',
+                    },
+                    responseMeta: {
+                        previousStatus: 'UNKNOWN',
+                        status: 'UP',
+                        changed: true,
+                        notified: {
+                            skipped: false,
+                            sent: 1,
+                            failed: 0,
+                        },
+                    },
+                    executedAt: checkResult.checkedAt,
+                }),
+            });
             expect(result).toMatchObject({
                 monitorId: 'monitor-1',
                 status: 'UP',
@@ -259,6 +292,8 @@ describe('CheckerService', () => {
                     probe: {
                         organizationId: 'org-1',
                         enabled: true,
+                        status: 'ONLINE',
+                        scope: 'TENANT',
                         monitors: { some: { monitorId: 'monitor-1' } },
                     },
                 },
@@ -272,6 +307,62 @@ describe('CheckerService', () => {
                 checkedAt: checkResult.checkedAt,
                 ssl: undefined,
             });
+        });
+
+        it('keeps a local failure UP when an assigned system probe succeeded', async () => {
+            const {
+                service,
+                prisma,
+                stateService,
+                httpChecker,
+                systemProbeScheduler,
+            } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            httpChecker.check.mockResolvedValue({
+                success: false,
+                latency: 30,
+                error: 'HTTP 500',
+                checkedAt: checkResult.checkedAt,
+            });
+            systemProbeScheduler.getAssignedProbes.mockResolvedValue([
+                'system-probe-1',
+            ]);
+            prisma.probeResult.findMany
+                .mockResolvedValueOnce([])
+                .mockResolvedValueOnce([
+                    {
+                        id: 'probe-result-1',
+                        probeId: 'system-probe-1',
+                        target: monitorRow.target,
+                        success: true,
+                        latency: 40,
+                        error: null,
+                        checkedAt: checkResult.checkedAt,
+                    },
+                ]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(prisma.probeResult.findMany).toHaveBeenNthCalledWith(2, {
+                where: {
+                    target: monitorRow.target,
+                    probeId: { in: ['system-probe-1'] },
+                    checkedAt: { gte: expect.any(Date) },
+                    probe: {
+                        scope: 'SYSTEM',
+                        enabled: true,
+                        status: 'ONLINE',
+                    },
+                },
+                orderBy: { checkedAt: 'desc' },
+            });
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({
+                    success: true,
+                    error: null,
+                }),
+            );
         });
 
         it('does not let probe success override an SSL failure', async () => {

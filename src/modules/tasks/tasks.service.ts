@@ -4,7 +4,7 @@ import {
     BadRequestException,
     ConflictException,
 } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import {
     CreateTaskDto,
     UpdateTaskDto,

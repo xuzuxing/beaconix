@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { NotificationChannelsService } from './notification-channels.service';
-import type { PrismaService } from '../../database/prisma.service';
+import type { PrismaService } from '../../infra/database/prisma.service';
 
 const channelRow = {
     id: 'channel-1',

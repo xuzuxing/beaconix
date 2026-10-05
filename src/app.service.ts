@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from './database/prisma.service';
+import { PrismaService } from './infra/database/prisma.service';
 import { AppConfig } from './config';
 
 export interface HealthStatus {

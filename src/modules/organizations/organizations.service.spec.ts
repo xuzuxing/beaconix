@@ -3,7 +3,7 @@ import {
     DEFAULT_PROJECT_KEY,
     DEFAULT_PROJECT_NAME,
 } from './organizations.service';
-import type { PrismaService } from '../../database/prisma.service';
+import type { PrismaService } from '../../infra/database/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
 
 const user = { id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com' };

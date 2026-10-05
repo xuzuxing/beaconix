@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { CheckSource, MonitorStatus } from '../../generated/prisma/enums';
 import type {
     MonitorModel,
@@ -14,7 +14,7 @@ export interface CheckOutcome {
     latency: number;
     error?: string | null;
     /** Where the result came from - persisted on the CheckLog row. */
-    source?: string;
+    source?: CheckSource;
     checkedAt?: Date;
     ssl?: SslCertificateInfo | null;
 }

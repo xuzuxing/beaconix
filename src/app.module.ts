@@ -10,12 +10,15 @@ import {
     appConfig,
     databaseConfig,
     jwtConfig,
+    loggerConfig,
+    redisConfig,
     resendConfig,
     throttlerConfig,
     JwtConfig,
     ThrottlerConfig,
 } from './config';
-import { PrismaModule } from './database/prisma.module';
+import { PrismaModule } from './infra/database/prisma.module';
+import { RedisModule } from './infra/redis/redis.module';
 import { JwtAuthGuard } from './common/guards';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
@@ -37,6 +40,10 @@ import { ProbesModule } from './modules/probes/probes.module';
 import { CheckerModule } from './modules/checker/checker.module';
 import { StateModule } from './modules/state/state.module';
 import { NotifierModule } from './modules/notifier/notifier.module';
+import { AdminModule } from './modules/admin/admin.module';
+import { ClsModule } from './infra/cls/cls.module';
+import { CacheModule } from './infra/cache/cache.module';
+import { LoggerModule } from './infra/logging/logger.module';
 
 @Module({
     imports: [
@@ -47,6 +54,8 @@ import { NotifierModule } from './modules/notifier/notifier.module';
                 appConfig,
                 databaseConfig,
                 jwtConfig,
+                loggerConfig,
+                redisConfig,
                 resendConfig,
                 throttlerConfig,
             ],
@@ -79,6 +88,12 @@ import { NotifierModule } from './modules/notifier/notifier.module';
         }),
         ScheduleModule.forRoot(),
         PrismaModule,
+        // infra
+        CacheModule,
+        ClsModule,
+        LoggerModule,
+        RedisModule,
+        // business
         EmailModule,
         AuthModule,
         UsersModule,
@@ -99,6 +114,7 @@ import { NotifierModule } from './modules/notifier/notifier.module';
         CheckerModule,
         StateModule,
         NotifierModule,
+        AdminModule,
     ],
     controllers: [AppController],
     providers: [

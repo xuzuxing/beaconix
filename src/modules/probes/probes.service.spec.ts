@@ -4,12 +4,13 @@ import {
     UnauthorizedException,
 } from '@nestjs/common';
 import { ProbesService } from './probes.service';
-import type { PrismaService } from '../../database/prisma.service';
+import type { PrismaService } from '../../infra/database/prisma.service';
 import type { CheckerService } from '../checker/checker.service';
 
 const probeRow = {
     id: 'probe-1',
     organizationId: 'org-1',
+    scope: 'TENANT',
     name: 'Tokyo probe',
     provider: 'TENCENT',
     region: 'ap-northeast-1',
@@ -18,6 +19,8 @@ const probeRow = {
     enabled: true,
     lastHeartbeat: null,
     status: 'OFFLINE',
+    maxTenants: 0,
+    priority: 0,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
 };
@@ -51,21 +54,34 @@ function createService() {
             count: jest.fn(),
             createMany: jest.fn(),
         },
+        probeExecution: {
+            findMany: jest.fn(),
+            count: jest.fn(),
+            create: jest.fn(),
+        },
         monitorProbe: {
             createMany: jest.fn(),
             findUnique: jest.fn(),
             delete: jest.fn(),
         },
-        monitor: { findMany: jest.fn() },
+        monitor: { findMany: jest.fn(), findFirst: jest.fn() },
     };
-    const checkerService = { ingestProbeReport: jest.fn() };
+    const checkerService = {
+        ingestProbeReport: jest.fn(),
+        ingestProbeReportForMonitor: jest.fn(),
+    };
+    const systemProbeScheduler = {
+        rebalance: jest.fn().mockResolvedValue({}),
+        getAssignedMonitorIds: jest.fn().mockResolvedValue([]),
+    };
 
     const service = new ProbesService(
         prisma as unknown as PrismaService,
         checkerService as unknown as CheckerService,
+        systemProbeScheduler as never,
     );
 
-    return { service, prisma, checkerService };
+    return { service, prisma, checkerService, systemProbeScheduler };
 }
 
 describe('ProbesService', () => {
@@ -86,14 +102,15 @@ describe('ProbesService', () => {
 
             const created = prisma.probe.create.mock.calls[0][0];
             expect(created.data.organizationId).toBe('org-1');
-            expect(created.data.secret).toMatch(/^[0-9a-f]{64}$/);
-            expect(result.secret).toMatch(/^[0-9a-f]{64}$/);
+            expect(created.data.scope).toBe('TENANT');
+            expect(created.data.secret).toMatch(/^tnt_[0-9a-f]{64}$/);
+            expect(result.secret).toMatch(/^tnt_[0-9a-f]{64}$/);
             expect(result.monitors).toEqual([]);
         });
     });
 
     describe('recordHeartbeat', () => {
-        it('marks the probe online and returns the monitors to check', async () => {
+        it('marks a tenant probe online and returns directly bound monitors', async () => {
             const { service, prisma } = createService();
             prisma.probe.findUnique.mockResolvedValue(probeRow);
             prisma.probe.update.mockResolvedValue({
@@ -125,6 +142,63 @@ describe('ProbesService', () => {
                 where: { secret: 'secret-1' },
             });
             expect(result.probe.status).toBe('ONLINE');
+            expect(result.monitors).toEqual([
+                {
+                    id: 'monitor-1',
+                    name: 'Production API',
+                    type: 'HTTP',
+                    target: 'https://api.example.com/health',
+                    interval: 60,
+                    timeout: 5000,
+                    expectedStatus: 200,
+                },
+            ]);
+            expect(prisma.probeExecution.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    probeId: 'probe-1',
+                    monitorId: null,
+                    target: 'heartbeat',
+                    trigger: 'CALLBACK',
+                    status: 'SUCCESS',
+                    success: true,
+                    responseMeta: { monitorCount: 1 },
+                }),
+            });
+        });
+
+        it('returns dynamically assigned monitors for a system probe', async () => {
+            const { service, prisma, systemProbeScheduler } = createService();
+            prisma.probe.findUnique.mockResolvedValue({
+                ...probeRow,
+                organizationId: null,
+                scope: 'SYSTEM',
+                secret: 'sys_secret',
+            });
+            prisma.probe.update.mockResolvedValue({
+                ...probeRow,
+                organizationId: null,
+                scope: 'SYSTEM',
+                secret: 'sys_secret',
+                status: 'ONLINE',
+                lastHeartbeat: new Date('2026-03-05T12:00:00.000Z'),
+                monitors: [],
+            });
+            systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([
+                'monitor-1',
+            ]);
+            prisma.monitor.findMany.mockResolvedValue([monitorSummary]);
+
+            const result = await service.recordHeartbeat('sys_secret');
+
+            expect(systemProbeScheduler.rebalance).toHaveBeenCalledTimes(1);
+            expect(prisma.monitor.findMany).toHaveBeenCalledWith({
+                where: {
+                    id: { in: ['monitor-1'] },
+                    enabled: true,
+                    deletedAt: null,
+                },
+                select: expect.any(Object),
+            });
             expect(result.monitors).toEqual([
                 {
                     id: 'monitor-1',
@@ -236,6 +310,156 @@ describe('ProbesService', () => {
                     },
                 ],
             });
+            expect(prisma.probeExecution.create).toHaveBeenCalledTimes(2);
+            expect(prisma.probeExecution.create).toHaveBeenNthCalledWith(1, {
+                data: expect.objectContaining({
+                    probeId: 'probe-1',
+                    monitorId: 'monitor-1',
+                    target: 'https://api.example.com/health',
+                    trigger: 'CALLBACK',
+                    status: 'FAILED',
+                    success: false,
+                    latency: 30,
+                    error: 'boom',
+                    responseMeta: {
+                        applied: true,
+                        status: 'DOWN',
+                        changed: true,
+                    },
+                }),
+            });
+            expect(prisma.probeExecution.create).toHaveBeenNthCalledWith(2, {
+                data: expect.objectContaining({
+                    probeId: 'probe-1',
+                    monitorId: null,
+                    target: 'https://unknown.example.com',
+                    trigger: 'CALLBACK',
+                    status: 'SUCCESS',
+                    success: true,
+                    latency: 5,
+                    error: null,
+                    responseMeta: { applied: false },
+                }),
+            });
+        });
+
+        it('applies system probe results only to assigned monitors', async () => {
+            const { service, prisma, checkerService, systemProbeScheduler } =
+                createService();
+            prisma.probe.findUnique.mockResolvedValue({
+                ...probeRow,
+                organizationId: null,
+                scope: 'SYSTEM',
+                secret: 'sys_secret',
+            });
+            prisma.probeResult.createMany.mockResolvedValue({ count: 1 });
+            prisma.probe.update.mockResolvedValue(probeRow);
+            systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([
+                'monitor-1',
+            ]);
+            prisma.monitor.findFirst.mockResolvedValue({ id: 'monitor-1' });
+            checkerService.ingestProbeReportForMonitor.mockResolvedValue({
+                monitorId: 'monitor-1',
+                status: 'UP',
+                changed: false,
+            });
+
+            const result = await service.recordResults('sys_secret', [
+                {
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    latency: 20,
+                },
+            ]);
+
+            expect(prisma.monitor.findFirst).toHaveBeenCalledWith({
+                where: {
+                    id: { in: ['monitor-1'] },
+                    target: 'https://api.example.com/health',
+                    enabled: true,
+                    deletedAt: null,
+                },
+                select: { id: true },
+            });
+            expect(
+                checkerService.ingestProbeReportForMonitor,
+            ).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({
+                    target: 'https://api.example.com/health',
+                    success: true,
+                }),
+            );
+            expect(result).toEqual({
+                accepted: 1,
+                applied: 1,
+                outcomes: [
+                    {
+                        target: 'https://api.example.com/health',
+                        monitorId: 'monitor-1',
+                        status: 'UP',
+                        changed: false,
+                    },
+                ],
+            });
+        });
+    });
+
+    describe('listExecutions', () => {
+        it('paginates tenant probe execution logs', async () => {
+            const { service, prisma } = createService();
+            prisma.probe.findFirst.mockResolvedValue(probeRow);
+            prisma.probeExecution.findMany.mockResolvedValue([
+                {
+                    id: 'execution-1',
+                    probeId: 'probe-1',
+                    monitorId: 'monitor-1',
+                    target: 'https://api.example.com/health',
+                    trigger: 'CALLBACK',
+                    status: 'SUCCESS',
+                    success: true,
+                    latency: 12,
+                    error: null,
+                    requestMeta: {},
+                    responseMeta: {},
+                    executedAt: new Date('2026-03-05T12:00:00.000Z'),
+                },
+            ]);
+            prisma.probeExecution.count.mockResolvedValue(1);
+
+            const result = await service.listExecutions('org-1', 'probe-1', {
+                trigger: 'CALLBACK',
+                status: 'SUCCESS',
+                page: 2,
+                limit: 10,
+            });
+
+            expect(prisma.probe.findFirst).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: {
+                        id: 'probe-1',
+                        organizationId: 'org-1',
+                        scope: 'TENANT',
+                    },
+                }),
+            );
+            expect(prisma.probeExecution.findMany).toHaveBeenCalledWith({
+                where: {
+                    probeId: 'probe-1',
+                    trigger: 'CALLBACK',
+                    status: 'SUCCESS',
+                },
+                orderBy: { executedAt: 'desc' },
+                skip: 10,
+                take: 10,
+            });
+            expect(result.meta).toEqual({
+                total: 1,
+                page: 2,
+                limit: 10,
+                totalPages: 1,
+            });
+            expect(result.data[0].id).toBe('execution-1');
         });
     });
 
@@ -348,6 +572,15 @@ describe('ProbesService', () => {
 
             await expect(service.findOne('org-1', 'probe-1')).rejects.toThrow(
                 NotFoundException,
+            );
+            expect(prisma.probe.findFirst).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: {
+                        id: 'probe-1',
+                        organizationId: 'org-1',
+                        scope: 'TENANT',
+                    },
+                }),
             );
         });
     });

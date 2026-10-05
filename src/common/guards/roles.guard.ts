@@ -8,7 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { MembershipRole } from '../../generated/prisma/enums';
 import { ROLES_KEY } from '../decorators/roles.decorator';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import type { JwtPayload } from '../interfaces/jwt-payload.interface';
 
 @Injectable()

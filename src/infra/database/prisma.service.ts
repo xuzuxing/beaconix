@@ -5,10 +5,10 @@ import {
     Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaClient } from '../generated/prisma/client';
+import { PrismaClient } from '../../generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
-import { AppConfig, DatabaseConfig } from '../config';
+import { AppConfig, DatabaseConfig } from '../../config';
 
 interface QueryEvent {
     timestamp: Date;

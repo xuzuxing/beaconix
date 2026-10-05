@@ -27,8 +27,11 @@ export class ProbeEntity {
     @ApiProperty({ example: 'uuid-probe' })
     id: string;
 
-    @ApiProperty({ example: 'uuid-org' })
-    organizationId: string;
+    @ApiPropertyOptional({ example: 'uuid-org' })
+    organizationId: string | null;
+
+    @ApiProperty({ enum: ['SYSTEM', 'TENANT'], example: 'TENANT' })
+    scope: string;
 
     @ApiProperty({ example: 'Tokyo probe' })
     name: string;
@@ -59,6 +62,18 @@ export class ProbeEntity {
 
     @ApiProperty({ enum: ['ONLINE', 'OFFLINE'], example: 'ONLINE' })
     status: string;
+
+    @ApiPropertyOptional({
+        example: 100,
+        description: 'Maximum tenants assigned to a system probe',
+    })
+    maxTenants: number | null;
+
+    @ApiProperty({
+        example: 0,
+        description: 'Scheduling priority for system probes',
+    })
+    priority: number;
 
     @ApiProperty({ example: '2026-03-05T12:00:00.000Z' })
     createdAt: Date;

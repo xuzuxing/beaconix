@@ -29,6 +29,7 @@ import { ProbesService } from './probes.service';
 import {
     BindMonitorsDto,
     CreateProbeDto,
+    QueryProbeExecutionsDto,
     QueryProbeResultsDto,
     UpdateProbeDto,
 } from './dto';
@@ -201,5 +202,23 @@ export class ProbesController {
         @Query() query: QueryProbeResultsDto,
     ) {
         return this.probesService.listResults(orgId, id, query);
+    }
+
+    @Get(':id/executions')
+    @UseGuards(OrgMemberGuard)
+    @ApiOperation({ summary: 'List execution audit records for a probe' })
+    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'id', description: 'Probe UUID' })
+    @ApiQuery({ type: QueryProbeExecutionsDto })
+    @ApiOkResponse({ description: 'Paginated probe executions' })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({ description: 'Not a member' })
+    @ApiNotFoundResponse({ description: 'Probe not found' })
+    async listExecutions(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @Query() query: QueryProbeExecutionsDto,
+    ) {
+        return this.probesService.listExecutions(orgId, id, query);
     }
 }

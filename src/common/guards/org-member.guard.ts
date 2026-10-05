@@ -5,7 +5,7 @@ import {
     ForbiddenException,
     NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import type { JwtPayload } from '../interfaces/jwt-payload.interface';
 
 @Injectable()

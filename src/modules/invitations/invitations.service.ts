@@ -5,7 +5,7 @@ import {
     ConflictException,
     Logger,
 } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { CreateInvitationDto } from './dto';
 import { InvitationEntity } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';

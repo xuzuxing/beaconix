@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { PrismaService } from '../../../database/prisma.service';
+import { PrismaService } from '../../../infra/database/prisma.service';
 
 /**
  * Cleans up expired and revoked refresh tokens from the database.

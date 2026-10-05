@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { AuditAction } from '../../generated/prisma/enums';
 import { QueryAuditLogsDto } from './dto';
 import { AuditLogEntity } from './entities';

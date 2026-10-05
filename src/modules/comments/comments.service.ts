@@ -4,7 +4,7 @@ import {
     ForbiddenException,
     BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { CreateCommentDto, UpdateCommentDto } from './dto';
 import { CommentEntity } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';

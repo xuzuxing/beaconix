@@ -1,7 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { MonitorStatus } from '../../generated/prisma/enums';
 import { deriveState, StateService } from './state.service';
-import type { PrismaService } from '../../database/prisma.service';
+import type { PrismaService } from '../../infra/database/prisma.service';
 
 const monitorRow = {
     id: 'monitor-1',

@@ -3,7 +3,7 @@ import {
     NotFoundException,
     BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { CreateMonitorDto, UpdateMonitorDto } from './dto';
 import { MonitorEntity } from './entities';
 import { MonitorType } from '../../generated/prisma/enums';
@@ -12,13 +12,17 @@ import type {
     MonitorStateModel,
     ProjectModel,
 } from '../../generated/prisma/models';
+import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 
 /** A monitor row with its companion state row eagerly loaded. */
 type MonitorWithState = MonitorModel & { state?: MonitorStateModel | null };
 
 @Injectable()
 export class MonitorsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly systemProbeScheduler: SystemProbeScheduler,
+    ) {}
 
     async create(projectId: string, dto: CreateMonitorDto) {
         const project = await this.ensureProjectExists(projectId);
@@ -36,6 +40,8 @@ export class MonitorsService {
             },
             include: { state: true },
         });
+
+        await this.systemProbeScheduler.rebalance();
 
         return this.toEntity(monitor);
     }
@@ -101,6 +107,10 @@ export class MonitorsService {
             include: { state: true },
         });
 
+        if (targetChanged || dto.enabled !== undefined) {
+            await this.systemProbeScheduler.rebalance();
+        }
+
         return this.toEntity(monitor);
     }
 
@@ -125,6 +135,8 @@ export class MonitorsService {
             include: { state: true },
         });
 
+        await this.systemProbeScheduler.rebalance();
+
         return this.toEntity(updated);
     }
 
@@ -147,6 +159,8 @@ export class MonitorsService {
             include: { state: true },
         });
 
+        await this.systemProbeScheduler.rebalance();
+
         return this.toEntity(updated);
     }
 
@@ -158,6 +172,8 @@ export class MonitorsService {
             data: { deletedAt: new Date() },
             include: { state: true },
         });
+
+        await this.systemProbeScheduler.rebalance();
 
         return this.toEntity(updated);
     }
@@ -183,6 +199,8 @@ export class MonitorsService {
             data: { deletedAt: null },
             include: { state: true },
         });
+
+        await this.systemProbeScheduler.rebalance();
 
         return this.toEntity(updated);
     }

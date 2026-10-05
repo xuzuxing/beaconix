@@ -4,7 +4,7 @@ import {
     ForbiddenException,
     BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { UpdateMemberRoleDto } from './dto';
 import { MembershipEntity } from './entities';
 import { MembershipRole } from '../../generated/prisma/enums';

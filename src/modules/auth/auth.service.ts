@@ -10,7 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EmailService } from '../email/email.service';
 import { EmailTemplate } from '../email/email.types';

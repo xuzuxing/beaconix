@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { PrismaService } from '../../../database/prisma.service';
+import { PrismaService } from '../../../infra/database/prisma.service';
 
 /**
  * Marks PENDING invitations as EXPIRED when their expiresAt date has passed.

@@ -586,6 +586,11 @@ enum MonitorStatus {
   PAUSED
 }
 
+enum ProbeScope {
+  SYSTEM
+  TENANT
+}
+
 enum ProbeProvider {
   TENCENT
   ALIYUN
@@ -600,6 +605,19 @@ enum ProbeStatus {
 enum CheckSource {
   LOCAL
   PROBE
+}
+
+enum ExecutionTrigger {
+  SCHEDULED
+  MANUAL
+  CALLBACK
+}
+
+enum ExecutionStatus {
+  SUCCESS
+  FAILED
+  TIMEOUT
+  SKIPPED
 }
 
 enum NotificationChannelType {
@@ -641,6 +659,7 @@ model Monitor {
   state        MonitorState?
   probes       MonitorProbe[]
   checkLogs    CheckLog[]
+  executions   ProbeExecution[]
 
   @@index([organizationId])
   @@index([projectId])
@@ -673,24 +692,29 @@ model MonitorState {
 
 // 探针
 model Probe {
-  id            String        @id @default(cuid())
-  organizationId String
-  name          String
-  provider      ProbeProvider
-  region        String
-  callbackUrl   String
-  secret        String        @unique
-  enabled       Boolean       @default(true)
-  lastHeartbeat DateTime?
-  status        ProbeStatus   @default(OFFLINE)
+  id             String        @id @default(cuid())
+  scope          ProbeScope    @default(TENANT)
+  organizationId String?
+  name           String
+  provider       ProbeProvider
+  region         String
+  callbackUrl    String
+  secret         String        @unique
+  enabled        Boolean       @default(true)
+  lastHeartbeat  DateTime?
+  status         ProbeStatus   @default(OFFLINE)
+  maxTenants     Int?          @default(0)
+  priority       Int           @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization?  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   monitors     MonitorProbe[]
   results      ProbeResult[]
+  executions   ProbeExecution[]
 
+  @@index([scope])
   @@index([organizationId])
   @@index([enabled])
   @@map("probes")
@@ -728,6 +752,30 @@ model ProbeResult {
   @@map("probe_results")
 }
 
+// 探针和检测执行日志
+model ProbeExecution {
+  id           String            @id @default(cuid())
+  probeId      String?
+  monitorId    String?
+  target       String
+  trigger      ExecutionTrigger
+  status       ExecutionStatus
+  success      Boolean
+  latency      Int?
+  error        String?
+  requestMeta  Json?             @default("{}")
+  responseMeta Json?             @default("{}")
+  executedAt   DateTime          @default(now())
+
+  probe   Probe?   @relation(fields: [probeId], references: [id], onDelete: SetNull)
+  monitor Monitor? @relation(fields: [monitorId], references: [id], onDelete: SetNull)
+
+  @@index([probeId, executedAt])
+  @@index([monitorId, executedAt])
+  @@index([status])
+  @@map("probe_executions")
+}
+
 // 检测历史
 model CheckLog {
   id        String   @id @default(cuid())
@@ -735,7 +783,7 @@ model CheckLog {
   success   Boolean
   latency   Int
   error     String?
-  source    String   @default("local") // local | probe
+  source    CheckSource @default(LOCAL)
   checkedAt DateTime @default(now())
 
   monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)

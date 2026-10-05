@@ -4,7 +4,7 @@ import {
     ForbiddenException,
 } from '@nestjs/common';
 import { UTApi } from 'uploadthing/server';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import { SaveAttachmentDto } from './dto';
 import { AttachmentEntity } from './entities';
 

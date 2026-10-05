@@ -9,7 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { Observable, tap } from 'rxjs';
 import { Request } from 'express';
 import { AuditAction } from '../../generated/prisma/enums';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import {
     AUDIT_LOG_KEY,
     AuditLogOptions,

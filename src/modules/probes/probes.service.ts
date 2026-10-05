@@ -7,17 +7,30 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomBytes } from 'node:crypto';
-import { PrismaService } from '../../database/prisma.service';
-import { ProbeStatus } from '../../generated/prisma/enums';
+import { PrismaService } from '../../infra/database/prisma.service';
+import {
+    ExecutionStatus,
+    ExecutionTrigger,
+    ProbeScope,
+    ProbeStatus,
+} from '../../generated/prisma/enums';
+import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
+import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { CheckerService } from '../checker/checker.service';
 import {
     BindMonitorsDto,
     CreateProbeDto,
+    QueryProbeExecutionsDto,
     ProbeResultItemDto,
     QueryProbeResultsDto,
     UpdateProbeDto,
 } from './dto';
-import { ProbeEntity, ProbeMonitorEntity, ProbeResultEntity } from './entities';
+import {
+    ProbeEntity,
+    ProbeExecutionEntity,
+    ProbeMonitorEntity,
+    ProbeResultEntity,
+} from './entities';
 
 /** A probe that has not called in for this long is considered offline. */
 const PROBE_OFFLINE_AFTER_MS = 2 * 60 * 1000;
@@ -61,18 +74,20 @@ export class ProbesService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly checkerService: CheckerService,
+        private readonly systemProbeScheduler: SystemProbeScheduler,
     ) {}
 
     async create(orgId: string, dto: CreateProbeDto): Promise<ProbeEntity> {
         const probe = await this.prisma.probe.create({
             data: {
                 organizationId: orgId,
+                scope: ProbeScope.TENANT,
                 name: dto.name,
                 provider: dto.provider,
                 region: dto.region,
                 callbackUrl: dto.callbackUrl,
                 enabled: dto.enabled ?? true,
-                secret: this.generateSecret(),
+                secret: this.generateSecret('tnt'),
             },
         });
 
@@ -81,7 +96,7 @@ export class ProbesService {
 
     async findAll(orgId: string): Promise<ProbeEntity[]> {
         const probes = await this.prisma.probe.findMany({
-            where: { organizationId: orgId },
+            where: { organizationId: orgId, scope: ProbeScope.TENANT },
             include: {
                 monitors: { include: { monitor: { select: MONITOR_SELECT } } },
                 _count: { select: { results: true } },
@@ -106,12 +121,22 @@ export class ProbesService {
 
         const probe = await this.prisma.probe.update({
             where: { id: probeId },
-            data: dto,
+            data: {
+                name: dto.name,
+                provider: dto.provider,
+                region: dto.region,
+                callbackUrl: dto.callbackUrl,
+                enabled: dto.enabled,
+            },
             include: {
                 monitors: { include: { monitor: { select: MONITOR_SELECT } } },
                 _count: { select: { results: true } },
             },
         });
+
+        if (dto.enabled !== undefined) {
+            await this.systemProbeScheduler.rebalance();
+        }
 
         return this.toEntity(probe);
     }
@@ -121,6 +146,7 @@ export class ProbesService {
         await this.ensureProbeExists(orgId, probeId);
 
         await this.prisma.probe.delete({ where: { id: probeId } });
+        await this.systemProbeScheduler.rebalance();
     }
 
     async rotateSecret(orgId: string, probeId: string): Promise<ProbeEntity> {
@@ -129,7 +155,7 @@ export class ProbesService {
         const probe = await this.prisma.probe.update({
             where: { id: probeId },
             data: {
-                secret: this.generateSecret(),
+                secret: this.generateSecret('tnt'),
                 // The probe must call in again with the new secret.
                 status: ProbeStatus.OFFLINE,
             },
@@ -138,6 +164,8 @@ export class ProbesService {
                 _count: { select: { results: true } },
             },
         });
+
+        await this.systemProbeScheduler.rebalance();
 
         return this.toEntity(probe);
     }
@@ -172,6 +200,8 @@ export class ProbesService {
             skipDuplicates: true,
         });
 
+        await this.systemProbeScheduler.rebalance();
+
         return this.findOne(orgId, probeId);
     }
 
@@ -195,6 +225,8 @@ export class ProbesService {
         await this.prisma.monitorProbe.delete({
             where: { monitorId_probeId: { monitorId, probeId } },
         });
+
+        await this.systemProbeScheduler.rebalance();
 
         return this.findOne(orgId, probeId);
     }
@@ -235,6 +267,47 @@ export class ProbesService {
         };
     }
 
+    /** Paginated execution audit records for one tenant probe. */
+    async listExecutions(
+        orgId: string,
+        probeId: string,
+        query: QueryProbeExecutionsDto,
+    ) {
+        await this.ensureProbeExists(orgId, probeId);
+
+        const page = query.page ?? 1;
+        const limit = query.limit ?? 20;
+        const skip = (page - 1) * limit;
+
+        const where: Record<string, unknown> = { probeId };
+        if (query.trigger) where.trigger = query.trigger;
+        if (query.status) where.status = query.status;
+        if (query.monitorId) where.monitorId = query.monitorId;
+        if (query.target) where.target = query.target;
+
+        const [executions, total] = await Promise.all([
+            this.prisma.probeExecution.findMany({
+                where,
+                orderBy: { executedAt: 'desc' },
+                skip,
+                take: limit,
+            }),
+            this.prisma.probeExecution.count({ where }),
+        ]);
+
+        return {
+            data: executions.map(
+                (execution) => new ProbeExecutionEntity(execution),
+            ),
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
+
     // -- Probe agent API -------------------------------------------------
 
     /** Marks the probe online and hands back the monitors it should check. */
@@ -249,6 +322,28 @@ export class ProbesService {
             },
         });
 
+        const monitors =
+            updated.scope === ProbeScope.SYSTEM
+                ? await this.getAssignedSystemProbeMonitors(updated.id)
+                : updated.monitors
+                      .map((binding) => binding.monitor)
+                      .filter(
+                          (monitor) =>
+                              monitor.deletedAt === null && monitor.enabled,
+                      );
+
+        await this.writeExecution({
+            probeId: probe.id,
+            target: 'heartbeat',
+            trigger: ExecutionTrigger.CALLBACK,
+            status: ExecutionStatus.SUCCESS,
+            success: true,
+            requestMeta: {},
+            responseMeta: {
+                monitorCount: monitors.length,
+            },
+        });
+
         return {
             probe: {
                 id: updated.id,
@@ -256,20 +351,15 @@ export class ProbesService {
                 status: updated.status,
                 lastHeartbeat: updated.lastHeartbeat,
             },
-            monitors: updated.monitors
-                .map((binding) => binding.monitor)
-                .filter(
-                    (monitor) => monitor.deletedAt === null && monitor.enabled,
-                )
-                .map((monitor) => ({
-                    id: monitor.id,
-                    name: monitor.name,
-                    type: monitor.type,
-                    target: monitor.target,
-                    interval: monitor.interval,
-                    timeout: monitor.timeout,
-                    expectedStatus: monitor.expectedStatus,
-                })),
+            monitors: monitors.map((monitor) => ({
+                id: monitor.id,
+                name: monitor.name,
+                type: monitor.type,
+                target: monitor.target,
+                interval: monitor.interval,
+                timeout: monitor.timeout,
+                expectedStatus: monitor.expectedStatus,
+            })),
             serverTime: new Date().toISOString(),
         };
     }
@@ -280,6 +370,7 @@ export class ProbesService {
      */
     async recordResults(secret: string, results: ProbeResultItemDto[]) {
         const probe = await this.requireProbeBySecret(secret);
+        const checkedAt = new Date();
 
         await this.prisma.probeResult.createMany({
             data: results.map((result) => ({
@@ -302,18 +393,30 @@ export class ProbesService {
         }> = [];
 
         for (const result of results) {
-            const execution = await this.checkerService.ingestProbeReport(
-                probe.organizationId,
-                {
-                    target: result.target,
-                    success: result.success,
-                    latency: result.latency,
-                    error: result.error ?? null,
-                    checkedAt: result.checkedAt
-                        ? new Date(result.checkedAt)
-                        : new Date(),
-                },
-            );
+            const reportedAt = result.checkedAt
+                ? new Date(result.checkedAt)
+                : checkedAt;
+            const execution =
+                probe.scope === ProbeScope.SYSTEM
+                    ? await this.applySystemProbeResult(probe.id, {
+                          target: result.target,
+                          success: result.success,
+                          latency: result.latency,
+                          error: result.error ?? null,
+                          checkedAt: reportedAt,
+                      })
+                    : probe.organizationId
+                      ? await this.checkerService.ingestProbeReport(
+                            probe.organizationId,
+                            {
+                                target: result.target,
+                                success: result.success,
+                                latency: result.latency,
+                                error: result.error ?? null,
+                                checkedAt: reportedAt,
+                            },
+                        )
+                      : null;
 
             if (execution) {
                 applied.push({
@@ -323,6 +426,27 @@ export class ProbesService {
                     changed: execution.changed,
                 });
             }
+
+            await this.writeExecution({
+                probeId: probe.id,
+                monitorId: execution?.monitorId ?? null,
+                target: result.target,
+                trigger: ExecutionTrigger.CALLBACK,
+                status: result.success
+                    ? ExecutionStatus.SUCCESS
+                    : ExecutionStatus.FAILED,
+                success: result.success,
+                latency: result.latency,
+                error: result.error ?? null,
+                requestMeta: { checkedAt: reportedAt.toISOString() },
+                responseMeta: execution
+                    ? {
+                          applied: true,
+                          status: execution.status,
+                          changed: execution.changed,
+                      }
+                    : { applied: false },
+            });
         }
 
         await this.prisma.probe.update({
@@ -355,6 +479,7 @@ export class ProbesService {
 
         if (count > 0) {
             this.logger.warn(`Marked ${count} probe(s) offline`);
+            await this.systemProbeScheduler.rebalance();
         }
 
         return count;
@@ -362,8 +487,58 @@ export class ProbesService {
 
     // -- Helpers ---------------------------------------------------------
 
-    private generateSecret(): string {
-        return randomBytes(32).toString('hex');
+    private generateSecret(prefix: 'sys' | 'tnt'): string {
+        return `${prefix}_${randomBytes(32).toString('hex')}`;
+    }
+
+    private async getAssignedSystemProbeMonitors(probeId: string) {
+        await this.systemProbeScheduler.rebalance();
+        const monitorIds =
+            await this.systemProbeScheduler.getAssignedMonitorIds(probeId);
+
+        if (monitorIds.length === 0) return [];
+
+        return this.prisma.monitor.findMany({
+            where: {
+                id: { in: monitorIds },
+                enabled: true,
+                deletedAt: null,
+            },
+            select: MONITOR_SELECT,
+        });
+    }
+
+    private async applySystemProbeResult(
+        probeId: string,
+        report: {
+            target: string;
+            success: boolean;
+            latency: number;
+            error: string | null;
+            checkedAt: Date;
+        },
+    ) {
+        const assignedMonitorIds =
+            await this.systemProbeScheduler.getAssignedMonitorIds(probeId);
+
+        if (assignedMonitorIds.length === 0) return null;
+
+        const monitor = await this.prisma.monitor.findFirst({
+            where: {
+                id: { in: assignedMonitorIds },
+                target: report.target,
+                enabled: true,
+                deletedAt: null,
+            },
+            select: { id: true },
+        });
+
+        if (!monitor) return null;
+
+        return this.checkerService.ingestProbeReportForMonitor(
+            monitor.id,
+            report,
+        );
     }
 
     /**
@@ -393,7 +568,11 @@ export class ProbesService {
 
     private async ensureProbeExists(orgId: string, probeId: string) {
         const probe = await this.prisma.probe.findFirst({
-            where: { id: probeId, organizationId: orgId },
+            where: {
+                id: probeId,
+                organizationId: orgId,
+                scope: ProbeScope.TENANT,
+            },
             include: {
                 monitors: { include: { monitor: { select: MONITOR_SELECT } } },
                 _count: { select: { results: true } },
@@ -407,9 +586,38 @@ export class ProbesService {
         return probe;
     }
 
+    private async writeExecution(data: {
+        probeId?: string | null;
+        monitorId?: string | null;
+        target: string;
+        trigger: ExecutionTrigger;
+        status: ExecutionStatus;
+        success: boolean;
+        latency?: number | null;
+        error?: string | null;
+        requestMeta?: InputJsonValue;
+        responseMeta?: InputJsonValue;
+    }): Promise<void> {
+        await this.prisma.probeExecution.create({
+            data: {
+                probeId: data.probeId ?? null,
+                monitorId: data.monitorId ?? null,
+                target: data.target,
+                trigger: data.trigger,
+                status: data.status,
+                success: data.success,
+                latency: data.latency ?? null,
+                error: data.error ?? null,
+                requestMeta: data.requestMeta ?? {},
+                responseMeta: data.responseMeta ?? {},
+            },
+        });
+    }
+
     private toEntity(probe: {
         id: string;
-        organizationId: string;
+        organizationId: string | null;
+        scope: string;
         name: string;
         provider: string;
         region: string;
@@ -418,6 +626,8 @@ export class ProbesService {
         enabled: boolean;
         lastHeartbeat: Date | null;
         status: string;
+        maxTenants: number | null;
+        priority: number;
         createdAt: Date;
         updatedAt: Date;
         monitors?: Array<{
@@ -449,6 +659,7 @@ export class ProbesService {
         return new ProbeEntity({
             id: probe.id,
             organizationId: probe.organizationId,
+            scope: probe.scope,
             name: probe.name,
             provider: probe.provider,
             region: probe.region,
@@ -457,6 +668,8 @@ export class ProbesService {
             enabled: probe.enabled,
             lastHeartbeat: probe.lastHeartbeat,
             status: probe.status,
+            maxTenants: probe.maxTenants,
+            priority: probe.priority,
             createdAt: probe.createdAt,
             updatedAt: probe.updatedAt,
             monitors,

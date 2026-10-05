@@ -1,6 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MonitorsService } from './monitors.service';
-import type { PrismaService } from '../../database/prisma.service';
+import type { PrismaService } from '../../infra/database/prisma.service';
 
 const monitorRow = {
     id: 'monitor-1',
@@ -60,16 +60,20 @@ function createService() {
         },
         project: { findFirst: jest.fn().mockResolvedValue(projectRow) },
     };
+    const systemProbeScheduler = { rebalance: jest.fn().mockResolvedValue({}) };
 
-    const service = new MonitorsService(prisma as unknown as PrismaService);
+    const service = new MonitorsService(
+        prisma as unknown as PrismaService,
+        systemProbeScheduler as never,
+    );
 
-    return { service, prisma };
+    return { service, prisma, systemProbeScheduler };
 }
 
 describe('MonitorsService', () => {
     describe('create', () => {
         it('creates the companion state row and flattens it into the response', async () => {
-            const { service, prisma } = createService();
+            const { service, prisma, systemProbeScheduler } = createService();
             prisma.monitor.create.mockResolvedValue({
                 ...monitorRow,
                 state: stateRow,
@@ -95,6 +99,7 @@ describe('MonitorsService', () => {
             expect(result.status).toBe('UP');
             expect(result.lastLatency).toBe(128);
             expect(result).not.toHaveProperty('state');
+            expect(systemProbeScheduler.rebalance).toHaveBeenCalledTimes(1);
         });
 
         it('rejects an HTTP target without an http(s) scheme', async () => {

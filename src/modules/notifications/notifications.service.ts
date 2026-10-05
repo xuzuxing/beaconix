@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Subject, Observable, finalize } from 'rxjs';
-import { PrismaService } from '../../database/prisma.service';
+import { PrismaService } from '../../infra/database/prisma.service';
 import type { CreateNotificationDto } from './dto';
 import { QueryNotificationsDto } from './dto';
 import { NotificationEntity } from './entities';
