@@ -69,6 +69,24 @@ export class UpdateMonitorDto {
     @Max(10)
     failureThreshold?: number;
 
+    @ApiPropertyOptional({
+        example: true,
+        description: 'Whether HTTPS certificate expiry should be monitored',
+    })
+    @IsOptional()
+    @IsBoolean()
+    checkSsl?: boolean;
+
+    @ApiPropertyOptional({
+        example: 30,
+        description: 'Days before SSL certificate expiry that should alert',
+    })
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Max(365)
+    sslExpiryThreshold?: number;
+
     @ApiPropertyOptional({ example: false })
     @IsOptional()
     @IsBoolean()

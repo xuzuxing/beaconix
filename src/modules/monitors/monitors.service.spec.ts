@@ -13,6 +13,8 @@ const monitorRow = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    checkSsl: false,
+    sslExpiryThreshold: 30,
     enabled: true,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
@@ -40,6 +42,11 @@ const stateRow = {
     lastError: null,
     lastLatency: 128,
     lastNotifiedStatus: null,
+    sslExpiresAt: null,
+    sslDaysRemaining: null,
+    sslIssuer: null,
+    sslSubject: null,
+    sslLastNotifiedAt: null,
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
 };
 
@@ -148,6 +155,11 @@ describe('MonitorsService', () => {
                                 lastError: null,
                                 lastLatency: null,
                                 lastNotifiedStatus: null,
+                                sslExpiresAt: null,
+                                sslDaysRemaining: null,
+                                sslIssuer: null,
+                                sslSubject: null,
+                                sslLastNotifiedAt: null,
                             },
                         },
                     },
@@ -200,6 +212,7 @@ describe('MonitorsService', () => {
             expect(result.status).toBe('UNKNOWN');
             expect(result.failCount).toBe(0);
             expect(result.lastLatency).toBeNull();
+            expect(result.sslExpiresAt).toBeNull();
         });
     });
 

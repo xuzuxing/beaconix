@@ -32,6 +32,18 @@ export class MonitorEntity {
     @ApiProperty({ example: 3, description: 'Failures before DOWN' })
     failureThreshold: number;
 
+    @ApiProperty({
+        example: true,
+        description: 'Whether HTTPS certificate expiry is monitored',
+    })
+    checkSsl: boolean;
+
+    @ApiProperty({
+        example: 30,
+        description: 'Days before SSL certificate expiry that should alert',
+    })
+    sslExpiryThreshold: number;
+
     @ApiProperty({ example: true })
     enabled: boolean;
 
@@ -60,6 +72,21 @@ export class MonitorEntity {
         description: 'Status of the most recent notification',
     })
     lastNotifiedStatus: string | null;
+
+    @ApiPropertyOptional({ example: '2026-04-05T12:00:00.000Z' })
+    sslExpiresAt: Date | null;
+
+    @ApiPropertyOptional({ example: 28 })
+    sslDaysRemaining: number | null;
+
+    @ApiPropertyOptional({ example: 'Let’s Encrypt' })
+    sslIssuer: string | null;
+
+    @ApiPropertyOptional({ example: 'api.example.com' })
+    sslSubject: string | null;
+
+    @ApiPropertyOptional({ example: '2026-03-05T12:00:00.000Z' })
+    sslLastNotifiedAt: Date | null;
 
     @ApiProperty({ example: '2026-03-05T12:00:00.000Z' })
     createdAt: Date;

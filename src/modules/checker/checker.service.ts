@@ -194,6 +194,7 @@ export class CheckerService {
                 error: result.error,
                 source,
                 checkedAt: result.checkedAt,
+                ssl: result.ssl,
             },
         );
 
@@ -231,6 +232,10 @@ export class CheckerService {
                 monitor.target,
                 monitor.timeout,
                 monitor.expectedStatus,
+                {
+                    checkSsl: monitor.checkSsl,
+                    sslExpiryThreshold: monitor.sslExpiryThreshold,
+                },
             );
         }
 
@@ -251,6 +256,10 @@ export class CheckerService {
         localResult: CheckResult,
     ): Promise<CheckResult> {
         if (localResult.success) {
+            return localResult;
+        }
+
+        if (localResult.ssl !== undefined) {
             return localResult;
         }
 

@@ -1,3 +1,10 @@
+export interface SslCertificateInfo {
+    expiresAt: Date;
+    daysRemaining: number;
+    issuer: string | null;
+    subject: string | null;
+}
+
 /** Outcome of a single probe run (HTTP or TCP). */
 export interface CheckResult {
     success: boolean;
@@ -5,6 +12,8 @@ export interface CheckResult {
     latency: number;
     error: string | null;
     checkedAt: Date;
+    /** Present when SSL certificate monitoring was requested. */
+    ssl?: SslCertificateInfo | null;
 }
 
 /** A result reported by a remote probe. */

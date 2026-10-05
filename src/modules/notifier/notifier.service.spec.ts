@@ -13,6 +13,8 @@ const monitorRow = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    checkSsl: false,
+    sslExpiryThreshold: 30,
     enabled: true,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
@@ -27,6 +29,11 @@ const stateRow = {
     lastError: 'connect ECONNREFUSED',
     lastLatency: 30,
     lastNotifiedStatus: null,
+    sslExpiresAt: null,
+    sslDaysRemaining: null,
+    sslIssuer: null,
+    sslSubject: null,
+    sslLastNotifiedAt: null,
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
 };
 
@@ -54,7 +61,10 @@ function createService() {
         notificationChannel: { findMany: jest.fn(), findFirst: jest.fn() },
         notificationLog: { create: jest.fn() },
     };
-    const stateService = { markNotified: jest.fn() };
+    const stateService = {
+        markNotified: jest.fn(),
+        markSslNotified: jest.fn(),
+    };
 
     const senders = {
         feishu: { send: jest.fn() },
@@ -207,6 +217,32 @@ describe('NotifierService', () => {
                 'DOWN',
             );
             expect(result).toEqual({ skipped: false, sent: 1, failed: 0 });
+        });
+
+        it('remembers successful SSL alert delivery', async () => {
+            const { service, prisma, stateService, senders } = createService();
+            prisma.notificationChannel.findMany.mockResolvedValue([channelRow]);
+            prisma.notificationLog.create.mockResolvedValue({ id: 'log-1' });
+            senders.feishu.send.mockResolvedValue(undefined);
+            stateService.markNotified.mockResolvedValue(undefined);
+            stateService.markSslNotified.mockResolvedValue(undefined);
+
+            await service.notifyTransition(
+                monitorRow as never,
+                {
+                    ...stateRow,
+                    status: 'DOWN',
+                    lastError:
+                        'SSL certificate expires in 5 day(s) on 2026-03-10T12:00:00.000Z',
+                    sslExpiresAt: new Date('2026-03-10T12:00:00.000Z'),
+                    sslDaysRemaining: 5,
+                } as never,
+                transition,
+            );
+
+            expect(stateService.markSslNotified).toHaveBeenCalledWith(
+                'monitor-1',
+            );
         });
 
         it('logs a failed delivery and keeps the status unannounced', async () => {

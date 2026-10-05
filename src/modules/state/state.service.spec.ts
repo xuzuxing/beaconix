@@ -14,6 +14,8 @@ const monitorRow = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    checkSsl: false,
+    sslExpiryThreshold: 30,
     enabled: true,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
@@ -28,6 +30,11 @@ const stateRow = {
     lastError: null,
     lastLatency: null,
     lastNotifiedStatus: null,
+    sslExpiresAt: null,
+    sslDaysRemaining: null,
+    sslIssuer: null,
+    sslSubject: null,
+    sslLastNotifiedAt: null,
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
 };
 
@@ -191,6 +198,50 @@ describe('StateService', () => {
             ).rejects.toThrow(NotFoundException);
             expect(prisma.checkLog.create).not.toHaveBeenCalled();
         });
+
+        it('persists SSL certificate details when present', async () => {
+            const { service, prisma } = createService();
+            const ssl = {
+                expiresAt: new Date('2026-04-05T12:00:00.000Z'),
+                daysRemaining: 31,
+                issuer: 'Example CA',
+                subject: 'api.example.com',
+            };
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                state: { ...stateRow, status: 'UP', failCount: 0 },
+            });
+            prisma.checkLog.create.mockResolvedValue({ id: 'log-1' });
+            prisma.monitorState.upsert.mockResolvedValue({
+                ...stateRow,
+                sslExpiresAt: ssl.expiresAt,
+                sslDaysRemaining: ssl.daysRemaining,
+                sslIssuer: ssl.issuer,
+                sslSubject: ssl.subject,
+            });
+
+            await service.record('monitor-1', {
+                success: true,
+                latency: 30,
+                ssl,
+            });
+
+            expect(prisma.monitorState.upsert).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                create: expect.objectContaining({
+                    sslExpiresAt: ssl.expiresAt,
+                    sslDaysRemaining: 31,
+                    sslIssuer: 'Example CA',
+                    sslSubject: 'api.example.com',
+                }),
+                update: expect.objectContaining({
+                    sslExpiresAt: ssl.expiresAt,
+                    sslDaysRemaining: 31,
+                    sslIssuer: 'Example CA',
+                    sslSubject: 'api.example.com',
+                }),
+            });
+        });
     });
 
     describe('getSummary', () => {
@@ -220,6 +271,7 @@ describe('StateService', () => {
             expect(summary.status).toBe('UP');
             expect(summary.uptimePercent).toBe(99);
             expect(summary.avgLatency).toBe(128);
+            expect(summary.sslExpiresAt).toBeNull();
         });
 
         it('returns null metrics when there is no check history', async () => {
@@ -260,6 +312,19 @@ describe('StateService', () => {
             expect(prisma.monitorState.update).toHaveBeenCalledWith({
                 where: { monitorId: 'monitor-1' },
                 data: { lastNotifiedStatus: 'DOWN' },
+            });
+        });
+
+        it('stores when an SSL alert was delivered', async () => {
+            const { service, prisma } = createService();
+            const notifiedAt = new Date('2026-03-05T12:00:00.000Z');
+            prisma.monitorState.update.mockResolvedValue(stateRow);
+
+            await service.markSslNotified('monitor-1', notifiedAt);
+
+            expect(prisma.monitorState.update).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                data: { sslLastNotifiedAt: notifiedAt },
             });
         });
     });

@@ -41,6 +41,59 @@ describe('HttpChecker', () => {
         expect(result.latency).toBeGreaterThanOrEqual(0);
     });
 
+    it('includes SSL certificate details when SSL monitoring is enabled', async () => {
+        const ssl = {
+            expiresAt: new Date('2026-04-05T12:00:00.000Z'),
+            daysRemaining: 31,
+            issuer: 'Example CA',
+            subject: 'api.example.com',
+        };
+        mockFetch(() => Promise.resolve(response(200)));
+        jest.spyOn(
+            checker as unknown as {
+                inspectSslCertificate: () => Promise<typeof ssl>;
+            },
+            'inspectSslCertificate',
+        ).mockResolvedValue(ssl);
+
+        const result = await checker.check(
+            'https://example.com/health',
+            1000,
+            200,
+            { checkSsl: true, sslExpiryThreshold: 30 },
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.ssl).toEqual(ssl);
+    });
+
+    it('fails when the SSL certificate is inside the expiry threshold', async () => {
+        const ssl = {
+            expiresAt: new Date('2026-03-10T12:00:00.000Z'),
+            daysRemaining: 5,
+            issuer: 'Example CA',
+            subject: 'api.example.com',
+        };
+        mockFetch(() => Promise.resolve(response(200)));
+        jest.spyOn(
+            checker as unknown as {
+                inspectSslCertificate: () => Promise<typeof ssl>;
+            },
+            'inspectSslCertificate',
+        ).mockResolvedValue(ssl);
+
+        const result = await checker.check(
+            'https://example.com/health',
+            1000,
+            200,
+            { checkSsl: true, sslExpiryThreshold: 30 },
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('SSL certificate expires in 5 day(s)');
+        expect(result.ssl).toEqual(ssl);
+    });
+
     it('fails when the status differs from the expected one', async () => {
         mockFetch(() => Promise.resolve(response(503)));
 

@@ -38,6 +38,21 @@ export class MonitorStateEntity {
     })
     lastNotifiedStatus: string | null;
 
+    @ApiPropertyOptional({ example: '2026-04-05T12:00:00.000Z' })
+    sslExpiresAt: Date | null;
+
+    @ApiPropertyOptional({ example: 28 })
+    sslDaysRemaining: number | null;
+
+    @ApiPropertyOptional({ example: 'Let’s Encrypt' })
+    sslIssuer: string | null;
+
+    @ApiPropertyOptional({ example: 'api.example.com' })
+    sslSubject: string | null;
+
+    @ApiPropertyOptional({ example: '2026-03-05T12:00:00.000Z' })
+    sslLastNotifiedAt: Date | null;
+
     @ApiPropertyOptional({ example: '2026-03-05T12:00:00.000Z' })
     updatedAt: Date | null;
 

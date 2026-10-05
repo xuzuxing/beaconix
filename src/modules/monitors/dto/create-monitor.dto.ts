@@ -82,6 +82,26 @@ export class CreateMonitorDto {
 
     @ApiPropertyOptional({
         example: true,
+        description: 'Whether HTTPS certificate expiry should be monitored',
+        default: false,
+    })
+    @IsOptional()
+    @IsBoolean()
+    checkSsl?: boolean;
+
+    @ApiPropertyOptional({
+        example: 30,
+        description: 'Days before SSL certificate expiry that should alert',
+        default: 30,
+    })
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Max(365)
+    sslExpiryThreshold?: number;
+
+    @ApiPropertyOptional({
+        example: true,
         description: 'Whether checks are scheduled for this monitor',
         default: true,
     })

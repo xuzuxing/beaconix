@@ -6,6 +6,7 @@ import type {
     MonitorStateModel,
 } from '../../generated/prisma/models';
 import { MonitorStateEntity } from './entities';
+import type { SslCertificateInfo } from '../checker/checkers';
 
 /** A check outcome (local run or probe report) before it is folded into state. */
 export interface CheckOutcome {
@@ -15,6 +16,7 @@ export interface CheckOutcome {
     /** Where the result came from - persisted on the CheckLog row. */
     source?: string;
     checkedAt?: Date;
+    ssl?: SslCertificateInfo | null;
 }
 
 export interface DerivedState {
@@ -108,6 +110,14 @@ export class StateService {
             lastCheckAt: checkedAt,
             lastError: error,
             lastLatency: outcome.latency,
+            ...(outcome.ssl !== undefined
+                ? {
+                      sslExpiresAt: outcome.ssl?.expiresAt ?? null,
+                      sslDaysRemaining: outcome.ssl?.daysRemaining ?? null,
+                      sslIssuer: outcome.ssl?.issuer ?? null,
+                      sslSubject: outcome.ssl?.subject ?? null,
+                  }
+                : {}),
         };
 
         const [, state] = await this.prisma.$transaction([
@@ -149,6 +159,14 @@ export class StateService {
         });
     }
 
+    /** Remembers that the current SSL certificate alert was delivered. */
+    async markSslNotified(monitorId: string, at = new Date()): Promise<void> {
+        await this.prisma.monitorState.update({
+            where: { monitorId },
+            data: { sslLastNotifiedAt: at },
+        });
+    }
+
     /** Current state of a monitor plus its trailing 24h uptime/latency summary. */
     async getSummary(projectId: string, monitorId: string) {
         const monitor = await this.prisma.monitor.findFirst({
@@ -187,6 +205,11 @@ export class StateService {
             lastLatency: monitor.state?.lastLatency ?? null,
             lastError: monitor.state?.lastError ?? null,
             lastNotifiedStatus: monitor.state?.lastNotifiedStatus ?? null,
+            sslExpiresAt: monitor.state?.sslExpiresAt ?? null,
+            sslDaysRemaining: monitor.state?.sslDaysRemaining ?? null,
+            sslIssuer: monitor.state?.sslIssuer ?? null,
+            sslSubject: monitor.state?.sslSubject ?? null,
+            sslLastNotifiedAt: monitor.state?.sslLastNotifiedAt ?? null,
             updatedAt: monitor.state?.updatedAt ?? null,
             uptimePercent:
                 totalChecks > 0

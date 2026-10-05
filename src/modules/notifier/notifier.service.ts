@@ -129,6 +129,10 @@ export class NotifierService {
         // so a transient channel outage does not swallow the alert.
         if (sent > 0) {
             await this.stateService.markNotified(monitor.id, transition.status);
+
+            if (this.isSslAlert(state)) {
+                await this.stateService.markSslNotified(monitor.id);
+            }
         }
 
         return { skipped: false, sent, failed: deliveries.length - sent };
@@ -238,6 +242,13 @@ export class NotifierService {
             error: state.lastError ?? null,
             checkedAt: state.lastCheckAt ?? new Date(),
         };
+    }
+
+    private isSslAlert(state: MonitorStateModel): boolean {
+        return (
+            state.sslExpiresAt !== null &&
+            state.lastError?.startsWith('SSL certificate') === true
+        );
     }
 
     private buildTestPayload(orgId: string): NotificationPayload {

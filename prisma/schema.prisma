@@ -617,17 +617,19 @@ enum NotificationStatus {
 
 // 监控目标
 model Monitor {
-  id               String      @id @default(cuid())
-  organizationId   String
-  projectId        String
-  name             String
-  type             MonitorType
-  target           String
-  interval         Int         @default(60)
-  timeout          Int         @default(5000)
-  expectedStatus   Int         @default(200)
-  failureThreshold Int         @default(3)
-  enabled          Boolean     @default(true)
+  id                  String      @id @default(cuid())
+  organizationId      String
+  projectId           String
+  name                String
+  type                MonitorType
+  target              String
+  interval            Int         @default(60)
+  timeout             Int         @default(5000)
+  expectedStatus      Int         @default(200)
+  failureThreshold    Int         @default(3)
+  checkSsl            Boolean      @default(false)
+  sslExpiryThreshold  Int  @default(30)
+  enabled             Boolean     @default(true)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -650,13 +652,18 @@ model Monitor {
 
 // 监控状态（独立存储，避免频繁更新主表）
 model MonitorState {
-  monitorId          String        @id
+  monitorId          String        @id @default(cuid())
   status             MonitorStatus @default(UNKNOWN)
   failCount          Int           @default(0)
   lastCheckAt        DateTime?
   lastError          String?
   lastLatency        Int?
   lastNotifiedStatus MonitorStatus?
+  sslExpiresAt       DateTime?
+  sslDaysRemaining   Int?
+  sslIssuer          String?
+  sslSubject         String?
+  sslLastNotifiedAt  DateTime?
   updatedAt          DateTime      @updatedAt
 
   monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)

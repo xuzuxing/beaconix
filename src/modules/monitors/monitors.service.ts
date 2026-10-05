@@ -23,6 +23,7 @@ export class MonitorsService {
     async create(projectId: string, dto: CreateMonitorDto) {
         const project = await this.ensureProjectExists(projectId);
         this.validateTarget(dto.type, dto.target);
+        this.validateSslConfig(dto.type, dto.target, dto.checkSsl ?? false);
 
         // The nested write creates the companion MonitorState row in the same
         // transaction as the monitor itself.
@@ -60,30 +61,42 @@ export class MonitorsService {
         const existing = await this.ensureMonitorExists(projectId, monitorId);
         const nextType = dto.type ?? existing.type;
         const nextTarget = dto.target ?? existing.target;
+        const nextCheckSsl = dto.checkSsl ?? existing.checkSsl;
         const targetChanged =
             nextType !== existing.type || nextTarget !== existing.target;
+        const sslConfigChanged =
+            targetChanged ||
+            dto.checkSsl !== undefined ||
+            dto.sslExpiryThreshold !== undefined;
 
         this.validateTarget(nextType, nextTarget);
+        this.validateSslConfig(nextType, nextTarget, nextCheckSsl);
 
         const monitor = await this.prisma.monitor.update({
             where: { id: monitorId },
             data: {
                 ...dto,
-                state: targetChanged
-                    ? {
-                          upsert: {
-                              create: {},
-                              update: {
-                                  status: 'UNKNOWN',
-                                  failCount: 0,
-                                  lastCheckAt: null,
-                                  lastError: null,
-                                  lastLatency: null,
-                                  lastNotifiedStatus: null,
+                state:
+                    targetChanged || sslConfigChanged
+                        ? {
+                              upsert: {
+                                  create: {},
+                                  update: {
+                                      status: 'UNKNOWN',
+                                      failCount: 0,
+                                      lastCheckAt: null,
+                                      lastError: null,
+                                      lastLatency: null,
+                                      lastNotifiedStatus: null,
+                                      sslExpiresAt: null,
+                                      sslDaysRemaining: null,
+                                      sslIssuer: null,
+                                      sslSubject: null,
+                                      sslLastNotifiedAt: null,
+                                  },
                               },
-                          },
-                      }
-                    : undefined,
+                          }
+                        : undefined,
             },
             include: { state: true },
         });
@@ -205,6 +218,28 @@ export class MonitorsService {
         }
     }
 
+    private validateSslConfig(
+        type: MonitorType,
+        target: string,
+        checkSsl: boolean,
+    ): void {
+        if (!checkSsl) return;
+
+        if (type !== MonitorType.HTTP) {
+            throw new BadRequestException(
+                'SSL monitoring is only supported for HTTP monitors',
+            );
+        }
+
+        const parsed = new URL(target);
+
+        if (parsed.protocol !== 'https:') {
+            throw new BadRequestException(
+                'SSL monitoring requires an https:// target',
+            );
+        }
+    }
+
     private validateHttpTarget(target: string): void {
         let parsed: URL;
 
@@ -270,6 +305,11 @@ export class MonitorsService {
             lastLatency: state?.lastLatency ?? null,
             lastError: state?.lastError ?? null,
             lastNotifiedStatus: state?.lastNotifiedStatus ?? null,
+            sslExpiresAt: state?.sslExpiresAt ?? null,
+            sslDaysRemaining: state?.sslDaysRemaining ?? null,
+            sslIssuer: state?.sslIssuer ?? null,
+            sslSubject: state?.sslSubject ?? null,
+            sslLastNotifiedAt: state?.sslLastNotifiedAt ?? null,
         });
     }
 }

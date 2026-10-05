@@ -15,6 +15,8 @@ const monitorRow = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    checkSsl: false,
+    sslExpiryThreshold: 30,
     enabled: true,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
@@ -29,6 +31,11 @@ const stateRow = {
     lastError: null,
     lastLatency: 12,
     lastNotifiedStatus: null,
+    sslExpiresAt: null,
+    sslDaysRemaining: null,
+    sslIssuer: null,
+    sslSubject: null,
+    sslLastNotifiedAt: null,
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
 };
 
@@ -116,6 +123,10 @@ describe('CheckerService', () => {
                 'https://api.example.com/health',
                 5000,
                 200,
+                {
+                    checkSsl: false,
+                    sslExpiryThreshold: 30,
+                },
             );
             expect(stateService.record).toHaveBeenCalledWith('monitor-1', {
                 success: true,
@@ -123,6 +134,7 @@ describe('CheckerService', () => {
                 error: null,
                 source: 'LOCAL',
                 checkedAt: checkResult.checkedAt,
+                ssl: undefined,
             });
             expect(notifierService.notifyTransition).toHaveBeenCalledTimes(1);
             expect(result).toMatchObject({
@@ -180,6 +192,42 @@ describe('CheckerService', () => {
             expect(httpChecker.check).not.toHaveBeenCalled();
         });
 
+        it('passes SSL probe details through to state recording', async () => {
+            const { service, prisma, stateService, httpChecker } =
+                createService();
+            const ssl = {
+                expiresAt: new Date('2026-04-05T12:00:00.000Z'),
+                daysRemaining: 31,
+                issuer: 'Example CA',
+                subject: 'api.example.com',
+            };
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                checkSsl: true,
+                sslExpiryThreshold: 30,
+            });
+            httpChecker.check.mockResolvedValue({
+                ...checkResult,
+                ssl,
+            });
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(httpChecker.check).toHaveBeenCalledWith(
+                'https://api.example.com/health',
+                5000,
+                200,
+                {
+                    checkSsl: true,
+                    sslExpiryThreshold: 30,
+                },
+            );
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({ ssl }),
+            );
+        });
+
         it('keeps a local failure UP when a fresh bound probe succeeded', async () => {
             const { service, prisma, stateService, httpChecker } =
                 createService();
@@ -222,7 +270,53 @@ describe('CheckerService', () => {
                 error: null,
                 source: 'LOCAL',
                 checkedAt: checkResult.checkedAt,
+                ssl: undefined,
             });
+        });
+
+        it('does not let probe success override an SSL failure', async () => {
+            const { service, prisma, stateService, httpChecker } =
+                createService();
+            const ssl = {
+                expiresAt: new Date('2026-03-10T12:00:00.000Z'),
+                daysRemaining: 5,
+                issuer: 'Example CA',
+                subject: 'api.example.com',
+            };
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                checkSsl: true,
+            });
+            httpChecker.check.mockResolvedValue({
+                success: false,
+                latency: 30,
+                error: 'SSL certificate expires in 5 day(s)',
+                checkedAt: checkResult.checkedAt,
+                ssl,
+            });
+            prisma.probeResult.findMany.mockResolvedValue([
+                {
+                    id: 'probe-result-1',
+                    probeId: 'probe-1',
+                    target: monitorRow.target,
+                    success: true,
+                    latency: 40,
+                    error: null,
+                    checkedAt: checkResult.checkedAt,
+                },
+            ]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({
+                    success: false,
+                    error: 'SSL certificate expires in 5 day(s)',
+                    ssl,
+                }),
+            );
         });
 
         it('keeps a local failure DOWN when every fresh bound probe failed', async () => {
@@ -317,6 +411,7 @@ describe('CheckerService', () => {
                 error: null,
                 source: 'LOCAL',
                 checkedAt: expect.any(Date),
+                ssl: undefined,
             });
             expect(result?.monitorId).toBe('monitor-1');
         });
