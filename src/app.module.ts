@@ -40,6 +40,10 @@ import { ProbesModule } from './modules/probes/probes.module';
 import { CheckerModule } from './modules/checker/checker.module';
 import { StateModule } from './modules/state/state.module';
 import { NotifierModule } from './modules/notifier/notifier.module';
+import { StatusPagesModule } from './modules/status-pages/status-pages.module';
+import { MonitoringModule } from './modules/monitoring/monitoring.module';
+import { BillingModule } from './modules/billing/billing.module';
+import { QuotaModule } from './shared/quota/quota.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { ClsModule } from './infra/cls/cls.module';
 import { CacheModule } from './infra/cache/cache.module';
@@ -114,6 +118,10 @@ import { LoggerModule } from './infra/logging/logger.module';
         CheckerModule,
         StateModule,
         NotifierModule,
+        StatusPagesModule,
+        MonitoringModule,
+        BillingModule,
+        QuotaModule,
         AdminModule,
     ],
     controllers: [AppController],

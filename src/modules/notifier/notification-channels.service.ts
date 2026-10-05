@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { QuotaService } from '../../shared/quota/quota.service';
 import { assertChannelConfig } from './channel-config';
 import {
     CreateNotificationChannelDto,
@@ -10,9 +11,13 @@ import { NotificationChannelEntity, NotificationLogEntity } from './entities';
 
 @Injectable()
 export class NotificationChannelsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly quotaService: QuotaService,
+    ) {}
 
     async create(orgId: string, dto: CreateNotificationChannelDto) {
+        await this.quotaService.assertCanCreate(orgId, 'channels');
         assertChannelConfig(dto.type, dto.config);
 
         const channel = await this.prisma.notificationChannel.create({

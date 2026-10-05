@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{{ title }}</title>
+        <style>
+            :root {
+                color-scheme: light;
+                --bg: #f5f7fa;
+                --panel: #ffffff;
+                --panel-soft: #f9fafb;
+                --line: #d8e0ea;
+                --line-strong: #bcc7d6;
+                --ink: #132033;
+                --muted: #64748b;
+                --brand: #2563eb;
+                --brand-dark: #1d4ed8;
+                --bad: #b42318;
+                --code: #0f172a;
+            }
+            * { box-sizing: border-box; }
+            body {
+                margin: 0;
+                background: var(--bg);
+                color: var(--ink);
+                font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            }
+            header { border-bottom: 1px solid var(--line); background: var(--panel); }
+            .shell { width: min(1180px, calc(100vw - 32px)); margin: 0 auto; }
+            .topbar {
+                display: flex; align-items: center; justify-content: space-between;
+                gap: 16px; min-height: 68px;
+            }
+            nav { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+            nav a { color: var(--brand); text-decoration: none; }
+            h1, h2 { margin: 0; }
+            h1 { font-size: 22px; }
+            h2 { font-size: 15px; }
+            .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
+            main {
+                display: grid; grid-template-columns: 360px 1fr; gap: 18px;
+                align-items: start; padding: 22px 0 40px;
+            }
+            section { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 16px; }
+            .stack { display: grid; gap: 12px; }
+            .panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+            label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
+            input, select, textarea {
+                width: 100%; border: 1px solid var(--line); border-radius: 6px;
+                padding: 10px 11px; font: inherit; font-size: 14px; background: #fff; color: var(--ink);
+            }
+            textarea { min-height: 92px; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; }
+            input:focus, select:focus, textarea:focus { border-color: var(--brand); outline: 3px solid #dbeafe; }
+            .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+            .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+            button {
+                min-height: 38px; border: 1px solid transparent; border-radius: 6px;
+                padding: 9px 12px; color: #fff; background: var(--brand); cursor: pointer;
+                font: inherit; font-size: 14px; font-weight: 700;
+            }
+            button.secondary { border-color: var(--line-strong); color: var(--ink); background: #fff; }
+            button.danger { background: var(--bad); }
+            button:hover { background: var(--brand-dark); }
+            button.secondary:hover { background: #eef4ff; }
+            .meta, .hint { color: var(--muted); font-size: 13px; line-height: 1.5; }
+            .group { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
+            .group:first-of-type { border-top: 0; padding-top: 0; }
+            .full { grid-column: 1 / -1; }
+            pre {
+                min-height: 460px; max-height: 700px; overflow: auto; margin: 0;
+                border-radius: 8px; padding: 16px; background: var(--code); color: #d9e7ff;
+                font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+            }
+            .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+            @media (max-width: 960px) {
+                main, .panel-grid, .row { grid-template-columns: 1fr; }
+                .topbar { align-items: flex-start; flex-direction: column; padding: 16px 0; }
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div class="shell topbar">
+                <div>
+                    <h1>{{ title }}</h1>
+                    <div class="subtitle">Rendered at {{ renderedAt }}</div>
+                </div>
+                <nav>
+                    <a href="/api/monitor-test">Monitor</a>
+                    <a href="/api/monitoring-test">Monitoring</a>
+                    <a href="/api/billing-test">Billing</a>
+                </nav>
+            </div>
+        </header>
+
+        <main class="shell">
+            <section class="stack">
+                <h2>Context</h2>
+                <label>
+                    API Base
+                    <input id="apiBase" value="{{ apiBase }}" />
+                </label>
+                <label>
+                    Access Token
+                    <textarea id="token" placeholder="JWT access token（Admin 接口需要 SUPER_ADMIN）"></textarea>
+                </label>
+                <div class="row">
+                    <label>
+                        Organization ID
+                        <input id="orgId" placeholder="org uuid" />
+                    </label>
+                    <label>
+                        Plan ID
+                        <input id="planId" placeholder="plan uuid" />
+                    </label>
+                </div>
+                <div class="row">
+                    <label>
+                        Order ID
+                        <input id="orderId" placeholder="order uuid" />
+                    </label>
+                    <label>
+                        Order No
+                        <input id="orderNo" placeholder="BWXXXX" />
+                    </label>
+                </div>
+                <div class="row">
+                    <label>
+                        Duration Days
+                        <input id="durationDays" type="number" min="1" max="3650" value="30" />
+                    </label>
+                    <label>
+                        WeChat OpenID
+                        <input id="openid" placeholder="o_xxx" />
+                    </label>
+                </div>
+                <div class="row">
+                    <label>
+                        Tenant ID (admin)
+                        <input id="tenantId" placeholder="tenant uuid" />
+                    </label>
+                    <label>
+                        Transaction ID (callback)
+                        <input id="transactionId" placeholder="wx transaction id" />
+                    </label>
+                </div>
+            </section>
+
+            <div class="panel-grid">
+                <section class="stack">
+                    <div class="group">
+                        <h2>Plans &amp; Subscription</h2>
+                        <div class="meta">GET /plans · GET /organizations/:orgId/subscription · /quota</div>
+                        <div class="actions">
+                            <button data-action="listPlans">List Plans</button>
+                            <button data-action="getPlan" class="secondary">Get Plan</button>
+                            <button data-action="getSubscription" class="secondary">Subscription Stack</button>
+                            <button data-action="getQuota" class="secondary">Quota Summary</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="stack">
+                    <div class="group">
+                        <h2>Orders</h2>
+                        <div class="meta">POST/GET /organizations/:orgId/orders · /orders/:id</div>
+                        <div class="actions">
+                            <button data-action="createOrder">Create Order</button>
+                            <button data-action="listOrders" class="secondary">List Orders</button>
+                            <button data-action="getOrder" class="secondary">Get Order</button>
+                            <button data-action="cancelOrder" class="danger">Cancel Order</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="stack">
+                    <div class="group">
+                        <h2>Payment</h2>
+                        <div class="meta">POST /orders/:id/pay · /payment/wechat/callback</div>
+                        <div class="actions">
+                            <button data-action="payOrder">Create Payment</button>
+                            <button data-action="wechatCallback" class="secondary">Mock WeChat Callback</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="stack">
+                    <div class="group">
+                        <h2>Admin (SUPER_ADMIN)</h2>
+                        <div class="meta">GET /admin/tenants · /admin/metrics · /admin/audit-logs</div>
+                        <div class="actions">
+                            <button data-action="adminTenants" class="secondary">List Tenants</button>
+                            <button data-action="adminTenant" class="secondary">Get Tenant</button>
+                            <button data-action="toggleTenant" class="secondary">Toggle Tenant</button>
+                            <button data-action="adminMetricsOverview" class="secondary">Metrics Overview</button>
+                            <button data-action="adminMetricsTenants" class="secondary">Metrics Tenants</button>
+                            <button data-action="adminAuditLogs" class="secondary">Audit Logs</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <section class="stack full">
+                <div class="toolbar">
+                    <h2>Response</h2>
+                    <button id="clearOutput" class="secondary">Clear</button>
+                </div>
+                <pre id="output">No request sent yet.</pre>
+            </section>
+        </main>
+
+        <script>
+            const $ = (id) => document.getElementById(id);
+            const outputEl = $("output");
+            const apiBase = () => $("apiBase").value.replace(/\/$/, "");
+            const token = () => $("token").value.trim();
+            const orgId = () => $("orgId").value.trim();
+
+            function showResult(method, path, payload, ok) {
+                outputEl.textContent =
+                    `${method} ${path}\n\n${JSON.stringify(payload, null, 2)}`;
+            }
+
+            async function request(method, path, body) {
+                const headers = { "Content-Type": "application/json" };
+                if (token()) headers["Authorization"] = `Bearer ${token()}`;
+
+                const res = await fetch(`${apiBase()}${path}`, {
+                    method,
+                    headers,
+                    body: body === undefined ? undefined : JSON.stringify(body),
+                });
+
+                let data;
+                try {
+                    data = await res.json();
+                } catch {
+                    data = await res.text();
+                }
+
+                showResult(method, path, { status: res.status, data }, res.ok);
+                return data;
+            }
+
+            document.addEventListener("click", async (event) => {
+                const action = event.target.getAttribute("data-action");
+                if (!action) return;
+
+                try {
+                    if (action === "listPlans") {
+                        await request("GET", "/plans");
+                    } else if (action === "getPlan") {
+                        await request("GET", `/plans/${$("planId").value.trim()}`);
+                    } else if (action === "getSubscription") {
+                        await request("GET", `/organizations/${orgId()}/subscription`);
+                    } else if (action === "getQuota") {
+                        await request("GET", `/organizations/${orgId()}/quota`);
+                    } else if (action === "createOrder") {
+                        await request("POST", `/organizations/${orgId()}/orders`, {
+                            planId: $("planId").value.trim(),
+                            durationDays: Number($("durationDays").value) || undefined,
+                        });
+                    } else if (action === "listOrders") {
+                        await request("GET", `/organizations/${orgId()}/orders`);
+                    } else if (action === "getOrder") {
+                        await request("GET", `/orders/${$("orderId").value.trim()}`);
+                    } else if (action === "cancelOrder") {
+                        await request("POST", `/orders/${$("orderId").value.trim()}/cancel`);
+                    } else if (action === "payOrder") {
+                        await request("POST", `/orders/${$("orderId").value.trim()}/pay`, {
+                            openid: $("openid").value.trim(),
+                        });
+                    } else if (action === "wechatCallback") {
+                        await request("POST", "/payment/wechat/callback", {
+                            out_trade_no: $("orderNo").value.trim(),
+                            transaction_id: $("transactionId").value.trim(),
+                            trade_state: "SUCCESS",
+                        });
+                    } else if (action === "adminTenants") {
+                        await request("GET", "/admin/tenants");
+                    } else if (action === "adminTenant") {
+                        await request("GET", `/admin/tenants/${$("tenantId").value.trim()}`);
+                    } else if (action === "toggleTenant") {
+                        await request("PATCH", `/admin/tenants/${$("tenantId").value.trim()}/toggle`);
+                    } else if (action === "adminMetricsOverview") {
+                        await request("GET", "/admin/metrics/overview");
+                    } else if (action === "adminMetricsTenants") {
+                        await request("GET", "/admin/metrics/tenants");
+                    } else if (action === "adminAuditLogs") {
+                        await request("GET", "/admin/audit-logs?limit=25");
+                    } else if (action === "clearOutput") {
+                        outputEl.textContent = "No request sent yet.";
+                    }
+                } catch (error) {
+                    outputEl.textContent = `Request failed\n\n${error.message}`;
+                }
+            });
+        </script>
+    </body>
+</html>

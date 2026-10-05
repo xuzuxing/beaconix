@@ -25,6 +25,7 @@ import {
 import { AuditLog } from '../../../common/decorators';
 import { SuperAdminGuard } from '../../../common/guards';
 import { ProbeEntity } from '../../probes/entities';
+import { ProbeValidationService } from '../../probes/probe-validation.service';
 import {
     CreateSystemProbeDto,
     ToggleSystemProbeDto,
@@ -37,7 +38,10 @@ import { SystemProbesService } from './system-probes.service';
 @UseGuards(SuperAdminGuard)
 @Controller('admin/system-probes')
 export class SystemProbesController {
-    constructor(private readonly systemProbesService: SystemProbesService) {}
+    constructor(
+        private readonly systemProbesService: SystemProbesService,
+        private readonly probeValidationService: ProbeValidationService,
+    ) {}
 
     @Post()
     @AuditLog({ entity: 'Probe' })
@@ -51,6 +55,24 @@ export class SystemProbesController {
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })
     create(@Body() dto: CreateSystemProbeDto) {
         return this.systemProbesService.create(dto);
+    }
+
+    @Post(':id/validate')
+    @HttpCode(HttpStatus.OK)
+    @AuditLog({ entity: 'Probe', action: 'UPDATE' })
+    @ApiOperation({
+        summary: 'Create a validation challenge for a system probe',
+    })
+    @ApiParam({ name: 'id', description: 'Probe UUID' })
+    @ApiOkResponse({
+        description:
+            '{ validationId, challenge: { iv, tag, data }, expiresAt, status }',
+    })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })
+    @ApiNotFoundResponse({ description: 'System probe not found' })
+    validate(@Param('id') id: string) {
+        return this.probeValidationService.triggerForSystem(id);
     }
 
     @Post('rebalance')

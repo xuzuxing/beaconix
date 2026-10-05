@@ -19,7 +19,7 @@ import { OrganizationEntity } from './entities';
 /** Only the delegates onboarding touches — works for the client and a transaction. */
 type OnboardingDb = Pick<
     Prisma.TransactionClient,
-    'organization' | 'membership'
+    'organization' | 'membership' | 'plan' | 'subscription'
 >;
 
 /** The project seeded alongside a user's first organization. */
@@ -246,6 +246,25 @@ export class OrganizationsService {
             },
             include: { projects: { select: { id: true } } },
         });
+
+        // Bind the FREE fallback subscription so the organization always has a
+        // plan. Seed data normally creates FREE; skip gracefully when missing.
+        const freePlan = await db.plan.findUnique({ where: { code: 'FREE' } });
+        if (freePlan) {
+            await db.subscription.create({
+                data: {
+                    organizationId: organization.id,
+                    planId: freePlan.id,
+                    status: 'ACTIVE',
+                    startsAt: new Date(),
+                    expiresAt: new Date('2099-12-31T23:59:59.000Z'),
+                },
+            });
+        } else {
+            this.logger.warn(
+                'FREE plan not found; starter subscription was not created',
+            );
+        }
 
         this.logger.log(
             `Provisioned starter organization "${slug}" for user ${user.id}`,

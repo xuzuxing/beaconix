@@ -26,6 +26,7 @@ import {
     ApiNotFoundResponse,
 } from '@nestjs/swagger';
 import { ProbesService } from './probes.service';
+import { ProbeValidationService } from './probe-validation.service';
 import {
     BindMonitorsDto,
     CreateProbeDto,
@@ -41,7 +42,10 @@ import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 @ApiBearerAuth('access-token')
 @Controller('organizations/:orgId/probes')
 export class ProbesController {
-    constructor(private readonly probesService: ProbesService) {}
+    constructor(
+        private readonly probesService: ProbesService,
+        private readonly probeValidationService: ProbeValidationService,
+    ) {}
 
     @Get()
     @UseGuards(OrgMemberGuard)
@@ -136,6 +140,27 @@ export class ProbesController {
     @ApiNotFoundResponse({ description: 'Probe not found' })
     async rotateSecret(@Param('orgId') orgId: string, @Param('id') id: string) {
         return this.probesService.rotateSecret(orgId, id);
+    }
+
+    @Post(':id/validate')
+    @HttpCode(HttpStatus.OK)
+    @UseGuards(RolesGuard)
+    @Roles('ADMIN')
+    @AuditLog({ entity: 'Probe', action: 'UPDATE' })
+    @ApiOperation({
+        summary: 'Create a validation challenge for a probe',
+    })
+    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'id', description: 'Probe UUID' })
+    @ApiOkResponse({
+        description:
+            '{ validationId, challenge: { iv, tag, data }, expiresAt, status }',
+    })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
+    @ApiNotFoundResponse({ description: 'Probe not found' })
+    async validate(@Param('orgId') orgId: string, @Param('id') id: string) {
+        return this.probeValidationService.triggerForTenant(orgId, id);
     }
 
     @Post(':id/monitors')

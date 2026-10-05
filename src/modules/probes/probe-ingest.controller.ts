@@ -4,6 +4,7 @@ import {
     Headers,
     HttpCode,
     HttpStatus,
+    Param,
     Post,
 } from '@nestjs/common';
 import {
@@ -12,11 +13,13 @@ import {
     ApiHeader,
     ApiOkResponse,
     ApiBody,
+    ApiParam,
     ApiUnauthorizedResponse,
     ApiBadRequestResponse,
 } from '@nestjs/swagger';
 import { ProbesService } from './probes.service';
-import { ReportProbeResultsDto } from './dto';
+import { ProbeValidationService } from './probe-validation.service';
+import { AnswerProbeValidationDto, ReportProbeResultsDto } from './dto';
 import { Public } from '../../common/decorators';
 
 /** Header carrying the probe shared secret. */
@@ -29,7 +32,10 @@ export const PROBE_SECRET_HEADER = 'x-probe-secret';
 @ApiTags('Probes (agent API)')
 @Controller('probes')
 export class ProbeIngestController {
-    constructor(private readonly probesService: ProbesService) {}
+    constructor(
+        private readonly probesService: ProbesService,
+        private readonly probeValidationService: ProbeValidationService,
+    ) {}
 
     @Post('heartbeat')
     @Public()
@@ -76,5 +82,62 @@ export class ProbeIngestController {
         @Body() dto: ReportProbeResultsDto,
     ) {
         return this.probesService.recordResults(secret, dto.results);
+    }
+
+    @Post('validation/pull')
+    @Public()
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({
+        summary: 'Pull a pending validation challenge for this probe',
+    })
+    @ApiHeader({
+        name: PROBE_SECRET_HEADER,
+        required: true,
+        description: 'Probe shared secret',
+    })
+    @ApiOkResponse({
+        description:
+            '{ validation: null | { validationId, challenge: { iv, tag, data }, expiresAt } }',
+    })
+    @ApiUnauthorizedResponse({
+        description: 'Missing, unknown or disabled probe',
+    })
+    async pullValidation(@Headers(PROBE_SECRET_HEADER) secret: string) {
+        return this.probeValidationService.pullForSecret(secret);
+    }
+
+    @Post('validation/:validationId/answer')
+    @Public()
+    @HttpCode(HttpStatus.OK)
+    @ApiOperation({ summary: 'Submit the encrypted answer for a validation' })
+    @ApiHeader({
+        name: PROBE_SECRET_HEADER,
+        required: true,
+        description: 'Probe shared secret',
+    })
+    @ApiParam({
+        name: 'validationId',
+        description: 'Validation id returned by the pull endpoint',
+    })
+    @ApiBody({ type: AnswerProbeValidationDto })
+    @ApiOkResponse({
+        description: '{ validationId, ok, status, checkedAt }',
+    })
+    @ApiBadRequestResponse({
+        description: 'Invalid, expired or already answered challenge',
+    })
+    @ApiUnauthorizedResponse({
+        description: 'Missing, unknown or disabled probe',
+    })
+    async answerValidation(
+        @Headers(PROBE_SECRET_HEADER) secret: string,
+        @Param('validationId') validationId: string,
+        @Body() dto: AnswerProbeValidationDto,
+    ) {
+        return this.probeValidationService.answerForSecret(
+            secret,
+            validationId,
+            dto.answer,
+        );
     }
 }

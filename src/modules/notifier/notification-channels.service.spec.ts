@@ -25,11 +25,16 @@ function createService() {
         notificationLog: { findMany: jest.fn(), count: jest.fn() },
     };
 
+    const quotaService = {
+        assertCanCreate: jest.fn().mockResolvedValue(undefined),
+    };
+
     const service = new NotificationChannelsService(
         prisma as unknown as PrismaService,
+        quotaService as never,
     );
 
-    return { service, prisma };
+    return { service, prisma, quotaService };
 }
 
 describe('NotificationChannelsService', () => {

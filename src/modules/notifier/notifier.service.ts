@@ -1,4 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { PrismaService } from '../../infra/database/prisma.service';
 import {
     MonitorStatus,
@@ -10,7 +12,6 @@ import type {
     MonitorStateModel,
     NotificationChannelModel,
 } from '../../generated/prisma/models';
-import { StateService } from '../state/state.service';
 import type { MonitorTransition } from '../state/state.service';
 import {
     DingtalkSender,
@@ -24,6 +25,8 @@ import type {
     NotificationChannelSender,
     NotificationPayload,
 } from './notifier.types';
+import { MONITOR_TRANSITION_JOB, NOTIFICATION_QUEUE } from './notifier.queue';
+import type { NotificationJobData } from './notifier.queue';
 
 /** Statuses that are worth telling humans about. */
 const NOTIFIABLE_STATUSES: MonitorStatus[] = [
@@ -32,8 +35,9 @@ const NOTIFIABLE_STATUSES: MonitorStatus[] = [
 ];
 
 export interface NotificationResult {
-    /** True when no channel was contacted (nothing to send, or nothing to say). */
+    /** True when no job was enqueued (nothing to send, or nothing to say). */
     skipped: boolean;
+    /** Number of channel delivery jobs enqueued. */
     sent: number;
     failed: number;
 }
@@ -45,12 +49,13 @@ export class NotifierService {
 
     constructor(
         private readonly prisma: PrismaService,
-        private readonly stateService: StateService,
         feishuSender: FeishuSender,
         wecomSender: WecomSender,
         dingtalkSender: DingtalkSender,
         wechatSubscribeSender: WechatSubscribeSender,
         emailSender: EmailSender,
+        @InjectQueue(NOTIFICATION_QUEUE)
+        private readonly notificationQueue: Queue<NotificationJobData>,
     ) {
         this.senders = {
             [NotificationChannelType.FEISHU]: feishuSender,
@@ -89,8 +94,10 @@ export class NotifierService {
     }
 
     /**
-     * Fan-outs a status change to every enabled channel of the monitor's
-     * organization, recording one NotificationLog row per attempt.
+     * Enqueues one delivery job per enabled channel of the monitor's
+     * organization. The check pipeline returns immediately; actual sending,
+     * NotificationLog writes and `lastNotifiedStatus` updates happen in the
+     * queue processor.
      */
     async notifyTransition(
         monitor: MonitorModel,
@@ -118,24 +125,85 @@ export class NotifierService {
         }
 
         const payload = this.buildPayload(monitor, state, transition);
+        const sslAlert = this.isSslAlert(state);
 
-        const deliveries = await Promise.all(
-            channels.map((channel) => this.deliver(channel, payload)),
+        const deliveries = await Promise.allSettled(
+            channels.map((channel) =>
+                this.notificationQueue.add(
+                    MONITOR_TRANSITION_JOB,
+                    {
+                        channelId: channel.id,
+                        payload,
+                        transitionStatus: transition.status,
+                        sslAlert,
+                    },
+                    {
+                        attempts: 3,
+                        backoff: { type: 'exponential', delay: 5000 },
+                        removeOnComplete: true,
+                        removeOnFail: 100,
+                    },
+                ),
+            ),
         );
 
-        const sent = deliveries.filter(Boolean).length;
+        const failed = deliveries.filter(
+            (delivery) => delivery.status === 'rejected',
+        ).length;
 
-        // Only remember the status once someone actually got the message,
-        // so a transient channel outage does not swallow the alert.
-        if (sent > 0) {
-            await this.stateService.markNotified(monitor.id, transition.status);
-
-            if (this.isSslAlert(state)) {
-                await this.stateService.markSslNotified(monitor.id);
+        for (const delivery of deliveries) {
+            if (delivery.status === 'rejected') {
+                this.logger.warn(
+                    `Failed to enqueue notification job: ${(delivery.reason as Error).message}`,
+                );
             }
         }
 
-        return { skipped: false, sent, failed: deliveries.length - sent };
+        return {
+            skipped: false,
+            sent: channels.length - failed,
+            failed,
+        };
+    }
+
+    /**
+     * Sends a single channel delivery synchronously and records the attempt.
+     * The queue processor calls this; it throws after recording a failure so
+     * BullMQ can retry the job with backoff.
+     */
+    async deliver(
+        channelId: string,
+        payload: NotificationPayload,
+    ): Promise<void> {
+        const channel = await this.prisma.notificationChannel.findUnique({
+            where: { id: channelId },
+        });
+
+        if (!channel) {
+            throw new Error(`Notification channel ${channelId} not found`);
+        }
+
+        try {
+            await this.dispatch(channel, payload);
+            await this.writeLog(
+                channel.id,
+                payload.monitorId,
+                NotificationStatus.SUCCESS,
+                null,
+            );
+        } catch (error) {
+            const message = (error as Error).message;
+            this.logger.warn(
+                `Channel ${channel.id} (${channel.type}) failed for monitor ${payload.monitorId}: ${message}`,
+            );
+            await this.writeLog(
+                channel.id,
+                payload.monitorId,
+                NotificationStatus.FAILED,
+                message,
+            );
+            throw error;
+        }
     }
 
     /**
@@ -163,34 +231,6 @@ export class NotifierService {
     }
 
     // -- Helpers ---------------------------------------------------------
-
-    private async deliver(
-        channel: NotificationChannelModel,
-        payload: NotificationPayload,
-    ): Promise<boolean> {
-        try {
-            await this.dispatch(channel, payload);
-            await this.writeLog(
-                channel.id,
-                payload.monitorId,
-                NotificationStatus.SUCCESS,
-                null,
-            );
-            return true;
-        } catch (error) {
-            const message = (error as Error).message;
-            this.logger.warn(
-                `Channel ${channel.id} (${channel.type}) failed for monitor ${payload.monitorId}: ${message}`,
-            );
-            await this.writeLog(
-                channel.id,
-                payload.monitorId,
-                NotificationStatus.FAILED,
-                message,
-            );
-            return false;
-        }
-    }
 
     private async dispatch(
         channel: NotificationChannelModel,

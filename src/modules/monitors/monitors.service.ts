@@ -13,6 +13,7 @@ import type {
     ProjectModel,
 } from '../../generated/prisma/models';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
+import { QuotaService } from '../../shared/quota/quota.service';
 
 /** A monitor row with its companion state row eagerly loaded. */
 type MonitorWithState = MonitorModel & { state?: MonitorStateModel | null };
@@ -22,10 +23,19 @@ export class MonitorsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly systemProbeScheduler: SystemProbeScheduler,
+        private readonly quotaService: QuotaService,
     ) {}
 
     async create(projectId: string, dto: CreateMonitorDto) {
         const project = await this.ensureProjectExists(projectId);
+        await this.quotaService.assertCanCreate(
+            project.organizationId,
+            'monitors',
+        );
+        await this.quotaService.assertIntervalAllowed(
+            project.organizationId,
+            dto.interval ?? 60,
+        );
         this.validateTarget(dto.type, dto.target);
         this.validateSslConfig(dto.type, dto.target, dto.checkSsl ?? false);
 
@@ -74,6 +84,13 @@ export class MonitorsService {
             targetChanged ||
             dto.checkSsl !== undefined ||
             dto.sslExpiryThreshold !== undefined;
+
+        if (dto.interval !== undefined && dto.interval !== existing.interval) {
+            await this.quotaService.assertIntervalAllowed(
+                existing.organizationId,
+                dto.interval,
+            );
+        }
 
         this.validateTarget(nextType, nextTarget);
         this.validateSslConfig(nextType, nextTarget, nextCheckSsl);

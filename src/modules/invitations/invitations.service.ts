@@ -6,6 +6,7 @@ import {
     Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { QuotaService } from '../../shared/quota/quota.service';
 import { CreateInvitationDto } from './dto';
 import { InvitationEntity } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -20,6 +21,7 @@ export class InvitationsService {
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
         private readonly emailService: EmailService,
+        private readonly quotaService: QuotaService,
     ) {}
 
     /**
@@ -211,6 +213,11 @@ export class InvitationsService {
                 'You are already a member of this organization',
             );
         }
+
+        await this.quotaService.assertCanCreate(
+            invitation.organizationId,
+            'members',
+        );
 
         // Transaction: create membership + update invitation
         const [, updatedInvitation] = await this.prisma.$transaction([

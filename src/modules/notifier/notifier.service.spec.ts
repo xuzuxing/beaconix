@@ -1,7 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { NotifierService } from './notifier.service';
+import { MONITOR_TRANSITION_JOB } from './notifier.queue';
 import type { PrismaService } from '../../infra/database/prisma.service';
-import type { StateService } from '../state/state.service';
 
 const monitorRow = {
     id: 'monitor-1',
@@ -58,7 +58,11 @@ const transition = {
 
 function createService() {
     const prisma = {
-        notificationChannel: { findMany: jest.fn(), findFirst: jest.fn() },
+        notificationChannel: {
+            findMany: jest.fn(),
+            findFirst: jest.fn(),
+            findUnique: jest.fn(),
+        },
         notificationLog: { create: jest.fn() },
     };
     const stateService = {
@@ -74,17 +78,19 @@ function createService() {
         email: { send: jest.fn() },
     };
 
+    const queue = { add: jest.fn() };
+
     const service = new NotifierService(
         prisma as unknown as PrismaService,
-        stateService as unknown as StateService,
         senders.feishu as never,
         senders.wecom as never,
         senders.dingtalk as never,
         senders.wechat as never,
         senders.email as never,
+        queue as never,
     );
 
-    return { service, prisma, stateService, senders };
+    return { service, prisma, stateService, senders, queue };
 }
 
 describe('NotifierService.shouldNotify', () => {
@@ -177,12 +183,11 @@ describe('NotifierService.shouldNotify', () => {
 
 describe('NotifierService', () => {
     describe('notifyTransition', () => {
-        it('fans out to every enabled channel and remembers the status', async () => {
-            const { service, prisma, stateService, senders } = createService();
+        it('enqueues one job per enabled channel without sending synchronously', async () => {
+            const { service, prisma, queue, stateService, senders } =
+                createService();
             prisma.notificationChannel.findMany.mockResolvedValue([channelRow]);
-            prisma.notificationLog.create.mockResolvedValue({ id: 'log-1' });
-            senders.feishu.send.mockResolvedValue(undefined);
-            stateService.markNotified.mockResolvedValue(undefined);
+            queue.add.mockResolvedValue({ id: 'job-1' });
 
             const result = await service.notifyTransition(
                 monitorRow as never,
@@ -194,38 +199,49 @@ describe('NotifierService', () => {
                 where: { organizationId: 'org-1', enabled: true },
                 orderBy: { createdAt: 'asc' },
             });
-            expect(senders.feishu.send).toHaveBeenCalledWith(
-                channelRow,
+            expect(queue.add).toHaveBeenCalledWith(
+                MONITOR_TRANSITION_JOB,
+                {
+                    channelId: 'channel-1',
+                    payload: expect.objectContaining({
+                        monitorId: 'monitor-1',
+                        previousStatus: 'UP',
+                        status: 'DOWN',
+                        event: 'DOWN',
+                        error: 'connect ECONNREFUSED',
+                    }),
+                    transitionStatus: 'DOWN',
+                    sslAlert: false,
+                },
                 expect.objectContaining({
-                    monitorId: 'monitor-1',
-                    previousStatus: 'UP',
-                    status: 'DOWN',
-                    event: 'DOWN',
-                    error: 'connect ECONNREFUSED',
+                    attempts: 3,
+                    backoff: { type: 'exponential', delay: 5000 },
                 }),
             );
-            expect(prisma.notificationLog.create).toHaveBeenCalledWith({
-                data: {
-                    channelId: 'channel-1',
-                    monitorId: 'monitor-1',
-                    status: 'SUCCESS',
-                    error: null,
-                },
-            });
-            expect(stateService.markNotified).toHaveBeenCalledWith(
-                'monitor-1',
-                'DOWN',
-            );
+            expect(senders.feishu.send).not.toHaveBeenCalled();
+            expect(stateService.markNotified).not.toHaveBeenCalled();
             expect(result).toEqual({ skipped: false, sent: 1, failed: 0 });
         });
 
-        it('remembers successful SSL alert delivery', async () => {
-            const { service, prisma, stateService, senders } = createService();
+        it('reports enqueue failures without throwing', async () => {
+            const { service, prisma, queue, stateService } = createService();
             prisma.notificationChannel.findMany.mockResolvedValue([channelRow]);
-            prisma.notificationLog.create.mockResolvedValue({ id: 'log-1' });
-            senders.feishu.send.mockResolvedValue(undefined);
-            stateService.markNotified.mockResolvedValue(undefined);
-            stateService.markSslNotified.mockResolvedValue(undefined);
+            queue.add.mockRejectedValue(new Error('redis down'));
+
+            const result = await service.notifyTransition(
+                monitorRow as never,
+                { ...stateRow, status: 'DOWN' } as never,
+                transition,
+            );
+
+            expect(result).toEqual({ skipped: false, sent: 0, failed: 1 });
+            expect(stateService.markNotified).not.toHaveBeenCalled();
+        });
+
+        it('flags SSL alerts in the job data', async () => {
+            const { service, prisma, queue } = createService();
+            prisma.notificationChannel.findMany.mockResolvedValue([channelRow]);
+            queue.add.mockResolvedValue({ id: 'job-1' });
 
             await service.notifyTransition(
                 monitorRow as never,
@@ -240,37 +256,15 @@ describe('NotifierService', () => {
                 transition,
             );
 
-            expect(stateService.markSslNotified).toHaveBeenCalledWith(
-                'monitor-1',
+            expect(queue.add).toHaveBeenCalledWith(
+                MONITOR_TRANSITION_JOB,
+                expect.objectContaining({ sslAlert: true }),
+                expect.anything(),
             );
-        });
-
-        it('logs a failed delivery and keeps the status unannounced', async () => {
-            const { service, prisma, stateService, senders } = createService();
-            prisma.notificationChannel.findMany.mockResolvedValue([channelRow]);
-            prisma.notificationLog.create.mockResolvedValue({ id: 'log-1' });
-            senders.feishu.send.mockRejectedValue(new Error('HTTP 500'));
-
-            const result = await service.notifyTransition(
-                monitorRow as never,
-                {} as never,
-                transition,
-            );
-
-            expect(prisma.notificationLog.create).toHaveBeenCalledWith({
-                data: {
-                    channelId: 'channel-1',
-                    monitorId: 'monitor-1',
-                    status: 'FAILED',
-                    error: 'HTTP 500',
-                },
-            });
-            expect(stateService.markNotified).not.toHaveBeenCalled();
-            expect(result).toEqual({ skipped: false, sent: 0, failed: 1 });
         });
 
         it('skips the fan-out when the organization has no channel', async () => {
-            const { service, prisma, stateService } = createService();
+            const { service, prisma, queue, stateService } = createService();
             prisma.notificationChannel.findMany.mockResolvedValue([]);
 
             const result = await service.notifyTransition(
@@ -280,11 +274,12 @@ describe('NotifierService', () => {
             );
 
             expect(result).toEqual({ skipped: true, sent: 0, failed: 0 });
+            expect(queue.add).not.toHaveBeenCalled();
             expect(stateService.markNotified).not.toHaveBeenCalled();
         });
 
         it('skips the fan-out when the transition is not notifiable', async () => {
-            const { service, prisma } = createService();
+            const { service, prisma, queue } = createService();
 
             const result = await service.notifyTransition(
                 monitorRow as never,
@@ -298,6 +293,77 @@ describe('NotifierService', () => {
 
             expect(result.skipped).toBe(true);
             expect(prisma.notificationChannel.findMany).not.toHaveBeenCalled();
+            expect(queue.add).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('deliver', () => {
+        it('sends synchronously and writes a SUCCESS log', async () => {
+            const { service, prisma, senders } = createService();
+            prisma.notificationChannel.findUnique.mockResolvedValue(channelRow);
+            prisma.notificationLog.create.mockResolvedValue({ id: 'log-1' });
+            senders.feishu.send.mockResolvedValue(undefined);
+
+            await service.deliver('channel-1', {
+                monitorId: 'monitor-1',
+                monitorName: 'Production API',
+                monitorType: 'HTTP',
+                target: 'https://api.example.com/health',
+                organizationId: 'org-1',
+                previousStatus: 'UP',
+                status: 'DOWN',
+                event: 'DOWN',
+                failCount: 3,
+                latency: 30,
+                error: 'connect ECONNREFUSED',
+                checkedAt: new Date('2026-03-05T12:00:00.000Z'),
+            });
+
+            expect(senders.feishu.send).toHaveBeenCalledWith(
+                channelRow,
+                expect.objectContaining({ monitorId: 'monitor-1' }),
+            );
+            expect(prisma.notificationLog.create).toHaveBeenCalledWith({
+                data: {
+                    channelId: 'channel-1',
+                    monitorId: 'monitor-1',
+                    status: 'SUCCESS',
+                    error: null,
+                },
+            });
+        });
+
+        it('writes a FAILED log and rethrows so BullMQ can retry', async () => {
+            const { service, prisma, senders } = createService();
+            prisma.notificationChannel.findUnique.mockResolvedValue(channelRow);
+            prisma.notificationLog.create.mockResolvedValue({ id: 'log-1' });
+            senders.feishu.send.mockRejectedValue(new Error('HTTP 500'));
+
+            await expect(
+                service.deliver('channel-1', {
+                    monitorId: 'monitor-1',
+                    monitorName: 'Production API',
+                    monitorType: 'HTTP',
+                    target: 'https://api.example.com/health',
+                    organizationId: 'org-1',
+                    previousStatus: 'UP',
+                    status: 'DOWN',
+                    event: 'DOWN',
+                    failCount: 3,
+                    latency: 30,
+                    error: 'connect ECONNREFUSED',
+                    checkedAt: new Date('2026-03-05T12:00:00.000Z'),
+                }),
+            ).rejects.toThrow('HTTP 500');
+
+            expect(prisma.notificationLog.create).toHaveBeenCalledWith({
+                data: {
+                    channelId: 'channel-1',
+                    monitorId: 'monitor-1',
+                    status: 'FAILED',
+                    error: 'HTTP 500',
+                },
+            });
         });
     });
 

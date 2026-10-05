@@ -147,6 +147,28 @@ export class AppController {
         };
     }
 
+    @Get('monitoring-test')
+    @Public()
+    @Render('monitoring-test')
+    monitoringTestPage() {
+        return {
+            title: 'Beacon Monitoring Test',
+            apiBase: '/api',
+            renderedAt: new Date().toISOString(),
+        };
+    }
+
+    @Get('billing-test')
+    @Public()
+    @Render('billing-test')
+    billingTestPage() {
+        return {
+            title: 'Beacon Billing Test',
+            apiBase: '/api',
+            renderedAt: new Date().toISOString(),
+        };
+    }
+
     @Head()
     @Public()
     @HttpCode(HttpStatus.OK)

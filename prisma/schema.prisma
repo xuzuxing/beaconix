@@ -133,6 +133,7 @@ model User {
   attachments        Attachment[]
   refreshTokens      RefreshToken[]
   otpCodes           OtpCode[]
+  orders             Order[]
 
   @@index([createdAt])
   @@index([isActive])
@@ -205,6 +206,8 @@ model Organization {
   probes       Probe[]
   channels     NotificationChannel[]
   statusPages  StatusPage[]
+  subscriptions Subscription[]
+  orders       Order[]
 
   @@index([ownerId])
   @@index([createdAt])
@@ -633,6 +636,30 @@ enum NotificationStatus {
   FAILED
 }
 
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentChannel {
+  WECHAT
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
 // 监控目标
 model Monitor {
   id                  String      @id @default(cuid())
@@ -848,4 +875,116 @@ model StatusPage {
   @@index([organizationId])
   @@index([slug])
   @@map("status_pages")
+}
+
+// ==================== BILLING ====================
+
+// 套餐定义
+model Plan {
+  id          String  @id @default(uuid())
+  code        String  @unique
+  name        String
+  description String?
+  price       Int     @default(0)
+  durationDays Int    @default(30)
+  sortOrder   Int     @default(0)
+
+  maxMonitors Int @default(5)
+  maxProbes   Int @default(0)
+  maxMembers  Int @default(3)
+  maxChannels Int @default(1)
+  minInterval Int @default(300)
+
+  allowTenantProbe Boolean @default(false)
+  allowStatusPage  Boolean @default(false)
+
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions Subscription[]
+  orders        Order[]
+
+  @@index([code])
+  @@map("plans")
+}
+
+// 订阅栈
+model Subscription {
+  id             String             @id @default(uuid())
+  organizationId String
+  planId         String
+
+  status    SubscriptionStatus @default(ACTIVE)
+  startsAt  DateTime
+  expiresAt DateTime
+  autoRenew Boolean            @default(false)
+
+  orderId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planId], references: [id])
+  order        Order?       @relation(fields: [orderId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([expiresAt])
+  @@map("subscriptions")
+}
+
+// 订单
+model Order {
+  id             String      @id @default(uuid())
+  orderNo        String      @unique
+  organizationId String
+  planId         String
+  userId         String
+
+  amount       Int
+  currency     String       @default("CNY")
+  durationDays Int
+
+  status      OrderStatus @default(PENDING)
+  paidAt      DateTime?
+  cancelledAt DateTime?
+  expiresAt   DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  plan         Plan         @relation(fields: [planId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  payment      Payment?
+  subscription Subscription?
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("orders")
+}
+
+// 支付记录
+model Payment {
+  id            String        @id @default(uuid())
+  orderId       String        @unique
+  channel       PaymentChannel
+  transactionId String?       @unique
+  prepayId      String?
+  amount        Int
+  status        PaymentStatus @default(PENDING)
+  paidAt        DateTime?
+  rawCallback   Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([transactionId])
+  @@map("payments")
 }

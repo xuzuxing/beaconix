@@ -1,0 +1,12 @@
+import { MonitorStatus } from '../../generated/prisma/enums';
+import type { NotificationPayload } from './notifier.types';
+
+export const NOTIFICATION_QUEUE = 'notifications';
+export const MONITOR_TRANSITION_JOB = 'monitor-transition';
+
+export interface NotificationJobData {
+    channelId: string;
+    payload: NotificationPayload;
+    transitionStatus: MonitorStatus;
+    sslAlert: boolean;
+}

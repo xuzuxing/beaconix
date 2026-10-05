@@ -74,14 +74,25 @@ function createService() {
         rebalance: jest.fn().mockResolvedValue({}),
         getAssignedMonitorIds: jest.fn().mockResolvedValue([]),
     };
+    const billingService = {
+        assertFeatureAllowed: jest.fn().mockResolvedValue(undefined),
+        assertCanCreate: jest.fn().mockResolvedValue(undefined),
+    };
 
     const service = new ProbesService(
         prisma as unknown as PrismaService,
         checkerService as unknown as CheckerService,
         systemProbeScheduler as never,
+        billingService as never,
     );
 
-    return { service, prisma, checkerService, systemProbeScheduler };
+    return {
+        service,
+        prisma,
+        checkerService,
+        systemProbeScheduler,
+        billingService,
+    };
 }
 
 describe('ProbesService', () => {

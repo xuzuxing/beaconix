@@ -13,7 +13,6 @@ import { createPinoConfig } from './pino-logger.config';
 import { StructuredLoggerService } from './structured-logger.service';
 import { ConfigService } from '@nestjs/config';
 
-// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
 type PinoTransportStream = ReturnType<typeof pino.transport> & {
     readonly closed: boolean;
     readonly destroyed: boolean;

@@ -16,6 +16,7 @@ import {
 } from '../../generated/prisma/enums';
 import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
+import { QuotaService } from '../../shared/quota/quota.service';
 import { CheckerService } from '../checker/checker.service';
 import {
     BindMonitorsDto,
@@ -75,9 +76,13 @@ export class ProbesService {
         private readonly prisma: PrismaService,
         private readonly checkerService: CheckerService,
         private readonly systemProbeScheduler: SystemProbeScheduler,
+        private readonly quotaService: QuotaService,
     ) {}
 
     async create(orgId: string, dto: CreateProbeDto): Promise<ProbeEntity> {
+        await this.quotaService.assertFeatureAllowed(orgId, 'tenantProbe');
+        await this.quotaService.assertCanCreate(orgId, 'probes');
+
         const probe = await this.prisma.probe.create({
             data: {
                 organizationId: orgId,

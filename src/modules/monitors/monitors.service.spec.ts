@@ -61,13 +61,18 @@ function createService() {
         project: { findFirst: jest.fn().mockResolvedValue(projectRow) },
     };
     const systemProbeScheduler = { rebalance: jest.fn().mockResolvedValue({}) };
+    const quotaService = {
+        assertCanCreate: jest.fn().mockResolvedValue(undefined),
+        assertIntervalAllowed: jest.fn().mockResolvedValue(undefined),
+    };
 
     const service = new MonitorsService(
         prisma as unknown as PrismaService,
         systemProbeScheduler as never,
+        quotaService as never,
     );
 
-    return { service, prisma, systemProbeScheduler };
+    return { service, prisma, systemProbeScheduler, quotaService };
 }
 
 describe('MonitorsService', () => {

@@ -357,6 +357,11 @@
                     <h1>{{ title }}</h1>
                     <div class="subtitle">Rendered at {{ renderedAt }}</div>
                 </div>
+                <nav style="display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px;">
+                    <a href="/api/monitor-test" style="color: var(--brand); text-decoration: none;">Monitor</a>
+                    <a href="/api/monitoring-test" style="color: var(--brand); text-decoration: none;">Monitoring</a>
+                    <a href="/api/billing-test" style="color: var(--brand); text-decoration: none;">Billing</a>
+                </nav>
                 <span id="status" class="status">Ready</span>
             </div>
         </header>

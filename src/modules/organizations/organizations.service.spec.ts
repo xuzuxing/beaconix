@@ -18,6 +18,8 @@ function createService() {
                 projects: [{ id: 'project-1' }],
             }),
         },
+        plan: { findUnique: jest.fn().mockResolvedValue(null) },
+        subscription: { create: jest.fn() },
     };
 
     const service = new OrganizationsService(
@@ -81,6 +83,8 @@ describe('OrganizationsService', () => {
                         projects: [{ id: 'project-tx' }],
                     }),
                 },
+                plan: { findUnique: jest.fn().mockResolvedValue(null) },
+                subscription: { create: jest.fn() },
             };
 
             const result = await service.provisionForUser(
