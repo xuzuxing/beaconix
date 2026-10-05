@@ -24,7 +24,7 @@ async function main() {
             maxChannels: 1,
             minInterval: 300,
             allowTenantProbe: false,
-            allowStatusPage: false,
+            allowStatusPage: true,
         },
         {
             code: 'PRO',
