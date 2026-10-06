@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type {
     WechatConfig,
     WechatOfficialAccountConfig,
+    WechatWebsiteConfig,
 } from '../../../config';
 import { WechatHttpClient } from '../clients/wechat-http.client';
 import {
@@ -20,6 +21,7 @@ import {
 import { WechatApiError, WechatConfigurationError } from '../wechat.types';
 import type {
     BuildOAuthUrlInput,
+    BuildQrConnectUrlInput,
     EncryptedReply,
     ExchangeCodeInput,
     GetUserInfoInput,
@@ -34,6 +36,7 @@ import type {
 
 const OAUTH_AUTHORIZE_URL =
     'https://open.weixin.qq.com/connect/oauth2/authorize';
+const QR_CONNECT_AUTHORIZE_URL = 'https://open.weixin.qq.com/connect/qrconnect';
 const OAUTH_TOKEN_PATH = '/sns/oauth2/access_token';
 const OAUTH_REFRESH_PATH = '/sns/oauth2/refresh_token';
 const USER_INFO_PATH = '/sns/userinfo';
@@ -119,6 +122,31 @@ export class OfficialAccountClient {
         ].join('&');
 
         return `${OAUTH_AUTHORIZE_URL}?${query}#wechat_redirect`;
+    }
+
+    /**
+     * Builds the `snsapi_login` QR-connect URL used for website (desktop web)
+     * scan-to-login. Unlike `buildOAuthUrl`, this targets the Open Platform
+     * website app and renders the QR code page directly.
+     */
+    buildQrConnectUrl(input: BuildQrConnectUrlInput): string {
+        const appId = input.appId ?? this.websiteConfig.appId;
+
+        if (!appId) {
+            throw new WechatConfigurationError(
+                'WECHAT_WEB_APPID is required to build a website QR-connect URL',
+            );
+        }
+
+        const query = [
+            `appid=${encodeURIComponent(appId)}`,
+            `redirect_uri=${encodeURIComponent(input.redirectUri)}`,
+            'response_type=code',
+            'scope=snsapi_login',
+            `state=${encodeURIComponent(input.state ?? '')}`,
+        ].join('&');
+
+        return `${QR_CONNECT_AUTHORIZE_URL}?${query}#wechat_redirect`;
     }
 
     /** Exchanges an OAuth `code` for the web authorisation token. */
@@ -397,5 +425,17 @@ export class OfficialAccountClient {
         }
 
         return wechat.officialAccount;
+    }
+
+    private get websiteConfig(): WechatWebsiteConfig {
+        const wechat = this.configService.get<WechatConfig>('wechat');
+
+        if (!wechat) {
+            throw new WechatConfigurationError(
+                'WeChat config is not registered',
+            );
+        }
+
+        return wechat.website;
     }
 }

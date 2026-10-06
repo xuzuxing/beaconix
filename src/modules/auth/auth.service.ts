@@ -14,6 +14,7 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EmailService } from '../email/email.service';
 import { EmailTemplate } from '../email/email.types';
+import type { UserModel } from '../../generated/prisma/models';
 import { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { JwtConfig } from '../../config';
 import {
@@ -361,6 +362,30 @@ export class AuthService {
         );
 
         return { message: 'Password has been reset successfully.' };
+    }
+
+    /**
+     * Issues auth tokens + user for an already-resolved user, used by the
+     * WeChat login flow (and reusable by other social-login providers later).
+     */
+    async issueTokensForUser(user: UserModel) {
+        const tokens = await this.generateTokens(
+            user.id,
+            user.email,
+            user.globalRole,
+        );
+        await this.storeRefreshToken(user.id, tokens.refreshToken);
+
+        await this.prisma.user.update({
+            where: { id: user.id },
+            data: { lastSeenAt: new Date() },
+        });
+
+        return {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            user: new UserEntity(user),
+        };
     }
 
     // ─── Private Helpers ───────────────────────────────────────────────

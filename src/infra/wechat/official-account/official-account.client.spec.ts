@@ -20,8 +20,17 @@ const OA_CONFIG = {
     aesKey: AES_KEY,
 };
 
-function createClient(overrides: Partial<typeof OA_CONFIG> = {}) {
+const WEBSITE_CONFIG = {
+    appId: 'wx-web',
+    appSecret: 'web-secret',
+};
+
+function createClient(
+    overrides: Partial<typeof OA_CONFIG> = {},
+    websiteOverrides: Partial<typeof WEBSITE_CONFIG> = {},
+) {
     const config = { ...OA_CONFIG, ...overrides };
+    const website = { ...WEBSITE_CONFIG, ...websiteOverrides };
     const http = {
         getJson: jest.fn(),
         postJson: jest.fn(),
@@ -31,7 +40,10 @@ function createClient(overrides: Partial<typeof OA_CONFIG> = {}) {
         invalidate: jest.fn().mockResolvedValue(undefined),
     };
     const configService = {
-        get: jest.fn().mockReturnValue({ officialAccount: config }),
+        get: jest.fn().mockReturnValue({
+            officialAccount: config,
+            website,
+        }),
     };
 
     const client = new OfficialAccountClient(
@@ -84,6 +96,39 @@ describe('OfficialAccountClient', () => {
 
             expect(() =>
                 client.buildOAuthUrl({ redirectUri: 'https://x/cb' }),
+            ).toThrow(WechatConfigurationError);
+        });
+    });
+
+    describe('buildQrConnectUrl', () => {
+        it('builds a snsapi_login QR-connect URL ending with #wechat_redirect', () => {
+            const { client } = createClient();
+
+            const url = client.buildQrConnectUrl({
+                redirectUri: 'https://beacon.example.com/wechat/cb',
+                state: 's2',
+            });
+
+            expect(
+                url.startsWith('https://open.weixin.qq.com/connect/qrconnect?'),
+            ).toBe(true);
+            expect(url).toContain('appid=wx-web');
+            expect(url).toContain(
+                'redirect_uri=https%3A%2F%2Fbeacon.example.com%2Fwechat%2Fcb',
+            );
+            expect(url).toContain('response_type=code');
+            expect(url).toContain('scope=snsapi_login');
+            expect(url).toContain('state=s2');
+            expect(url.endsWith('#wechat_redirect')).toBe(true);
+        });
+
+        it('rejects a missing website appId', () => {
+            const { client } = createClient({}, { appId: '' });
+
+            expect(() =>
+                client.buildQrConnectUrl({
+                    redirectUri: 'https://x/cb',
+                }),
             ).toThrow(WechatConfigurationError);
         });
     });

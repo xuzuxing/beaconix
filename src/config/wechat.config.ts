@@ -25,6 +25,11 @@ export interface WechatMiniProgramConfig {
     appSecret: string;
 }
 
+export interface WechatWebsiteConfig {
+    appId: string;
+    appSecret: string;
+}
+
 export interface WechatOfficialAccountConfig {
     appId: string;
     appSecret: string;
@@ -48,6 +53,7 @@ export interface WechatHttpConfig {
 export interface WechatConfig {
     pay: WechatPayConfig;
     miniprogram: WechatMiniProgramConfig;
+    website: WechatWebsiteConfig;
     officialAccount: WechatOfficialAccountConfig;
     work: WechatWorkConfig;
     http: WechatHttpConfig;
@@ -79,6 +85,10 @@ export const wechatConfig = registerAs('wechat', (): WechatConfig => ({
     miniprogram: {
         appId: optionalEnv('WECHAT_MINI_APPID', ''),
         appSecret: optionalEnv('WECHAT_MINI_APPSECRET', ''),
+    },
+    website: {
+        appId: optionalEnv('WECHAT_WEB_APPID', ''),
+        appSecret: optionalEnv('WECHAT_WEB_APPSECRET', ''),
     },
     officialAccount: {
         appId: optionalEnv('WECHAT_OA_APPID', ''),

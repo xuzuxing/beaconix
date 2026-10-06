@@ -15,6 +15,13 @@ export interface BuildOAuthUrlInput {
     appId?: string;
 }
 
+export interface BuildQrConnectUrlInput {
+    /** Must be an authorised callback domain of the website app. */
+    redirectUri: string;
+    state?: string;
+    appId?: string;
+}
+
 export interface ExchangeCodeInput {
     code: string;
     appId?: string;
