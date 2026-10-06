@@ -28,6 +28,7 @@ const {
     randomBytes,
 } = require('node:crypto');
 const { Socket } = require('node:net');
+const { performance } = require('node:perf_hooks');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -40,6 +41,21 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_RESULTS = 100;
 const MAX_ERROR_MESSAGE_LENGTH = 500;
 const VALIDATION_INFO = 'beacon-probe-validation-v1';
+
+/** How many monitors one round checks in parallel. */
+const DEFAULT_CONCURRENCY = 3;
+
+/**
+ * Buffered results while the backend is unreachable. Reaching this bound pauses
+ * checks (backpressure) instead of growing the buffer without limit.
+ */
+const MAX_PENDING_RESULTS = 500;
+
+/**
+ * Lower bound applied to `monitor.interval`. The backend already enforces the
+ * plan's minimum interval; this only guards against a bad payload.
+ */
+const MIN_CHECK_INTERVAL_SECONDS = 10;
 
 const HELP = `Beacon probe agent
 
@@ -60,7 +76,8 @@ Options:
   --key <probeId>            Probe id returned by the backend (the "key")
   --token <secret>           Probe secret returned by the backend (the "token")
   --secret <secret>          Alias for --token
-  --interval-seconds <n>     Heartbeat interval for run mode (default: ${DEFAULT_INTERVAL_SECONDS})
+  --interval-seconds <n>     Heartbeat interval for run mode (default: ${DEFAULT_INTERVAL_SECONDS});
+                             monitors are checked on their own interval instead, ${DEFAULT_CONCURRENCY} at a time
   --timeout-ms <n>           Per-request/check timeout (default: ${DEFAULT_TIMEOUT_MS})
   --allow-insecure           Allow http:// API URL (not recommended in production)
   -h, --help                 Show this help
@@ -614,6 +631,198 @@ function checkMonitor(monitor, config) {
     );
 }
 
+// -- Local check schedule ------------------------------------------------
+
+/**
+ * Monotonic clock: the schedule must not jump when the system clock is
+ * adjusted (NTP steps, DST, manual changes).
+ */
+function nowMs() {
+    return performance.now();
+}
+
+function monitorSignature(monitor) {
+    return [
+        monitor.type,
+        monitor.target,
+        monitor.interval,
+        monitor.timeout,
+        monitor.expectedStatus,
+    ].join('|');
+}
+
+function monitorIntervalMs(monitor) {
+    const seconds = Number(monitor && monitor.interval);
+    const safe =
+        Number.isFinite(seconds) && seconds > 0
+            ? seconds
+            : DEFAULT_INTERVAL_SECONDS;
+
+    return Math.max(MIN_CHECK_INTERVAL_SECONDS, safe) * 1000;
+}
+
+/**
+ * Local check schedule driven by the monitors the backend hands back.
+ *
+ * The heartbeat response is the authoritative task list, but it is *not* a
+ * "check everything now" command: each monitor is checked on its own
+ * `interval`, at most `DEFAULT_CONCURRENCY` checks at a time. Without this the
+ * agent re-checked every monitor on every heartbeat, i.e. a 300s monitor was
+ * checked (and reported) five times more often than configured.
+ *
+ * Results are buffered and reported once per round; while the backend is
+ * unreachable the buffer is kept (up to MAX_PENDING_RESULTS) so a short outage
+ * does not lose data, and checks pause once it is full.
+ */
+function createSchedule() {
+    /** @type {Map<string, {monitor: object, signature: string, nextDueAt: number, inFlight: boolean}>} */
+    const tasks = new Map();
+    /** @type {Array<object>} */
+    let pending = [];
+
+    function sync(monitors, at = nowMs()) {
+        const seen = new Set();
+        let added = 0;
+        let rescheduled = 0;
+
+        for (const monitor of monitors) {
+            if (!monitor || typeof monitor.id !== 'string') continue;
+
+            const signature = monitorSignature(monitor);
+            const existing = tasks.get(monitor.id);
+            seen.add(monitor.id);
+
+            if (!existing) {
+                // New assignment: check it right away to get a first result.
+                tasks.set(monitor.id, {
+                    monitor,
+                    signature,
+                    nextDueAt: at,
+                    inFlight: false,
+                });
+                added += 1;
+                continue;
+            }
+
+            existing.monitor = monitor;
+
+            if (existing.signature !== signature) {
+                // Target/interval/timeout changed - re-check immediately so the
+                // new definition takes effect instead of waiting out the old one.
+                existing.signature = signature;
+                existing.nextDueAt = at;
+                rescheduled += 1;
+            }
+        }
+
+        let removed = 0;
+        for (const id of [...tasks.keys()]) {
+            if (!seen.has(id)) {
+                tasks.delete(id);
+                removed += 1;
+            }
+        }
+
+        return { tracked: tasks.size, added, rescheduled, removed };
+    }
+
+    function dueTasks(at) {
+        const due = [];
+        for (const task of tasks.values()) {
+            if (!task.inFlight && task.nextDueAt <= at) due.push(task);
+        }
+        return due;
+    }
+
+    async function runDue(config) {
+        const due = dueTasks(nowMs());
+        if (due.length === 0) return { due: 0, executed: 0, deferred: 0 };
+
+        if (pending.length >= MAX_PENDING_RESULTS) {
+            warn(
+                `Result buffer is full (${pending.length}/${MAX_PENDING_RESULTS}); ` +
+                    `pausing checks until it can be reported`,
+            );
+            return { due: due.length, executed: 0, deferred: due.length };
+        }
+
+        let executed = 0;
+        let active = 0;
+        let cursor = 0;
+        const workerCount = Math.min(DEFAULT_CONCURRENCY, due.length);
+
+        const workers = Array.from({ length: workerCount }, async () => {
+            while (
+                cursor < due.length &&
+                pending.length + active < MAX_PENDING_RESULTS
+            ) {
+                const task = due[cursor];
+                cursor += 1;
+
+                if (task.inFlight) continue;
+                task.inFlight = true;
+                active += 1;
+
+                try {
+                    const result = await checkMonitor(task.monitor, config);
+                    pending.push(result);
+                    executed += 1;
+
+                    const state = result.success ? 'UP' : 'DOWN';
+                    const latency =
+                        result.latency !== null ? ` (${result.latency}ms)` : '';
+                    const detail = result.error ? ` - ${result.error}` : '';
+                    log(
+                        `  ${task.monitor.type} ${result.target}: ${state}${latency}${detail}`,
+                    );
+                } catch (err) {
+                    // checkMonitor reports target failures as results; throwing
+                    // here means a bug, so keep it out of the report.
+                    warn(
+                        `Check failed for monitor ${task.monitor.id}: ${err.message}`,
+                    );
+                } finally {
+                    active -= 1;
+                    task.inFlight = false;
+                    task.nextDueAt = nowMs() + monitorIntervalMs(task.monitor);
+                }
+            }
+        });
+
+        await Promise.all(workers);
+
+        return {
+            due: due.length,
+            executed,
+            deferred: due.length - executed,
+        };
+    }
+
+    async function flush(config) {
+        if (pending.length === 0) return 0;
+
+        const batch = pending;
+        pending = [];
+
+        try {
+            await reportResults(config, batch);
+            return batch.length;
+        } catch (err) {
+            // Keep the results for the next round rather than dropping them.
+            pending = batch.concat(pending);
+            throw err;
+        }
+    }
+
+    return {
+        sync,
+        runDue,
+        flush,
+        buffered: () => pending.length,
+        size: () => tasks.size,
+    };
+}
+
 // -- Commands ------------------------------------------------------------
 
 function assertCredentials(config) {
@@ -705,39 +914,69 @@ async function runHeartbeat(config) {
     return data;
 }
 
-async function runCycle(config) {
+async function runCycle(config, schedule) {
     assertCredentials(config);
     assertEncryptedTransport(config);
 
-    await pollAndAnswerValidation(config);
+    let roundError = null;
+    let probeId = 'unknown';
+    let status = 'unknown';
+    let assigned = 0;
 
-    const data = await heartbeat(config);
-    const monitors = Array.isArray(data && data.monitors) ? data.monitors : [];
-    const probeId = data && data.probe ? data.probe.id : 'unknown';
-    const status = data && data.probe ? data.probe.status : 'unknown';
+    try {
+        await pollAndAnswerValidation(config);
 
-    log(
-        `Heartbeat OK: probe=${probeId} status=${status} monitors=${monitors.length}`,
-    );
+        const data = await heartbeat(config);
+        const monitors = Array.isArray(data && data.monitors)
+            ? data.monitors
+            : [];
+        probeId = data && data.probe ? data.probe.id : 'unknown';
+        status = data && data.probe ? data.probe.status : 'unknown';
+        assigned = monitors.length;
 
-    if (monitors.length === 0) {
-        return { probeId, monitors, results: [] };
+        const stats = schedule.sync(monitors);
+
+        log(
+            `Heartbeat OK: probe=${probeId} status=${status} monitors=${assigned} ` +
+                `(tracked=${stats.tracked} added=${stats.added} ` +
+                `rescheduled=${stats.rescheduled} removed=${stats.removed})`,
+        );
+    } catch (err) {
+        // A missed heartbeat must not stop local checks: the schedule keeps
+        // running on its own intervals and results stay buffered until the
+        // backend is reachable again.
+        roundError = err;
+        warn(
+            `Heartbeat failed, keeping the local schedule ` +
+                `(${schedule.size()} monitor(s)): ${err.message}`,
+        );
     }
 
-    const results = [];
-    for (const monitor of monitors) {
-        const result = await checkMonitor(monitor, config);
-        results.push(result);
-        const state = result.success ? 'UP' : 'DOWN';
-        const latency = result.latency !== null ? ` (${result.latency}ms)` : '';
-        const detail = result.error ? ` - ${result.error}` : '';
-        log(`  ${monitor.type} ${result.target}: ${state}${latency}${detail}`);
+    const outcome = await schedule.runDue(config);
+
+    if (outcome.executed > 0) {
+        log(`Checked ${outcome.executed}/${outcome.due} due monitor(s)`);
     }
 
-    await reportResults(config, results);
-    log(`Reported ${results.length} result(s)`);
+    let reported = 0;
+    try {
+        reported = await schedule.flush(config);
+        if (reported > 0) log(`Reported ${reported} result(s)`);
+    } catch (err) {
+        warn(
+            `Reporting failed, keeping ${schedule.buffered()} result(s) buffered: ${err.message}`,
+        );
+        if (!roundError) roundError = err;
+    }
 
-    return { probeId, monitors, results };
+    if (roundError) throw roundError;
+
+    return {
+        probeId,
+        monitors: assigned,
+        checked: outcome.executed,
+        reported,
+    };
 }
 
 function createShutdownSignal() {
@@ -779,13 +1018,17 @@ async function runLoop(config) {
     assertCredentials(config);
 
     const signal = createShutdownSignal();
+    const schedule = createSchedule();
     let consecutiveFailures = 0;
 
-    log(`Probe agent started: probe=${config.key} interval=${config.intervalSeconds}s`);
+    log(
+        `Probe agent started: probe=${config.key} heartbeat=${config.intervalSeconds}s ` +
+            `concurrency=${DEFAULT_CONCURRENCY} (checks follow each monitor's interval)`,
+    );
 
     while (!signal.aborted) {
         try {
-            await runCycle(config);
+            await runCycle(config, schedule);
             consecutiveFailures = 0;
         } catch (err) {
             consecutiveFailures += 1;
@@ -833,7 +1076,7 @@ async function main() {
     }
 
     if (args.once) {
-        await runCycle(config);
+        await runCycle(config, createSchedule());
         return;
     }
 
@@ -850,6 +1093,7 @@ if (require.main === module) {
 module.exports = {
     loadConfig,
     parseArgs,
+    createSchedule,
     runCycle,
     runValidate,
     runHeartbeat,
