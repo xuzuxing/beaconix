@@ -152,6 +152,9 @@ export class AuditLogInterceptor implements NestInterceptor {
         'password',
         'token',
         'refreshToken',
+        'key',
+        'keyHash',
+        'secret',
     ]);
 
     private stripSensitiveFields(data: any): any {

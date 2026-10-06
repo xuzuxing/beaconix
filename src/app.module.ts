@@ -48,6 +48,8 @@ import { NotifierModule } from './modules/notifier/notifier.module';
 import { StatusPagesModule } from './modules/status-pages/status-pages.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { DeveloperApiModule } from './modules/developer-api/developer-api.module';
+import { isDeveloperApiRoute } from './modules/developer-api/common/developer-throttle';
 import { QuotaModule } from './shared/quota/quota.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { ClsModule } from './infra/cls/cls.module';
@@ -92,8 +94,16 @@ import { LoggerModule } from './infra/logging/logger.module';
                 const throttler = config.get<ThrottlerConfig>('throttler')!;
                 return [
                     {
+                        name: 'default',
                         ttl: throttler.ttl * 1000,
                         limit: throttler.limit,
+                    },
+                    {
+                        name: 'developer',
+                        ttl: throttler.developerTtl * 1000,
+                        limit: throttler.developerLimit,
+                        // Only apply the developer bucket to /api/developer/v1.
+                        skipIf: (context) => !isDeveloperApiRoute(context),
                     },
                 ];
             },
@@ -135,6 +145,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         StatusPagesModule,
         MonitoringModule,
         BillingModule,
+        DeveloperApiModule,
         QuotaModule,
         AdminModule,
     ],

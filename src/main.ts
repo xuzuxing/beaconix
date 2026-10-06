@@ -94,15 +94,30 @@ async function bootstrap() {
             { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
             'access-token',
         )
+        .addBearerAuth(
+            {
+                type: 'http',
+                scheme: 'bearer',
+                bearerFormat: 'API key (bk_org_...)',
+                description: 'Organization API key for the developer API',
+            },
+            'developer-api-key',
+        )
         .build();
 
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    const document = SwaggerModule.createDocument(app, swaggerConfig, {
+        ignoreGlobalPrefix: true,
+    });
     app.use(
         '/reference',
         apiReference({
             content: document,
+            localization: {
+                locale: 'zh-CN',
+            },
         }),
     );
+
     app.enableShutdownHooks([ShutdownSignal.SIGTERM, ShutdownSignal.SIGINT]);
 
     await app.listen(appConfig.port, () => {

@@ -118,23 +118,25 @@ model User {
   deletedAt DateTime?
 
   // Relations
-  identities         UserIdentity[]
-  ownedOrganizations Organization[] @relation("OrganizationOwner")
-  memberships        Membership[]
-  createdProjects    Project[]      @relation("ProjectCreator")
-  createdTasks       Task[]         @relation("TaskCreator")
-  assignedTasks      Task[]         @relation("TaskAssignee")
-  comments           Comment[]
-  notifications      Notification[]
-  sentInvitations    Invitation[]   @relation("InvitationSender")
-  auditLogs          AuditLog[]     @relation("AuditActor")
-  taskWatchers       TaskWatcher[]
-  taskActivities     TaskActivity[] @relation("ActivityActor")
-  createdLabels      Label[]        @relation("LabelCreator")
-  attachments        Attachment[]
-  refreshTokens      RefreshToken[]
-  otpCodes           OtpCode[]
-  orders             Order[]
+  identities           UserIdentity[]
+  ownedOrganizations   Organization[]        @relation("OrganizationOwner")
+  memberships          Membership[]
+  createdProjects      Project[]             @relation("ProjectCreator")
+  createdTasks         Task[]                @relation("TaskCreator")
+  assignedTasks        Task[]                @relation("TaskAssignee")
+  comments             Comment[]
+  notifications        Notification[]
+  sentInvitations      Invitation[]          @relation("InvitationSender")
+  auditLogs            AuditLog[]            @relation("AuditActor")
+  taskWatchers         TaskWatcher[]
+  taskActivities       TaskActivity[]        @relation("ActivityActor")
+  createdLabels        Label[]               @relation("LabelCreator")
+  attachments          Attachment[]
+  refreshTokens        RefreshToken[]
+  otpCodes             OtpCode[]
+  orders               Order[]
+  apiKeys              ApiKey[]              @relation("ApiKeyCreator")
+  personalAccessTokens PersonalAccessToken[]
 
   @@index([createdAt])
   @@index([isActive])
@@ -235,6 +237,7 @@ model Organization {
   statusPages   StatusPage[]
   subscriptions Subscription[]
   orders        Order[]
+  apiKeys       ApiKey[]
 
   @@index([ownerId])
   @@index([createdAt])
@@ -919,6 +922,54 @@ model StatusPage {
   @@map("status_pages")
 }
 
+// ==================== DEVELOPER ACCESS ====================
+
+// 组织级 API Key：程序化访问 Beacon 监控能力（明文只在创建时返回一次）
+model ApiKey {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  keyPrefix      String // e.g. bk_org_1a2b3c4d — for display only
+  keyHash        String    @unique // SHA-256 of the full key
+  scopes         String[]  @default([])
+  expiresAt      DateTime?
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdById    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("ApiKeyCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([createdById])
+  @@index([revokedAt])
+  @@map("api_keys")
+}
+
+// 用户级 Personal Access Token：可吊销的用户 JWT（claims 带 kind=pat + patId）
+model PersonalAccessToken {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String
+  tokenHash  String    @unique // SHA-256 of the raw token
+  scopes     String[]  @default([])
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([revokedAt])
+  @@map("personal_access_tokens")
+}
+
 // ==================== BILLING ====================
 
 // 套餐定义
@@ -933,6 +984,7 @@ model Plan {
 
   maxMonitors Int @default(5)
   maxProbes   Int @default(0)
+  maxApiKeys  Int @default(5)
   maxMembers  Int @default(3)
   maxChannels Int @default(1)
   minInterval Int @default(300)

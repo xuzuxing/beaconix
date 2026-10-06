@@ -12,6 +12,7 @@ const freePlan = {
     maxProbes: 0,
     maxMembers: 3,
     maxChannels: 1,
+    maxApiKeys: 5,
     minInterval: 300,
     allowTenantProbe: false,
     allowStatusPage: false,
@@ -23,6 +24,7 @@ function createService() {
         probe: { count: jest.fn() },
         membership: { count: jest.fn() },
         notificationChannel: { count: jest.fn() },
+        apiKey: { count: jest.fn() },
     };
     const effectivePlanService = {
         getEffectivePlan: jest.fn().mockResolvedValue(freePlan),
@@ -37,18 +39,20 @@ function createService() {
 }
 
 describe('QuotaService', () => {
-    it('aggregates usage across the four quota resources', async () => {
+    it('aggregates usage across the quota resources', async () => {
         const { service, prisma } = createService();
         prisma.monitor.count.mockResolvedValue(3);
         prisma.probe.count.mockResolvedValue(0);
         prisma.membership.count.mockResolvedValue(2);
         prisma.notificationChannel.count.mockResolvedValue(1);
+        prisma.apiKey.count.mockResolvedValue(4);
 
         await expect(service.getUsage('org-1')).resolves.toEqual({
             monitors: 3,
             probes: 0,
             members: 2,
             channels: 1,
+            apiKeys: 4,
         });
     });
 
@@ -100,6 +104,7 @@ describe('QuotaService', () => {
         prisma.probe.count.mockResolvedValue(0);
         prisma.membership.count.mockResolvedValue(2);
         prisma.notificationChannel.count.mockResolvedValue(1);
+        prisma.apiKey.count.mockResolvedValue(4);
 
         const summary = await service.getUsageSummary('org-1');
 
@@ -108,6 +113,11 @@ describe('QuotaService', () => {
             used: 3,
             limit: 5,
             percent: 60,
+        });
+        expect(summary.resources.apiKeys).toEqual({
+            used: 4,
+            limit: 5,
+            percent: 80,
         });
         expect(summary.features.allowTenantProbe).toBe(false);
     });

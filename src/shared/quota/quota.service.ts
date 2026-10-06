@@ -4,7 +4,8 @@ import { ProbeScope } from '../../generated/prisma/enums';
 import type { PlanModel } from '../../generated/prisma/models';
 import { EffectivePlanService } from '../subscription/effective-plan.service';
 
-export type QuotaResource = 'monitors' | 'probes' | 'members' | 'channels';
+export type QuotaResource =
+    'monitors' | 'probes' | 'members' | 'channels' | 'apiKeys';
 export type QuotaFeature = 'tenantProbe' | 'statusPage';
 
 const RESOURCE_LABELS: Record<QuotaResource, string> = {
@@ -12,6 +13,7 @@ const RESOURCE_LABELS: Record<QuotaResource, string> = {
     probes: '探针',
     members: '成员',
     channels: '通知渠道',
+    apiKeys: 'API Key',
 };
 
 const FEATURE_LABELS: Record<QuotaFeature, string> = {
@@ -24,6 +26,7 @@ const FREE_FALLBACK = {
     maxProbes: 0,
     maxMembers: 3,
     maxChannels: 1,
+    maxApiKeys: 5,
     minInterval: 300,
     allowTenantProbe: false,
     allowStatusPage: false,
@@ -37,20 +40,31 @@ export class QuotaService {
     ) {}
 
     async getUsage(organizationId: string) {
-        const [monitors, probes, members, channels] = await Promise.all([
-            this.prisma.monitor.count({
-                where: { organizationId, deletedAt: null },
-            }),
-            this.prisma.probe.count({
-                where: { organizationId, scope: ProbeScope.TENANT },
-            }),
-            this.prisma.membership.count({ where: { organizationId } }),
-            this.prisma.notificationChannel.count({
-                where: { organizationId },
-            }),
-        ]);
+        const [monitors, probes, members, channels, apiKeys] =
+            await Promise.all([
+                this.prisma.monitor.count({
+                    where: { organizationId, deletedAt: null },
+                }),
+                this.prisma.probe.count({
+                    where: { organizationId, scope: ProbeScope.TENANT },
+                }),
+                this.prisma.membership.count({ where: { organizationId } }),
+                this.prisma.notificationChannel.count({
+                    where: { organizationId },
+                }),
+                this.prisma.apiKey.count({
+                    where: {
+                        organizationId,
+                        revokedAt: null,
+                        OR: [
+                            { expiresAt: null },
+                            { expiresAt: { gt: new Date() } },
+                        ],
+                    },
+                }),
+            ]);
 
-        return { monitors, probes, members, channels };
+        return { monitors, probes, members, channels, apiKeys };
     }
 
     async assertCanCreate(
@@ -124,6 +138,7 @@ export class QuotaService {
                 probes: buildQuota(usage.probes, plan.maxProbes),
                 members: buildQuota(usage.members, plan.maxMembers),
                 channels: buildQuota(usage.channels, plan.maxChannels),
+                apiKeys: buildQuota(usage.apiKeys, plan.maxApiKeys),
             },
             features: {
                 allowTenantProbe: plan.allowTenantProbe,
@@ -142,6 +157,7 @@ export class QuotaService {
         if (usage.probes > plan.maxProbes) violations.push('probes');
         if (usage.members > plan.maxMembers) violations.push('members');
         if (usage.channels > plan.maxChannels) violations.push('channels');
+        if (usage.apiKeys > plan.maxApiKeys) violations.push('apiKeys');
 
         return {
             plan: { code: plan.code, name: plan.name },
@@ -168,6 +184,7 @@ export class QuotaService {
         if (resource === 'monitors') return plan.maxMonitors;
         if (resource === 'probes') return plan.maxProbes;
         if (resource === 'members') return plan.maxMembers;
+        if (resource === 'apiKeys') return plan.maxApiKeys;
         return plan.maxChannels;
     }
 }

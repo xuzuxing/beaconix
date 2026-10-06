@@ -68,6 +68,17 @@ export class MonitorsService {
         return monitors.map((m) => this.toEntity(m));
     }
 
+    /** Cross-project listing used by the developer API. */
+    async findAllByOrg(orgId: string) {
+        const monitors = await this.prisma.monitor.findMany({
+            where: { organizationId: orgId, deletedAt: null },
+            include: { state: true },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        return monitors.map((m) => this.toEntity(m));
+    }
+
     async findOne(projectId: string, monitorId: string) {
         const monitor = await this.ensureMonitorExists(projectId, monitorId);
         return this.toEntity(monitor);
