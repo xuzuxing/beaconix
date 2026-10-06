@@ -1,8 +1,11 @@
 import { NotFoundException } from '@nestjs/common';
-import { CheckerService } from './checker.service';
+import type { Queue } from 'bullmq';
+import { CheckerService, probeResultWindowMs } from './checker.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { StateService } from '../state/state.service';
 import type { NotifierService } from '../notifier/notifier.service';
+import { MONITOR_CHECK_JOB } from './checker.queue';
+import type { MonitorCheckJobData } from './checker.queue';
 
 const monitorRow = {
     id: 'monitor-1',
@@ -141,6 +144,8 @@ describe('CheckerService', () => {
                 source: 'LOCAL',
                 checkedAt: checkResult.checkedAt,
                 ssl: undefined,
+                localSuccess: true,
+                rescuedByProbe: false,
             });
             expect(notifierService.notifyTransition).toHaveBeenCalledTimes(1);
             expect(prisma.probeExecution.create).toHaveBeenCalledWith({
@@ -306,6 +311,8 @@ describe('CheckerService', () => {
                 source: 'LOCAL',
                 checkedAt: checkResult.checkedAt,
                 ssl: undefined,
+                localSuccess: false,
+                rescuedByProbe: true,
             });
         });
 
@@ -361,6 +368,8 @@ describe('CheckerService', () => {
                 expect.objectContaining({
                     success: true,
                     error: null,
+                    localSuccess: false,
+                    rescuedByProbe: true,
                 }),
             );
         });
@@ -500,9 +509,11 @@ describe('CheckerService', () => {
                 success: true,
                 latency: 30,
                 error: null,
-                source: 'LOCAL',
+                source: 'PROBE',
                 checkedAt: expect.any(Date),
                 ssl: undefined,
+                localSuccess: false,
+                rescuedByProbe: true,
             });
             expect(result?.monitorId).toBe('monitor-1');
         });
@@ -537,45 +548,88 @@ describe('CheckerService', () => {
         });
     });
 
-    describe('runDueChecks', () => {
-        it('only checks monitors whose interval elapsed', async () => {
+    describe('enqueueDueChecks', () => {
+        function createQueue() {
+            return {
+                add: jest.fn().mockResolvedValue({ id: 'job-1' }),
+            } as unknown as Queue<MonitorCheckJobData> & { add: jest.Mock };
+        }
+
+        it('enqueues one check job per monitor whose interval elapsed', async () => {
             const { service, prisma } = createService();
+            const queue = createQueue();
             prisma.monitor.findMany.mockResolvedValue([
-                { ...monitorRow, state: { lastCheckAt: null } },
+                { ...monitorRow, state: { lastLocalCheckAt: null } },
                 {
                     ...monitorRow,
                     id: 'monitor-2',
-                    state: { lastCheckAt: new Date() },
+                    state: { lastLocalCheckAt: new Date() },
                 },
             ]);
 
-            const result = await service.runDueChecks();
+            const result = await service.enqueueDueChecks(queue);
 
-            expect(result).toEqual({ due: 1, checked: 1 });
+            expect(result).toEqual({ due: 1, enqueued: 1 });
+            expect(queue.add).toHaveBeenCalledTimes(1);
+            expect(queue.add).toHaveBeenCalledWith(
+                MONITOR_CHECK_JOB,
+                { monitorId: 'monitor-1' },
+                expect.objectContaining({
+                    // No TTL: the key must be released when the job finishes,
+                    // otherwise the monitor would be skipped until it expires.
+                    deduplication: { id: 'monitor-check:monitor-1' },
+                }),
+            );
         });
 
-        it('keeps checking the remaining monitors when one throws', async () => {
-            const { service, prisma, stateService } = createService();
+        it('keeps enqueuing the remaining monitors when one add fails', async () => {
+            const { service, prisma } = createService();
+            const queue = createQueue();
+            queue.add
+                .mockRejectedValueOnce(new Error('redis down'))
+                .mockResolvedValueOnce({ id: 'job-2' });
             prisma.monitor.findMany.mockResolvedValue([
-                { ...monitorRow, state: { lastCheckAt: null } },
+                { ...monitorRow, state: { lastLocalCheckAt: null } },
                 {
                     ...monitorRow,
                     id: 'monitor-2',
-                    state: { lastCheckAt: null },
+                    state: { lastLocalCheckAt: null },
                 },
             ]);
-            stateService.record
-                .mockRejectedValueOnce(new Error('db down'))
-                .mockResolvedValueOnce({
-                    monitor: monitorRow,
-                    state: stateRow,
-                    transition: { changed: false },
-                });
 
-            const result = await service.runDueChecks();
+            const result = await service.enqueueDueChecks(queue);
 
-            expect(result.due).toBe(2);
-            expect(result.checked).toBe(1);
+            expect(result).toEqual({ due: 2, enqueued: 1 });
+            expect(queue.add).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    describe('executeMonitor', () => {
+        it('runs a scheduled local check for the monitor', async () => {
+            const { service, prisma, stateService, httpChecker } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+
+            const result = await service.executeMonitor('monitor-1');
+
+            expect(httpChecker.check).toHaveBeenCalled();
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({ source: 'LOCAL' }),
+            );
+            expect(result?.monitorId).toBe('monitor-1');
+        });
+
+        it('does nothing when the monitor is gone or disabled', async () => {
+            const { service, prisma, stateService, httpChecker } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(null);
+
+            const result = await service.executeMonitor('monitor-1');
+
+            expect(result).toBeNull();
+            expect(httpChecker.check).not.toHaveBeenCalled();
+            expect(stateService.record).not.toHaveBeenCalled();
         });
     });
 
@@ -624,5 +678,20 @@ describe('CheckerService', () => {
                 service.listCheckLogs('project-1', 'monitor-1', {}),
             ).rejects.toThrow(NotFoundException);
         });
+    });
+});
+
+describe('probeResultWindowMs', () => {
+    it('keeps the two minute floor for fast monitors', () => {
+        expect(probeResultWindowMs(10)).toBe(2 * 60 * 1000);
+        expect(probeResultWindowMs(60)).toBe(2 * 60 * 1000);
+    });
+
+    it('scales with the monitor interval', () => {
+        expect(probeResultWindowMs(300)).toBe(10 * 60 * 1000);
+    });
+
+    it('caps the window for slow monitors', () => {
+        expect(probeResultWindowMs(86_400)).toBe(15 * 60 * 1000);
     });
 });

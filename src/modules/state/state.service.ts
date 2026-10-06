@@ -17,6 +17,13 @@ export interface CheckOutcome {
     source?: CheckSource;
     checkedAt?: Date;
     ssl?: SslCertificateInfo | null;
+    /**
+     * Raw local outcome when it differs from the final verdict (probe reports
+     * carry the local result alongside the aggregated one).
+     */
+    localSuccess?: boolean | null;
+    /** True when a failing local check was rescued by a successful probe. */
+    rescuedByProbe?: boolean;
 }
 
 export interface DerivedState {
@@ -103,11 +110,17 @@ export class StateService {
             ? null
             : (outcome.error ?? 'Check failed');
         const source = outcome.source ?? CheckSource.LOCAL;
+        const localSuccess = outcome.localSuccess ?? outcome.success;
+        const rescuedByProbe = outcome.rescuedByProbe ?? false;
 
         const stateValues = {
             status: derived.status,
             failCount: derived.failCount,
             lastCheckAt: checkedAt,
+            // The schedule only moves on local checks: a chatty probe must not
+            // push the next local run out of reach.
+            lastLocalCheckAt:
+                source === CheckSource.LOCAL ? checkedAt : undefined,
             lastError: error,
             lastLatency: outcome.latency,
             ...(outcome.ssl !== undefined
@@ -125,6 +138,8 @@ export class StateService {
                 data: {
                     monitorId,
                     success: outcome.success,
+                    localSuccess,
+                    rescuedByProbe,
                     latency: outcome.latency,
                     error,
                     source,

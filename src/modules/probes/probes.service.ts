@@ -15,6 +15,7 @@ import {
     ProbeStatus,
 } from '../../generated/prisma/enums';
 import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
+import type { ProbeModel } from '../../generated/prisma/models';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { QuotaService } from '../../shared/quota/quota.service';
 import { CheckerService } from '../checker/checker.service';
@@ -35,6 +36,17 @@ import {
 
 /** A probe that has not called in for this long is considered offline. */
 const PROBE_OFFLINE_AFTER_MS = 2 * 60 * 1000;
+
+/** How many reported targets are folded into monitor state in parallel. */
+const PROBE_REPORT_CONCURRENCY = 5;
+
+/** One reported target that was applied to a monitor. */
+export interface AppliedOutcome {
+    target: string;
+    monitorId: string;
+    status: string;
+    changed: boolean;
+}
 
 const MONITOR_SELECT = {
     id: true,
@@ -318,6 +330,7 @@ export class ProbesService {
     /** Marks the probe online and hands back the monitors it should check. */
     async recordHeartbeat(secret: string): Promise<ProbeHeartbeatResult> {
         const probe = await this.requireProbeBySecret(secret);
+        const cameOnline = probe.status !== ProbeStatus.ONLINE;
 
         const updated = await this.prisma.probe.update({
             where: { id: probe.id },
@@ -326,6 +339,14 @@ export class ProbesService {
                 monitors: { include: { monitor: { select: MONITOR_SELECT } } },
             },
         });
+
+        // A system probe that just came back online must be folded into the
+        // assignment table before it is read below - otherwise it keeps getting
+        // an empty monitor list until the hourly refresh. Steady-state heartbeats
+        // deliberately do not rebalance (that used to rescan every monitor).
+        if (cameOnline && updated.scope === ProbeScope.SYSTEM) {
+            await this.systemProbeScheduler.rebalance();
+        }
 
         const monitors =
             updated.scope === ProbeScope.SYSTEM
@@ -372,10 +393,15 @@ export class ProbesService {
     /**
      * Stores raw probe results and folds each one into the state of the monitor
      * that owns the reported target.
+     *
+     * The batch is folded in parallel slices - each target belongs to a
+     * different monitor, so handling them strictly one by one only made the
+     * probe wait. Reports for the same target inside one batch are collapsed
+     * first because they would race on the same monitor state row.
      */
     async recordResults(secret: string, results: ProbeResultItemDto[]) {
         const probe = await this.requireProbeBySecret(secret);
-        const checkedAt = new Date();
+        const receivedAt = new Date();
 
         await this.prisma.probeResult.createMany({
             data: results.map((result) => ({
@@ -390,79 +416,116 @@ export class ProbesService {
             })),
         });
 
-        const applied: Array<{
-            target: string;
-            monitorId: string;
-            status: string;
-            changed: boolean;
-        }> = [];
-
-        for (const result of results) {
-            const reportedAt = result.checkedAt
-                ? new Date(result.checkedAt)
-                : checkedAt;
-            const execution =
-                probe.scope === ProbeScope.SYSTEM
-                    ? await this.applySystemProbeResult(probe.id, {
-                          target: result.target,
-                          success: result.success,
-                          latency: result.latency,
-                          error: result.error ?? null,
-                          checkedAt: reportedAt,
-                      })
-                    : probe.organizationId
-                      ? await this.checkerService.ingestProbeReport(
-                            probe.organizationId,
-                            {
-                                target: result.target,
-                                success: result.success,
-                                latency: result.latency,
-                                error: result.error ?? null,
-                                checkedAt: reportedAt,
-                            },
-                        )
-                      : null;
-
-            if (execution) {
-                applied.push({
-                    target: result.target,
-                    monitorId: execution.monitorId,
-                    status: execution.status,
-                    changed: execution.changed,
-                });
-            }
-
-            await this.writeExecution({
-                probeId: probe.id,
-                monitorId: execution?.monitorId ?? null,
-                target: result.target,
-                trigger: ExecutionTrigger.CALLBACK,
-                status: result.success
-                    ? ExecutionStatus.SUCCESS
-                    : ExecutionStatus.FAILED,
-                success: result.success,
-                latency: result.latency,
-                error: result.error ?? null,
-                requestMeta: { checkedAt: reportedAt.toISOString() },
-                responseMeta: execution
-                    ? {
-                          applied: true,
-                          status: execution.status,
-                          changed: execution.changed,
-                      }
-                    : { applied: false },
-            });
+        // Reports may arrive before the first heartbeat; the assignment table has
+        // to know about this probe before the results are matched to monitors.
+        if (
+            probe.status !== ProbeStatus.ONLINE &&
+            probe.scope === ProbeScope.SYSTEM
+        ) {
+            await this.systemProbeScheduler.rebalance();
         }
+
+        const targets = [
+            ...new Map(
+                results.map((result) => [result.target, result] as const),
+            ).values(),
+        ];
+        const outcomes = new Array<AppliedOutcome | null>(targets.length);
+        let cursor = 0;
+
+        const workers = Array.from(
+            { length: Math.min(PROBE_REPORT_CONCURRENCY, targets.length) },
+            async () => {
+                while (cursor < targets.length) {
+                    const index = cursor;
+                    cursor += 1;
+
+                    outcomes[index] = await this.applyReportedResult(
+                        probe,
+                        targets[index],
+                        receivedAt,
+                    );
+                }
+            },
+        );
+
+        await Promise.all(workers);
 
         await this.prisma.probe.update({
             where: { id: probe.id },
             data: { lastHeartbeat: new Date(), status: ProbeStatus.ONLINE },
         });
 
+        const applied = outcomes.filter(
+            (outcome): outcome is AppliedOutcome => outcome !== null,
+        );
+
         return {
             accepted: results.length,
             applied: applied.length,
             outcomes: applied,
+        };
+    }
+
+    /**
+     * Folds a single reported target into monitor state and records the
+     * execution. Returns null when the report was stored but not applied.
+     */
+    private async applyReportedResult(
+        probe: ProbeModel,
+        result: ProbeResultItemDto,
+        receivedAt: Date,
+    ): Promise<AppliedOutcome | null> {
+        const reportedAt = result.checkedAt
+            ? new Date(result.checkedAt)
+            : receivedAt;
+
+        const report = {
+            target: result.target,
+            success: result.success,
+            latency: result.latency,
+            error: result.error ?? null,
+            checkedAt: reportedAt,
+        };
+
+        const execution =
+            probe.scope === ProbeScope.SYSTEM
+                ? await this.applySystemProbeResult(probe.id, report)
+                : probe.organizationId
+                  ? await this.checkerService.ingestProbeReport(
+                        probe.organizationId,
+                        report,
+                    )
+                  : null;
+
+        await this.writeExecution({
+            probeId: probe.id,
+            monitorId: execution?.monitorId ?? null,
+            target: result.target,
+            trigger: ExecutionTrigger.CALLBACK,
+            status: result.success
+                ? ExecutionStatus.SUCCESS
+                : ExecutionStatus.FAILED,
+            success: result.success,
+            latency: result.latency,
+            error: result.error ?? null,
+            requestMeta: { checkedAt: reportedAt.toISOString() },
+            responseMeta: execution
+                ? {
+                      applied: true,
+                      status: execution.status,
+                      changed: execution.changed,
+                  }
+                : { applied: false },
+        });
+
+        if (!execution) return null;
+
+        return {
+            target: result.target,
+            monitorId: execution.monitorId,
+            status: execution.status,
+            changed: execution.changed,
         };
     }
 
@@ -497,7 +560,6 @@ export class ProbesService {
     }
 
     private async getAssignedSystemProbeMonitors(probeId: string) {
-        await this.systemProbeScheduler.rebalance();
         const monitorIds =
             await this.systemProbeScheduler.getAssignedMonitorIds(probeId);
 

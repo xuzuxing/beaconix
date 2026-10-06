@@ -177,7 +177,7 @@ describe('ProbesService', () => {
             });
         });
 
-        it('returns dynamically assigned monitors for a system probe', async () => {
+        it('returns dynamically assigned monitors once a system probe comes online', async () => {
             const { service, prisma, systemProbeScheduler } = createService();
             prisma.probe.findUnique.mockResolvedValue({
                 ...probeRow,
@@ -201,6 +201,8 @@ describe('ProbesService', () => {
 
             const result = await service.recordHeartbeat('sys_secret');
 
+            // A probe that was offline has to enter the assignment table before
+            // its monitors are read, otherwise it stays idle for up to an hour.
             expect(systemProbeScheduler.rebalance).toHaveBeenCalledTimes(1);
             expect(prisma.monitor.findMany).toHaveBeenCalledWith({
                 where: {
@@ -221,6 +223,30 @@ describe('ProbesService', () => {
                     expectedStatus: 200,
                 },
             ]);
+        });
+
+        it('does not rebuild the assignment table on a steady-state heartbeat', async () => {
+            const { service, prisma, systemProbeScheduler } = createService();
+            prisma.probe.findUnique.mockResolvedValue({
+                ...probeRow,
+                organizationId: null,
+                scope: 'SYSTEM',
+                secret: 'sys_secret',
+                status: 'ONLINE',
+            });
+            prisma.probe.update.mockResolvedValue({
+                ...probeRow,
+                organizationId: null,
+                scope: 'SYSTEM',
+                secret: 'sys_secret',
+                status: 'ONLINE',
+                monitors: [],
+            });
+            systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([]);
+
+            await service.recordHeartbeat('sys_secret');
+
+            expect(systemProbeScheduler.rebalance).not.toHaveBeenCalled();
         });
 
         it('rejects a missing secret', async () => {
@@ -352,6 +378,67 @@ describe('ProbesService', () => {
                     responseMeta: { applied: false },
                 }),
             });
+        });
+
+        it('collapses duplicated targets before folding them into state', async () => {
+            const { service, prisma, checkerService } = createService();
+            prisma.probe.findUnique.mockResolvedValue(probeRow);
+            prisma.probeResult.createMany.mockResolvedValue({ count: 2 });
+            prisma.probe.update.mockResolvedValue(probeRow);
+            checkerService.ingestProbeReport.mockResolvedValue({
+                monitorId: 'monitor-1',
+                status: 'UP',
+                changed: false,
+            });
+
+            const result = await service.recordResults('secret-1', [
+                {
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    latency: 10,
+                },
+                {
+                    target: 'https://api.example.com/health',
+                    success: false,
+                    latency: 20,
+                    error: 'boom',
+                },
+            ]);
+
+            // Both rows are stored, but the monitor is only folded once and the
+            // last report for the target wins.
+            expect(result.accepted).toBe(2);
+            expect(result.applied).toBe(1);
+            expect(checkerService.ingestProbeReport).toHaveBeenCalledTimes(1);
+            expect(checkerService.ingestProbeReport).toHaveBeenCalledWith(
+                'org-1',
+                expect.objectContaining({ success: false, latency: 20 }),
+            );
+            expect(prisma.probeExecution.create).toHaveBeenCalledTimes(1);
+        });
+
+        it('rebalances when a system probe reports before its first heartbeat', async () => {
+            const { service, prisma, systemProbeScheduler } = createService();
+            prisma.probe.findUnique.mockResolvedValue({
+                ...probeRow,
+                organizationId: null,
+                scope: 'SYSTEM',
+                secret: 'sys_secret',
+                status: 'OFFLINE',
+            });
+            prisma.probeResult.createMany.mockResolvedValue({ count: 1 });
+            prisma.probe.update.mockResolvedValue(probeRow);
+            systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([]);
+
+            await service.recordResults('sys_secret', [
+                {
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    latency: 12,
+                },
+            ]);
+
+            expect(systemProbeScheduler.rebalance).toHaveBeenCalledTimes(1);
         });
 
         it('applies system probe results only to assigned monitors', async () => {

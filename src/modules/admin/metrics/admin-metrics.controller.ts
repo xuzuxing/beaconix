@@ -11,6 +11,7 @@ import { SuperAdminGuard } from '../../../common/guards';
 import { AdminMetricsService } from './admin-metrics.service';
 import {
     AdminMetricsOverviewEntity,
+    AdminSchedulerHealthEntity,
     AdminTenantMetricEntity,
 } from './entities';
 
@@ -20,6 +21,19 @@ import {
 @Controller('admin/metrics')
 export class AdminMetricsController {
     constructor(private readonly adminMetricsService: AdminMetricsService) {}
+
+    @Get('scheduler')
+    @ApiOperation({ summary: 'Monitor scheduler and queue health' })
+    @ApiOkResponse({
+        type: AdminSchedulerHealthEntity,
+        description:
+            'Queue backlog, registered job schedulers and the due backlog',
+    })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })
+    async getSchedulerHealth() {
+        return this.adminMetricsService.getSchedulerHealth();
+    }
 
     @Get('overview')
     @ApiOperation({ summary: 'Platform-wide usage overview' })

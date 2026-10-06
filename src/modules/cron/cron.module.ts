@@ -5,6 +5,7 @@ import {
     InvitationExpiryService,
     TaskDueSoonService,
     TaskOverdueService,
+    MonitorDataCleanupService,
 } from './jobs';
 
 @Module({
@@ -14,6 +15,7 @@ import {
         InvitationExpiryService,
         TaskDueSoonService,
         TaskOverdueService,
+        MonitorDataCleanupService,
     ],
 })
 export class CronModule {}

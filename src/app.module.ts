@@ -19,6 +19,7 @@ import {
     ThrottlerConfig,
 } from './config';
 import { PrismaModule } from './infra/database/prisma.module';
+import { QueueModule } from './infra/queue/queue.module';
 import { RedisModule } from './infra/redis/redis.module';
 import { WechatModule } from './infra/wechat/wechat.module';
 import { JwtAuthGuard } from './common/guards';
@@ -99,6 +100,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         CacheModule,
         ClsModule,
         LoggerModule,
+        QueueModule,
         RedisModule,
         WechatModule,
         // business

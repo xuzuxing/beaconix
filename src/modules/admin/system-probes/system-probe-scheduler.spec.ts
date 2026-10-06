@@ -113,9 +113,28 @@ describe('SystemProbeScheduler', () => {
         const assignments = await scheduler.rebalance();
 
         expect(assignments).toEqual({});
-        expect(redisService.del).toHaveBeenCalledWith('sys_probe:assignments');
+        expect(redisService.setJson).toHaveBeenCalledWith(
+            'sys_probe:assignments',
+            {},
+            3600,
+        );
         await expect(scheduler.getAssignedProbes('monitor-1')).resolves.toEqual(
             [],
         );
+    });
+
+    it('serves reads from the cached table without rebalancing', async () => {
+        const { scheduler, prisma, redisService } = createScheduler();
+        redisService.getJson.mockResolvedValue({
+            'system-a': ['monitor-1'],
+        });
+
+        await expect(
+            scheduler.getAssignedMonitorIds('system-a'),
+        ).resolves.toEqual(['monitor-1']);
+        await expect(scheduler.getAssignedProbes('monitor-1')).resolves.toEqual(
+            ['system-a'],
+        );
+        expect(prisma.monitor.findMany).not.toHaveBeenCalled();
     });
 });

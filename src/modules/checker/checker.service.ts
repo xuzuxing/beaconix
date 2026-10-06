@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import type { Queue } from 'bullmq';
 import { PrismaService } from '../../infra/database/prisma.service';
 import {
     CheckSource,
@@ -20,10 +21,27 @@ import { HttpChecker, TcpChecker } from './checkers';
 import type { CheckResult, ProbeReport } from './checkers';
 import { QueryCheckLogsDto } from './dto';
 import { CheckLogEntity } from './entities';
+import { MONITOR_CHECK_DEDUP_PREFIX, MONITOR_CHECK_JOB } from './checker.queue';
+import type { MonitorCheckJobData } from './checker.queue';
 
-/** How many monitors are checked in parallel by one scheduling tick. */
-const CHECK_CONCURRENCY = 5;
-const PROBE_RESULT_WINDOW_MS = 2 * 60 * 1000;
+const PROBE_RESULT_WINDOW_INTERVALS = 2;
+const PROBE_RESULT_MIN_WINDOW_MS = 2 * 60 * 1000;
+const PROBE_RESULT_MAX_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * How long a probe report stays usable when the local check failed. It scales
+ * with the monitor interval - a 5 minute monitor cannot be judged by probes
+ * that also report every 5 minutes if we only look back 2 minutes - but stays
+ * bounded so an ancient report never decides for a long interval.
+ */
+export function probeResultWindowMs(intervalSeconds: number): number {
+    const scaled = intervalSeconds * 1000 * PROBE_RESULT_WINDOW_INTERVALS;
+
+    return Math.min(
+        Math.max(scaled, PROBE_RESULT_MIN_WINDOW_MS),
+        PROBE_RESULT_MAX_WINDOW_MS,
+    );
+}
 
 export interface CheckExecution extends CheckResult {
     monitorId: string;
@@ -31,6 +49,17 @@ export interface CheckExecution extends CheckResult {
     status: string;
     changed: boolean;
     notified: NotificationResult;
+}
+
+/** A monitor plus the state fields the due check needs. */
+export type DueMonitor = MonitorModel & {
+    state?: { lastLocalCheckAt: Date | null } | null;
+};
+
+/** The aggregated verdict plus whether a probe overrode a local failure. */
+interface EvaluatedResult {
+    result: CheckResult;
+    rescuedByProbe: boolean;
 }
 
 @Injectable()
@@ -113,7 +142,7 @@ export class CheckerService {
 
         return this.execute(
             monitor,
-            CheckSource.LOCAL,
+            CheckSource.PROBE,
             {
                 success: localLog.success,
                 latency: localLog.latency,
@@ -125,50 +154,80 @@ export class CheckerService {
     }
 
     /**
-     * Checks every enabled, due monitor. Returns how many were due and how many
-     * were actually executed (a check may fail without throwing).
+     * Monitors that are enabled and whose interval elapsed since the last
+     * recorded check.
      */
-    async runDueChecks(): Promise<{ due: number; checked: number }> {
+    async findDueMonitors(): Promise<DueMonitor[]> {
         const monitors = await this.prisma.monitor.findMany({
             where: { enabled: true, deletedAt: null },
-            include: { state: { select: { lastCheckAt: true } } },
+            include: { state: { select: { lastLocalCheckAt: true } } },
         });
 
-        const due = monitors.filter((monitor) =>
-            this.isDue(monitor.interval, monitor.state?.lastCheckAt ?? null),
+        return monitors.filter((monitor) =>
+            this.isDue(
+                monitor.interval,
+                monitor.state?.lastLocalCheckAt ?? null,
+            ),
         );
+    }
 
-        const queue = [...due];
-        let checked = 0;
+    /**
+     * Scans the due monitors and enqueues one check job per monitor, so the
+     * scan itself stays fast no matter how slow a target is. A monitor whose
+     * previous job is still waiting or active is skipped instead of queued
+     * twice. Returns how many monitors were due and how many jobs were added.
+     */
+    async enqueueDueChecks(
+        queue: Queue<MonitorCheckJobData>,
+    ): Promise<{ due: number; enqueued: number }> {
+        const due = await this.findDueMonitors();
+        let enqueued = 0;
 
-        const workers = Array.from(
-            { length: Math.min(CHECK_CONCURRENCY, queue.length) },
-            async () => {
-                for (
-                    let monitor = queue.shift();
-                    monitor;
-                    monitor = queue.shift()
-                ) {
-                    try {
-                        await this.execute(
-                            monitor,
-                            CheckSource.LOCAL,
-                            undefined,
-                            ExecutionTrigger.SCHEDULED,
-                        );
-                        checked += 1;
-                    } catch (error) {
-                        this.logger.warn(
-                            `Check failed for monitor ${monitor.id}: ${(error as Error).message}`,
-                        );
-                    }
+        await Promise.all(
+            due.map(async (monitor) => {
+                try {
+                    await queue.add(
+                        MONITOR_CHECK_JOB,
+                        { monitorId: monitor.id },
+                        {
+                            // No TTL: BullMQ releases the key when the job
+                            // finalizes, which is exactly "skip while running".
+                            deduplication: {
+                                id: `${MONITOR_CHECK_DEDUP_PREFIX}:${monitor.id}`,
+                            },
+                            removeOnComplete: true,
+                            removeOnFail: 100,
+                        },
+                    );
+                    enqueued += 1;
+                } catch (error) {
+                    this.logger.warn(
+                        `Failed to enqueue check for monitor ${monitor.id}: ${(error as Error).message}`,
+                    );
                 }
-            },
+            }),
         );
 
-        await Promise.all(workers);
+        return { due: due.length, enqueued };
+    }
 
-        return { due: due.length, checked };
+    /**
+     * Runs the local check of a single monitor. The monitor is re-read so a job
+     * queued before it was paused or deleted becomes a no-op.
+     */
+    async executeMonitor(monitorId: string): Promise<CheckExecution | null> {
+        const monitor = await this.prisma.monitor.findFirst({
+            where: { id: monitorId, enabled: true, deletedAt: null },
+        });
+
+        if (!monitor) return null;
+
+        return this.execute(
+            monitor,
+            CheckSource.LOCAL,
+            undefined,
+            ExecutionTrigger.SCHEDULED,
+        );
     }
 
     /** Paginated check history of one monitor. */
@@ -223,9 +282,10 @@ export class CheckerService {
         reported?: CheckResult,
         trigger: ExecutionTrigger = ExecutionTrigger.SCHEDULED,
     ): Promise<CheckExecution> {
-        const result = await this.evaluateResult(
+        const localResult = reported ?? (await this.probe(monitor));
+        const { result, rescuedByProbe } = await this.evaluateResult(
             monitor,
-            reported ?? (await this.probe(monitor)),
+            localResult,
         );
 
         const { state, transition } = await this.stateService.record(
@@ -237,6 +297,8 @@ export class CheckerService {
                 source,
                 checkedAt: result.checkedAt,
                 ssl: result.ssl,
+                localSuccess: localResult.success,
+                rescuedByProbe,
             },
         );
 
@@ -341,16 +403,20 @@ export class CheckerService {
     private async evaluateResult(
         monitor: MonitorModel,
         localResult: CheckResult,
-    ): Promise<CheckResult> {
+    ): Promise<EvaluatedResult> {
         if (localResult.success) {
-            return localResult;
+            return { result: localResult, rescuedByProbe: false };
         }
 
+        // A certificate verdict is a fact about the certificate, not a
+        // reachability signal, so a reachable probe must not override it.
         if (localResult.ssl !== undefined) {
-            return localResult;
+            return { result: localResult, rescuedByProbe: false };
         }
 
-        const since = new Date(Date.now() - PROBE_RESULT_WINDOW_MS);
+        const since = new Date(
+            Date.now() - probeResultWindowMs(monitor.interval),
+        );
         const tenantProbeResults = await this.prisma.probeResult.findMany({
             where: {
                 target: monitor.target,
@@ -390,21 +456,30 @@ export class CheckerService {
         const probeResults = [...tenantProbeResults, ...systemProbeResults];
 
         if (probeResults.length === 0) {
-            return localResult;
+            return { result: localResult, rescuedByProbe: false };
         }
 
         if (probeResults.some((result) => result.success)) {
             return {
-                success: true,
-                latency: localResult.latency,
-                error: null,
-                checkedAt: localResult.checkedAt,
+                result: {
+                    success: true,
+                    latency: localResult.latency,
+                    error: null,
+                    checkedAt: localResult.checkedAt,
+                },
+                rescuedByProbe: true,
             };
         }
 
         return {
-            ...localResult,
-            error: this.buildAggregatedError(localResult, probeResults.length),
+            result: {
+                ...localResult,
+                error: this.buildAggregatedError(
+                    localResult,
+                    probeResults.length,
+                ),
+            },
+            rescuedByProbe: false,
         };
     }
 

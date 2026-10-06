@@ -1,14 +1,11 @@
 import { Module } from '@nestjs/common';
-import { BullModule } from '@nestjs/bullmq';
-import { ConfigService } from '@nestjs/config';
-import type { RedisConfig } from '../../config';
+import { QueuesModule } from '../../infra/queue/queues.module';
 import { WechatModule } from '../../infra/wechat/wechat.module';
 import { StateModule } from '../state/state.module';
 import { NotificationChannelsController } from './notification-channels.controller';
 import { NotificationChannelsService } from './notification-channels.service';
 import { NotificationsProcessor } from './notifications.processor';
 import { NotifierService } from './notifier.service';
-import { NOTIFICATION_QUEUE } from './notifier.queue';
 import {
     DingtalkSender,
     EmailSender,
@@ -18,24 +15,7 @@ import {
 } from './senders';
 
 @Module({
-    imports: [
-        StateModule,
-        WechatModule,
-        BullModule.forRootAsync({
-            inject: [ConfigService],
-            useFactory: (config: ConfigService) => {
-                const redis = config.get<RedisConfig>('redis')!;
-                return {
-                    connection: {
-                        url: redis.url,
-                        keyPrefix: redis.keyPrefix,
-                        maxRetriesPerRequest: 3,
-                    },
-                };
-            },
-        }),
-        BullModule.registerQueue({ name: NOTIFICATION_QUEUE }),
-    ],
+    imports: [StateModule, WechatModule, QueuesModule],
     controllers: [NotificationChannelsController],
     providers: [
         NotificationChannelsService,

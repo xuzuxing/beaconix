@@ -11,6 +11,20 @@ export class CheckLogEntity {
     @ApiProperty({ example: true })
     success: boolean;
 
+    @ApiPropertyOptional({
+        example: true,
+        description:
+            'Raw local result; null when the row carries no local check (probe report path)',
+    })
+    localSuccess: boolean | null;
+
+    @ApiProperty({
+        example: false,
+        description:
+            'True when a failing local check was rescued by a successful probe',
+    })
+    rescuedByProbe: boolean;
+
     @ApiProperty({ example: 128, description: 'Round-trip time in ms' })
     latency: number;
 

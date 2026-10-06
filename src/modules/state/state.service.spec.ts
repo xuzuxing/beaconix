@@ -1,5 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import { MonitorStatus } from '../../generated/prisma/enums';
+import { CheckSource, MonitorStatus } from '../../generated/prisma/enums';
 import { deriveState, StateService } from './state.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 
@@ -124,6 +124,8 @@ describe('StateService', () => {
                 data: {
                     monitorId: 'monitor-1',
                     success: false,
+                    localSuccess: false,
+                    rescuedByProbe: false,
                     latency: 30,
                     error: 'Unexpected status 500 (expected 200)',
                     source: 'LOCAL',
@@ -239,6 +241,77 @@ describe('StateService', () => {
                     sslDaysRemaining: 31,
                     sslIssuer: 'Example CA',
                     sslSubject: 'api.example.com',
+                }),
+            });
+        });
+
+        it('keeps the local schedule untouched for a probe-driven outcome', async () => {
+            const { service, prisma } = createService();
+            const checkedAt = new Date('2026-03-05T12:05:00.000Z');
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                state: { ...stateRow, status: 'UP', failCount: 0 },
+            });
+            prisma.checkLog.create.mockResolvedValue({ id: 'log-1' });
+            prisma.monitorState.upsert.mockResolvedValue(stateRow);
+
+            await service.record('monitor-1', {
+                success: true,
+                latency: 30,
+                source: CheckSource.PROBE,
+                checkedAt,
+                localSuccess: false,
+                rescuedByProbe: true,
+            });
+
+            expect(prisma.checkLog.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    success: true,
+                    localSuccess: false,
+                    rescuedByProbe: true,
+                    source: CheckSource.PROBE,
+                }),
+            });
+            expect(prisma.monitorState.upsert).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                create: expect.objectContaining({ lastCheckAt: checkedAt }),
+                update: expect.objectContaining({
+                    lastCheckAt: checkedAt,
+                    lastLocalCheckAt: undefined,
+                }),
+            });
+        });
+
+        it('advances the local schedule on a local check', async () => {
+            const { service, prisma } = createService();
+            const checkedAt = new Date('2026-03-05T12:05:00.000Z');
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                state: { ...stateRow, status: 'UP', failCount: 0 },
+            });
+            prisma.checkLog.create.mockResolvedValue({ id: 'log-1' });
+            prisma.monitorState.upsert.mockResolvedValue(stateRow);
+
+            await service.record('monitor-1', {
+                success: true,
+                latency: 30,
+                checkedAt,
+            });
+
+            expect(prisma.monitorState.upsert).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                create: expect.objectContaining({
+                    lastLocalCheckAt: checkedAt,
+                }),
+                update: expect.objectContaining({
+                    lastLocalCheckAt: checkedAt,
+                }),
+            });
+            expect(prisma.checkLog.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    localSuccess: true,
+                    rescuedByProbe: false,
+                    source: CheckSource.LOCAL,
                 }),
             });
         });

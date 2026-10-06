@@ -4,19 +4,49 @@ import type { PrismaService } from '../../../infra/database/prisma.service';
 function createService() {
     const prisma = {
         organization: { findMany: jest.fn() },
-        monitor: { findMany: jest.fn() },
-        probe: { findMany: jest.fn(), count: jest.fn() },
+        monitor: { findMany: jest.fn(), count: jest.fn() },
+        probe: { findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
         statusPage: { findMany: jest.fn() },
         checkLog: { groupBy: jest.fn() },
         notificationLog: { groupBy: jest.fn() },
         notificationChannel: { findMany: jest.fn() },
         user: { count: jest.fn() },
         project: { count: jest.fn() },
+        $queryRaw: jest.fn(),
+    };
+    const scanQueue = {
+        getJobCounts: jest.fn().mockResolvedValue({
+            waiting: 0,
+            active: 0,
+            delayed: 1,
+            failed: 0,
+            completed: 5,
+        }),
+        getJobSchedulers: jest.fn().mockResolvedValue([
+            {
+                id: 'monitor-checker',
+                every: 10000,
+                next: 1_760_000_000_000,
+            },
+        ]),
+    };
+    const checkQueue = {
+        getJobCounts: jest.fn().mockResolvedValue({
+            waiting: 2,
+            active: 1,
+            delayed: 0,
+            failed: 0,
+            completed: 9,
+        }),
     };
 
-    const service = new AdminMetricsService(prisma as unknown as PrismaService);
+    const service = new AdminMetricsService(
+        prisma as unknown as PrismaService,
+        scanQueue as never,
+        checkQueue as never,
+    );
 
-    return { service, prisma };
+    return { service, prisma, scanQueue, checkQueue };
 }
 
 describe('AdminMetricsService', () => {
@@ -154,5 +184,39 @@ describe('AdminMetricsService', () => {
         expect(result.projects).toBe(5);
         expect(result.probes).toEqual({ total: 2, tenant: 0, system: 1 });
         expect(result.monitors).toEqual({ total: 0, enabled: 0 });
+    });
+
+    it('reports queue backlog, registered schedulers and the due backlog', async () => {
+        const { service, prisma, scanQueue } = createService();
+        prisma.monitor.count.mockResolvedValue(320);
+        prisma.probe.groupBy.mockResolvedValue([
+            { status: 'ONLINE', _count: 45 },
+            { status: 'OFFLINE', _count: 3 },
+        ]);
+        prisma.$queryRaw.mockResolvedValue([{ count: 2 }]);
+
+        const health = await service.getSchedulerHealth();
+
+        expect(scanQueue.getJobCounts).toHaveBeenCalledWith(
+            'waiting',
+            'active',
+            'delayed',
+            'failed',
+            'completed',
+        );
+        expect(health.scanQueue).toMatchObject({ delayed: 1, completed: 5 });
+        expect(health.checkQueue).toMatchObject({ waiting: 2, active: 1 });
+        expect(health.schedulers).toEqual([
+            {
+                id: 'monitor-checker',
+                everyMs: 10000,
+                nextRunAt: new Date(1_760_000_000_000),
+            },
+        ]);
+        expect(health.backlog).toEqual({
+            enabledMonitors: 320,
+            dueMonitors: 2,
+        });
+        expect(health.probes).toEqual({ online: 45, offline: 3 });
     });
 });

@@ -1,40 +1,56 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { CheckerService } from './checker.service';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
+import {
+    MONITOR_SCAN_INTERVAL_MS,
+    MONITOR_SCAN_JOB,
+    MONITOR_SCAN_QUEUE,
+    MONITOR_SCAN_SCHEDULER_ID,
+} from './checker.queue';
 
 /**
- * Drives the local checks: every tick it asks CheckerService for the monitors
- * that are due and runs them. The tick is skipped while a previous one is still
- * running, so a slow target cannot pile up overlapping runs.
+ * Registers the monitor-scan tick in BullMQ instead of running an in-process
+ * cron job:
+ *
+ * - the schedule lives in Redis, so every replica does not run its own tick
+ *   (which used to check the same monitors once per replica);
+ * - the tick is a queued job, so a slow scan cannot pile up with the next one
+ *   (the scan worker consumes it with `concurrency: 1`);
+ * - re-registering on boot is idempotent (`upsertJobScheduler`).
+ *
+ * The scan itself only enqueues per-monitor check jobs; execution happens in
+ * `MonitorCheckProcessor`.
  */
 @Injectable()
-export class CheckerScheduler {
+export class CheckerScheduler implements OnModuleInit {
     private readonly logger = new Logger(CheckerScheduler.name);
-    private running = false;
 
-    constructor(private readonly checkerService: CheckerService) {}
+    constructor(
+        @InjectQueue(MONITOR_SCAN_QUEUE) private readonly scanQueue: Queue,
+    ) {}
 
-    @Cron(CronExpression.EVERY_10_SECONDS, { name: 'monitor-checker' })
-    async tick(): Promise<void> {
-        if (this.running) {
-            this.logger.debug(
-                'Previous checker tick is still running - skipping',
-            );
-            return;
-        }
-
-        this.running = true;
-
+    async onModuleInit(): Promise<void> {
         try {
-            const { due, checked } = await this.checkerService.runDueChecks();
+            await this.scanQueue.upsertJobScheduler(
+                MONITOR_SCAN_SCHEDULER_ID,
+                { every: MONITOR_SCAN_INTERVAL_MS },
+                {
+                    name: MONITOR_SCAN_JOB,
+                    data: {},
+                    opts: { removeOnComplete: true, removeOnFail: 100 },
+                },
+            );
 
-            if (due > 0) {
-                this.logger.log(`Checked ${checked}/${due} due monitor(s)`);
-            }
+            this.logger.log(
+                `Registered "${MONITOR_SCAN_SCHEDULER_ID}" every ${MONITOR_SCAN_INTERVAL_MS}ms`,
+            );
         } catch (error) {
-            this.logger.error('Monitor checker tick failed', error as Error);
-        } finally {
-            this.running = false;
+            // Unlike the previous in-process cron, the tick depends on Redis:
+            // log loudly instead of failing the whole application boot.
+            this.logger.error(
+                `Failed to register "${MONITOR_SCAN_SCHEDULER_ID}"; monitor scans will not run until Redis is reachable`,
+                error as Error,
+            );
         }
     }
 }

@@ -38,7 +38,10 @@ export class SystemProbeScheduler implements OnModuleInit {
         });
 
         if (probes.length === 0) {
-            await this.assignmentStore.clear();
+            // Persist an empty table instead of deleting the key: readers rebuild
+            // the table whenever it is missing, and with nothing to assign they
+            // would trigger a full rescan on every read.
+            await this.assignmentStore.set({});
             this.logger.log(
                 'No online system probes available; assignments cleared',
             );
@@ -109,7 +112,7 @@ export class SystemProbeScheduler implements OnModuleInit {
     }
 
     async getAssignedProbes(monitorId: string): Promise<string[]> {
-        const assignments = await this.assignmentStore.get();
+        const assignments = await this.loadAssignments();
         if (!assignments) return [];
 
         return Object.entries(assignments)
@@ -118,9 +121,22 @@ export class SystemProbeScheduler implements OnModuleInit {
     }
 
     async getAssignedMonitorIds(probeId: string): Promise<string[]> {
-        const assignments = await this.assignmentStore.get();
+        const assignments = await this.loadAssignments();
         if (!assignments) return [];
 
         return assignments[probeId] ?? [];
+    }
+
+    /**
+     * The assignment table is cached in Redis behind a TTL. Rebuild it only when
+     * it is missing (expired TTL, first read after a restart) so that read paths
+     * such as probe heartbeats never trigger a full rescan by themselves.
+     */
+    private async loadAssignments(): Promise<SystemProbeAssignments | null> {
+        const assignments = await this.assignmentStore.get();
+
+        if (assignments) return assignments;
+
+        return this.rebalance();
     }
 }

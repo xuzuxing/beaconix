@@ -202,12 +202,12 @@ model Organization {
   tasks       Task[]
 
   // Monitors
-  monitors     Monitor[]
-  probes       Probe[]
-  channels     NotificationChannel[]
-  statusPages  StatusPage[]
+  monitors      Monitor[]
+  probes        Probe[]
+  channels      NotificationChannel[]
+  statusPages   StatusPage[]
   subscriptions Subscription[]
-  orders       Order[]
+  orders        Order[]
 
   @@index([ownerId])
   @@index([createdAt])
@@ -662,27 +662,27 @@ enum PaymentStatus {
 
 // 监控目标
 model Monitor {
-  id                  String      @id @default(cuid())
-  organizationId      String
-  projectId           String
-  name                String
-  type                MonitorType
-  target              String
-  interval            Int         @default(60)
-  timeout             Int         @default(5000)
-  expectedStatus      Int         @default(200)
-  failureThreshold    Int         @default(3)
-  checkSsl            Boolean      @default(false)
-  sslExpiryThreshold  Int  @default(30)
-  enabled             Boolean     @default(true)
+  id                 String      @id @default(cuid())
+  organizationId     String
+  projectId          String
+  name               String
+  type               MonitorType
+  target             String
+  interval           Int         @default(60)
+  timeout            Int         @default(5000)
+  expectedStatus     Int         @default(200)
+  failureThreshold   Int         @default(3)
+  checkSsl           Boolean     @default(false)
+  sslExpiryThreshold Int         @default(30)
+  enabled            Boolean     @default(true)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
   // Relations
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   state        MonitorState?
   probes       MonitorProbe[]
   checkLogs    CheckLog[]
@@ -698,10 +698,12 @@ model Monitor {
 
 // 监控状态（独立存储，避免频繁更新主表）
 model MonitorState {
-  monitorId          String        @id @default(cuid())
-  status             MonitorStatus @default(UNKNOWN)
-  failCount          Int           @default(0)
+  monitorId          String         @id @default(cuid())
+  status             MonitorStatus  @default(UNKNOWN)
+  failCount          Int            @default(0)
   lastCheckAt        DateTime?
+  // 最近一次"本地检测"时间（探针回调不会推进它），调度到期判定只看这一列
+  lastLocalCheckAt   DateTime?
   lastError          String?
   lastLatency        Int?
   lastNotifiedStatus MonitorStatus?
@@ -710,7 +712,7 @@ model MonitorState {
   sslIssuer          String?
   sslSubject         String?
   sslLastNotifiedAt  DateTime?
-  updatedAt          DateTime      @updatedAt
+  updatedAt          DateTime       @updatedAt
 
   monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
 
@@ -736,7 +738,7 @@ model Probe {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization Organization?  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   monitors     MonitorProbe[]
   results      ProbeResult[]
   executions   ProbeExecution[]
@@ -776,12 +778,13 @@ model ProbeResult {
 
   @@index([target, checkedAt])
   @@index([probeId, checkedAt])
+  @@index([checkedAt])
   @@map("probe_results")
 }
 
 // 探针和检测执行日志
 model ProbeExecution {
-  id           String            @id @default(cuid())
+  id           String           @id @default(cuid())
   probeId      String?
   monitorId    String?
   target       String
@@ -790,9 +793,9 @@ model ProbeExecution {
   success      Boolean
   latency      Int?
   error        String?
-  requestMeta  Json?             @default("{}")
-  responseMeta Json?             @default("{}")
-  executedAt   DateTime          @default(now())
+  requestMeta  Json?            @default("{}")
+  responseMeta Json?            @default("{}")
+  executedAt   DateTime         @default(now())
 
   probe   Probe?   @relation(fields: [probeId], references: [id], onDelete: SetNull)
   monitor Monitor? @relation(fields: [monitorId], references: [id], onDelete: SetNull)
@@ -800,22 +803,29 @@ model ProbeExecution {
   @@index([probeId, executedAt])
   @@index([monitorId, executedAt])
   @@index([status])
+  @@index([executedAt])
   @@map("probe_executions")
 }
 
 // 检测历史
 model CheckLog {
-  id        String   @id @default(cuid())
-  monitorId String
-  success   Boolean
-  latency   Int
-  error     String?
-  source    CheckSource @default(LOCAL)
-  checkedAt DateTime @default(now())
+  id             String      @id @default(cuid())
+  monitorId      String
+  // 最终判定结论（本地结果与探针结果聚合后）
+  success        Boolean
+  // 本地探测的原始结果；探针回调写入时记录本地最近一次结果，本地检测时等于 success
+  localSuccess   Boolean?
+  // 本地失败但探针成功时置真，便于区分"探针救回"的判定
+  rescuedByProbe Boolean     @default(false)
+  latency        Int
+  error          String?
+  source         CheckSource @default(LOCAL)
+  checkedAt      DateTime    @default(now())
 
   monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
 
   @@index([monitorId, checkedAt])
+  @@index([checkedAt])
   @@map("check_logs")
 }
 
@@ -831,7 +841,7 @@ model NotificationChannel {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   logs         NotificationLog[]
 
   @@index([organizationId])
@@ -841,12 +851,12 @@ model NotificationChannel {
 
 // 通知日志
 model NotificationLog {
-  id           String             @id @default(cuid())
-  monitorId    String
-  channelId    String
-  status       NotificationStatus
-  error        String?
-  sentAt       DateTime           @default(now())
+  id        String             @id @default(cuid())
+  monitorId String
+  channelId String
+  status    NotificationStatus
+  error     String?
+  sentAt    DateTime           @default(now())
 
   channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
@@ -881,13 +891,13 @@ model StatusPage {
 
 // 套餐定义
 model Plan {
-  id          String  @id @default(uuid())
-  code        String  @unique
-  name        String
-  description String?
-  price       Int     @default(0)
-  durationDays Int    @default(30)
-  sortOrder   Int     @default(0)
+  id           String  @id @default(uuid())
+  code         String  @unique
+  name         String
+  description  String?
+  price        Int     @default(0)
+  durationDays Int     @default(30)
+  sortOrder    Int     @default(0)
 
   maxMonitors Int @default(5)
   maxProbes   Int @default(0)
@@ -912,7 +922,7 @@ model Plan {
 
 // 订阅栈
 model Subscription {
-  id             String             @id @default(uuid())
+  id             String @id @default(uuid())
   organizationId String
   planId         String
 
@@ -937,14 +947,14 @@ model Subscription {
 
 // 订单
 model Order {
-  id             String      @id @default(uuid())
-  orderNo        String      @unique
+  id             String @id @default(uuid())
+  orderNo        String @unique
   organizationId String
   planId         String
   userId         String
 
   amount       Int
-  currency     String       @default("CNY")
+  currency     String @default("CNY")
   durationDays Int
 
   status      OrderStatus @default(PENDING)
@@ -955,9 +965,9 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  plan         Plan         @relation(fields: [planId], references: [id])
-  user         User         @relation(fields: [userId], references: [id])
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  plan         Plan          @relation(fields: [planId], references: [id])
+  user         User          @relation(fields: [userId], references: [id])
   payment      Payment?
   subscription Subscription?
 
@@ -969,13 +979,13 @@ model Order {
 
 // 支付记录
 model Payment {
-  id            String        @id @default(uuid())
-  orderId       String        @unique
+  id            String         @id @default(uuid())
+  orderId       String         @unique
   channel       PaymentChannel
-  transactionId String?       @unique
+  transactionId String?        @unique
   prepayId      String?
   amount        Int
-  status        PaymentStatus @default(PENDING)
+  status        PaymentStatus  @default(PENDING)
   paidAt        DateTime?
   rawCallback   Json?
 
