@@ -62,6 +62,28 @@ export interface GetPhoneNumberInput {
     code: string;
 }
 
+export type WechatMiniProgramEnvVersion = 'release' | 'trial' | 'develop';
+
+export interface GetUnlimitedQrCodeInput {
+    appId: string;
+    appSecret: string;
+    /** Max 32 visible characters; this implementation uses a 32-char hex ticket. */
+    scene: string;
+    /** Mini-program page that receives the scene. Empty = home page. */
+    page?: string;
+    /** Defaults to `release`. */
+    envVersion?: WechatMiniProgramEnvVersion;
+    /** QR width in pixels; defaults to 430. */
+    width?: number;
+    /** Defaults to `false` (page existence is not checked). */
+    checkPath?: boolean;
+}
+
+export interface GetUnlimitedQrCodeResult {
+    buffer: Buffer;
+    contentType: string;
+}
+
 export interface WechatPhoneNumber {
     phoneNumber: string;
     purePhoneNumber: string;

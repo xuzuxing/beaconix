@@ -7,6 +7,10 @@ import {
     Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import {
+    WechatApiError,
+    WechatConfigurationError,
+} from '../../infra/wechat/wechat.types';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
@@ -17,15 +21,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         const response = ctx.getResponse<Response>();
         const request = ctx.getRequest<Request>();
 
+        const wechatError = this.mapWechatError(exception);
+
         const status =
             exception instanceof HttpException
                 ? exception.getStatus()
-                : HttpStatus.INTERNAL_SERVER_ERROR;
+                : (wechatError?.status ?? HttpStatus.INTERNAL_SERVER_ERROR);
 
         const message =
             exception instanceof HttpException
                 ? exception.getResponse()
-                : 'Internal server error';
+                : (wechatError?.message ?? 'Internal server error');
 
         const errorResponse = {
             statusCode: status,
@@ -49,5 +55,66 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         }
 
         response.status(status).json(errorResponse);
+    }
+
+    /**
+     * Converts WeChat API/config failures into client-safe HTTP statuses so a
+     * bad login code (40029) becomes 400 instead of a generic 500.
+     */
+    private mapWechatError(exception: unknown): {
+        status: number;
+        message: string;
+    } | null {
+        if (exception instanceof WechatConfigurationError) {
+            return {
+                status: HttpStatus.SERVICE_UNAVAILABLE,
+                message: '微信服务未配置或配置无效',
+            };
+        }
+
+        if (!(exception instanceof WechatApiError)) {
+            return null;
+        }
+
+        if (exception.isRateLimited || exception.httpStatus === 429) {
+            return {
+                status: HttpStatus.TOO_MANY_REQUESTS,
+                message: '微信接口调用过于频繁，请稍后重试',
+            };
+        }
+
+        switch (exception.errcode) {
+            case 40029:
+                return {
+                    status: HttpStatus.BAD_REQUEST,
+                    message: '微信登录 code 无效或已过期',
+                };
+            case 40163:
+                return {
+                    status: HttpStatus.BAD_REQUEST,
+                    message: '微信登录 code 已被使用',
+                };
+            case 40097:
+                return {
+                    status: HttpStatus.BAD_REQUEST,
+                    message: '微信接口参数错误',
+                };
+            case 40001:
+            case 42001:
+                return {
+                    status: HttpStatus.SERVICE_UNAVAILABLE,
+                    message: '微信服务凭证已过期',
+                };
+            case -1:
+                return {
+                    status: HttpStatus.SERVICE_UNAVAILABLE,
+                    message: '微信服务繁忙，请稍后重试',
+                };
+            default:
+                return {
+                    status: HttpStatus.BAD_GATEWAY,
+                    message: `微信服务调用失败（errcode ${exception.errcode ?? exception.code ?? '未知'}）`,
+                };
+        }
     }
 }

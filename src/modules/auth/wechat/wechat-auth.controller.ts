@@ -12,6 +12,7 @@ import {
     ApiOperation,
     ApiBody,
     ApiOkResponse,
+    ApiCreatedResponse,
     ApiBadRequestResponse,
     ApiForbiddenResponse,
     ApiTooManyRequestsResponse,
@@ -20,17 +21,29 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../../../common/decorators';
 import { WechatAuthService } from './wechat-auth.service';
+import { WechatScanLoginService } from './wechat-scan-login.service';
 import {
     WechatAuthorizeUrlDto,
     WechatWebLoginDto,
     WechatMiniProgramLoginDto,
+    CreateWechatScanLoginDto,
+    WechatScanLoginDto,
+    QueryWechatScanLoginStatusDto,
 } from './dto';
-import { WechatAuthResponseEntity, WechatAuthorizeUrlEntity } from './entities';
+import {
+    WechatAuthResponseEntity,
+    WechatAuthorizeUrlEntity,
+    WechatScanLoginQrcodeEntity,
+    WechatScanLoginStatusEntity,
+} from './entities';
 
 @ApiTags('Auth / WeChat')
 @Controller('auth/wechat')
 export class WechatAuthController {
-    constructor(private readonly wechatAuthService: WechatAuthService) {}
+    constructor(
+        private readonly wechatAuthService: WechatAuthService,
+        private readonly wechatScanLoginService: WechatScanLoginService,
+    ) {}
 
     @Post('web/login')
     @Public()
@@ -99,5 +112,71 @@ export class WechatAuthController {
     })
     miniProgramLogin(@Body() dto: WechatMiniProgramLoginDto) {
         return this.wechatAuthService.miniProgramLogin(dto);
+    }
+
+    @Post('miniprogram/qrcode')
+    @Public()
+    @HttpCode(HttpStatus.CREATED)
+    @Throttle({ default: { ttl: 60000, limit: 10 } })
+    @ApiOperation({
+        summary: 'Create mini-program scan-login QR code',
+        description:
+            'Creates a Redis login ticket and a WeChat unlimited mini-program QR code carrying that ticket. The web client renders the returned base64 data URL and starts polling the status endpoint.',
+    })
+    @ApiBody({ type: CreateWechatScanLoginDto })
+    @ApiCreatedResponse({
+        type: WechatScanLoginQrcodeEntity,
+        description: 'QR code created',
+    })
+    @ApiBadRequestResponse({ description: 'Validation failed' })
+    @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+    @ApiServiceUnavailableResponse({
+        description: 'WeChat mini program is not configured',
+    })
+    createQrCode(@Body() dto: CreateWechatScanLoginDto) {
+        return this.wechatScanLoginService.createQrCode(dto);
+    }
+
+    @Post('miniprogram/scan-login')
+    @Public()
+    @HttpCode(HttpStatus.OK)
+    @Throttle({ default: { ttl: 60000, limit: 10 } })
+    @ApiOperation({
+        summary: 'Mini-program scan-login confirmation',
+        description:
+            'Called by the mini program after the user scans the QR code. Exchanges the wx.login() code and marks the Redis login ticket as confirmed.',
+    })
+    @ApiBody({ type: WechatScanLoginDto })
+    @ApiOkResponse({
+        type: WechatAuthResponseEntity,
+        description: 'Mini program logged in and web ticket confirmed',
+    })
+    @ApiBadRequestResponse({ description: 'Invalid/expired ticket or code' })
+    @ApiForbiddenResponse({ description: 'Account is deactivated' })
+    @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+    @ApiServiceUnavailableResponse({
+        description: 'WeChat mini program is not configured',
+    })
+    scanLogin(@Body() dto: WechatScanLoginDto) {
+        return this.wechatScanLoginService.scanLogin(dto);
+    }
+
+    @Get('miniprogram/qrcode/status')
+    @Public()
+    @Throttle({ default: { ttl: 60000, limit: 30 } })
+    @ApiOperation({
+        summary: 'Long-poll mini-program scan-login status',
+        description:
+            'Web client polls this endpoint. It blocks while the ticket is PENDING/SCANNED, returns auth tokens when CONFIRMED, and EXPIRED when invalid or already consumed.',
+    })
+    @ApiOkResponse({
+        type: WechatScanLoginStatusEntity,
+        description: 'Current scan-login status',
+    })
+    @ApiBadRequestResponse({ description: 'Invalid ticket' })
+    @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+    @ApiServiceUnavailableResponse({ description: 'Redis is unavailable' })
+    qrCodeStatus(@Query() dto: QueryWechatScanLoginStatusDto) {
+        return this.wechatScanLoginService.pollStatus(dto);
     }
 }

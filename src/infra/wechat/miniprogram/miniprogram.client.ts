@@ -9,6 +9,8 @@ import type {
     Code2SessionInput,
     Code2SessionResult,
     GetPhoneNumberInput,
+    GetUnlimitedQrCodeInput,
+    GetUnlimitedQrCodeResult,
     SendSubscribeMessageBatchInput,
     SendSubscribeMessageBatchResult,
     SendSubscribeMessageInput,
@@ -31,6 +33,7 @@ interface PhoneNumberResponse {
 
 const SUBSCRIBE_SEND_PATH = '/cgi-bin/message/subscribe/send';
 const PHONE_NUMBER_PATH = '/wxa/business/getuserphonenumber';
+const UNLIMITED_QR_CODE_PATH = '/wxa/getwxacodeunlimit';
 
 /**
  * Mini-program client.
@@ -75,6 +78,38 @@ export class MiniprogramClient {
             unionid: result.unionid,
             sessionKey: result.session_key,
         };
+    }
+
+    /**
+     * Generates an unlimited mini-program QR code carrying `scene` (the login
+     * ticket). The response is an image buffer; WeChat error bodies are still
+     * JSON and are normalized by `WechatHttpClient.postBuffer`.
+     */
+    async getUnlimitedQrCode(
+        input: GetUnlimitedQrCodeInput,
+    ): Promise<GetUnlimitedQrCodeResult> {
+        const body: Record<string, unknown> = {
+            scene: input.scene,
+            check_path: input.checkPath ?? false,
+            env_version: input.envVersion ?? 'release',
+            width: input.width ?? 430,
+        };
+
+        if (input.page) {
+            body.page = input.page;
+        }
+
+        return withAccessToken(
+            this.tokens,
+            { kind: 'mp', appId: input.appId, appSecret: input.appSecret },
+            (accessToken) =>
+                this.http.postBuffer(
+                    `${UNLIMITED_QR_CODE_PATH}?access_token=${encodeURIComponent(accessToken)}`,
+                    body,
+                    { retries: 0, platform: 'mp' },
+                ),
+            this.logger,
+        );
     }
 
     /** Sends one subscribe message to one openid. */

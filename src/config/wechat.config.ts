@@ -25,6 +25,18 @@ export interface WechatMiniProgramConfig {
     appSecret: string;
 }
 
+export type WechatScanLoginEnvVersion = 'release' | 'trial' | 'develop';
+
+export interface WechatScanLoginConfig {
+    /** Mini-program page that receives the QR `scene` param. Empty = home page. */
+    qrPage: string;
+    qrEnvVersion: WechatScanLoginEnvVersion;
+    /** How long the Redis login ticket stays valid, in seconds. */
+    ttlSeconds: number;
+    /** Default long-poll timeout for the web client, in milliseconds. */
+    pollTimeoutMs: number;
+}
+
 export interface WechatWebsiteConfig {
     appId: string;
     appSecret: string;
@@ -54,6 +66,7 @@ export interface WechatConfig {
     pay: WechatPayConfig;
     miniprogram: WechatMiniProgramConfig;
     website: WechatWebsiteConfig;
+    scanLogin: WechatScanLoginConfig;
     officialAccount: WechatOfficialAccountConfig;
     work: WechatWorkConfig;
     http: WechatHttpConfig;
@@ -62,6 +75,15 @@ export interface WechatConfig {
 function optionalInt(key: string, fallback: number): number {
     const parsed = parseInt(optionalEnv(key, String(fallback)), 10);
     return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function scanLoginEnvVersion(
+    key: string,
+    fallback: WechatScanLoginEnvVersion,
+): WechatScanLoginEnvVersion {
+    const raw = optionalEnv(key, fallback);
+    // WeChat's API expects `develop`, but callers often write `developer`.
+    return raw === 'developer' ? 'develop' : (raw as WechatScanLoginEnvVersion);
 }
 
 /**
@@ -89,6 +111,15 @@ export const wechatConfig = registerAs('wechat', (): WechatConfig => ({
     website: {
         appId: optionalEnv('WECHAT_WEB_APPID', ''),
         appSecret: optionalEnv('WECHAT_WEB_APPSECRET', ''),
+    },
+    scanLogin: {
+        qrPage: optionalEnv('WECHAT_SCAN_LOGIN_PAGE', ''),
+        qrEnvVersion: scanLoginEnvVersion(
+            'WECHAT_SCAN_LOGIN_ENV_VERSION',
+            'release',
+        ),
+        ttlSeconds: optionalInt('WECHAT_SCAN_LOGIN_TTL_SECONDS', 300),
+        pollTimeoutMs: optionalInt('WECHAT_SCAN_LOGIN_POLL_TIMEOUT_MS', 25000),
     },
     officialAccount: {
         appId: optionalEnv('WECHAT_OA_APPID', ''),

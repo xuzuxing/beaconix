@@ -92,6 +92,22 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         await this.client.del(keys);
     }
 
+    /** Atomically reads and deletes a raw string key, returning null when missing. */
+    async getDel(key: string): Promise<string | null> {
+        return this.client.getdel(key);
+    }
+
+    /**
+     * Atomically reads, parses, and deletes a JSON value. Returns null when the
+     * key is missing (or was already consumed by another caller).
+     */
+    async consumeJson<T>(key: string): Promise<T | null> {
+        const raw = await this.getDel(key);
+        if (!raw) return null;
+
+        return JSON.parse(raw) as T;
+    }
+
     /** Updates the expiry of an existing key in seconds. */
     async expire(key: string, ttlSeconds: number): Promise<void> {
         await this.client.expire(key, ttlSeconds);

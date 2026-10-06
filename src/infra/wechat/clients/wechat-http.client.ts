@@ -109,6 +109,11 @@ export interface WechatRequestOptions {
     platform?: WechatPlatform;
 }
 
+export interface WechatBinaryResponse {
+    buffer: Buffer;
+    contentType: string;
+}
+
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 /**
@@ -149,6 +154,15 @@ export class WechatHttpClient {
         return this.request<T>('POST', path, body, options);
     }
 
+    /** POSTs JSON and returns the raw response bytes (e.g. mini-program QR PNG/JPEG). */
+    async postBuffer(
+        path: string,
+        body?: unknown,
+        options: WechatRequestOptions = {},
+    ): Promise<WechatBinaryResponse> {
+        return this.requestBuffer('POST', path, body, options);
+    }
+
     async request<T>(
         method: HttpMethod,
         path: string,
@@ -165,6 +179,39 @@ export class WechatHttpClient {
         for (;;) {
             try {
                 return await this.send<T>(method, url, body, options);
+            } catch (error) {
+                const apiError = this.normalizeError(error, endpoint, options);
+
+                if (attempt >= retries || !this.isRetryable(apiError)) {
+                    throw apiError;
+                }
+
+                attempt += 1;
+                const delay = this.backoffMs(attempt);
+                this.logger.warn(
+                    `Retrying ${endpoint} (${attempt}/${retries}) after ${apiError.message}`,
+                );
+                await this.sleep(delay);
+            }
+        }
+    }
+
+    /** Same retry/error normalization as `request`, but returns raw bytes. */
+    private async requestBuffer(
+        method: HttpMethod,
+        path: string,
+        body: unknown,
+        options: WechatRequestOptions,
+    ): Promise<WechatBinaryResponse> {
+        const url = this.buildUrl(path, options.query);
+        const retries = options.retries ?? 0;
+        const endpoint = `${method} ${redactUrl(url)}`;
+
+        let attempt = 0;
+
+        for (;;) {
+            try {
+                return await this.sendBuffer(method, url, body, options);
             } catch (error) {
                 const apiError = this.normalizeError(error, endpoint, options);
 
@@ -258,6 +305,73 @@ export class WechatHttpClient {
         }
 
         return payload as T;
+    }
+
+    private async sendBuffer(
+        method: HttpMethod,
+        url: string,
+        body: unknown,
+        options: WechatRequestOptions,
+    ): Promise<WechatBinaryResponse> {
+        const timeoutMs = options.timeoutMs ?? this.timeoutMs;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        let response: Response;
+
+        try {
+            response = await fetch(url, {
+                method,
+                headers: {
+                    accept: '*/*',
+                    ...(body === undefined
+                        ? {}
+                        : { 'content-type': 'application/json' }),
+                    ...options.headers,
+                },
+                body: body === undefined ? undefined : JSON.stringify(body),
+                signal: controller.signal,
+            });
+        } finally {
+            clearTimeout(timer);
+        }
+
+        const buffer = Buffer.from(await response.arrayBuffer());
+        const contentType =
+            response.headers.get('content-type') ?? 'application/octet-stream';
+        const platform = options.platform ?? this.platform;
+        const endpoint = `${method} ${redactUrl(url)}`;
+
+        // WeChat returns JSON error bodies even for binary endpoints.
+        const isJsonBody =
+            contentType.includes('json') || contentType.includes('text/plain');
+
+        if (isJsonBody || !response.ok) {
+            const payload = this.parseJson(buffer.toString('utf8'));
+
+            if (!response.ok) {
+                throw this.buildError({
+                    platform,
+                    endpoint,
+                    httpStatus: response.status,
+                    payload,
+                    fallbackMessage: `HTTP ${response.status}`,
+                });
+            }
+
+            const businessError = this.extractBusinessError(payload);
+            if (businessError) {
+                throw this.buildError({
+                    platform,
+                    endpoint,
+                    httpStatus: response.status,
+                    payload,
+                    fallbackMessage: businessError,
+                });
+            }
+        }
+
+        return { buffer, contentType };
     }
 
     private parseJson(text: string): unknown {

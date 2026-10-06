@@ -7,6 +7,7 @@ function createClient() {
     const http = {
         getJson: jest.fn(),
         postJson: jest.fn(),
+        postBuffer: jest.fn(),
     };
     const tokens = {
         getAccessToken: jest.fn().mockResolvedValue('token-1'),
@@ -63,6 +64,60 @@ describe('MiniprogramClient', () => {
                     code: 'code-1',
                 }),
             ).rejects.toThrow(WechatApiError);
+        });
+    });
+
+    describe('getUnlimitedQrCode', () => {
+        it('generates a QR code carrying the login scene', async () => {
+            const { client, http } = createClient();
+            const buffer = Buffer.from('png-bytes');
+            http.postBuffer.mockResolvedValue({
+                buffer,
+                contentType: 'image/png',
+            });
+
+            const result = await client.getUnlimitedQrCode({
+                appId: 'wx-1',
+                appSecret: 'sec-1',
+                scene: 'ticket-1',
+                page: 'pages/login/index',
+                envVersion: 'trial',
+                width: 280,
+            });
+
+            const [path, body, options] = http.postBuffer.mock.calls[0];
+            expect(path).toBe('/wxa/getwxacodeunlimit?access_token=token-1');
+            expect(body).toEqual({
+                scene: 'ticket-1',
+                page: 'pages/login/index',
+                check_path: false,
+                env_version: 'trial',
+                width: 280,
+            });
+            expect(options).toEqual({ retries: 0, platform: 'mp' });
+            expect(result).toEqual({ buffer, contentType: 'image/png' });
+        });
+
+        it('omits page when not provided', async () => {
+            const { client, http } = createClient();
+            http.postBuffer.mockResolvedValue({
+                buffer: Buffer.from('bytes'),
+                contentType: 'image/jpeg',
+            });
+
+            await client.getUnlimitedQrCode({
+                appId: 'wx-1',
+                appSecret: 'sec-1',
+                scene: 'ticket-1',
+            });
+
+            const [, body] = http.postBuffer.mock.calls[0];
+            expect(body).toEqual({
+                scene: 'ticket-1',
+                check_path: false,
+                env_version: 'release',
+                width: 430,
+            });
         });
     });
 
