@@ -1,6 +1,10 @@
 import { NotFoundException } from '@nestjs/common';
 import type { Queue } from 'bullmq';
-import { CheckerService, probeResultWindowMs } from './checker.service';
+import {
+    CheckerService,
+    probeReportDedupWindowMs,
+    probeResultWindowMs,
+} from './checker.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { StateService } from '../state/state.service';
 import type { NotifierService } from '../notifier/notifier.service';
@@ -533,6 +537,32 @@ describe('CheckerService', () => {
             expect(stateService.record).not.toHaveBeenCalled();
         });
 
+        it('ignores a report for a round that was already folded', async () => {
+            const { service, prisma, stateService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.checkLog.findFirst
+                .mockResolvedValueOnce({
+                    id: 'log-1',
+                    monitorId: 'monitor-1',
+                    success: false,
+                    latency: 30,
+                    error: 'HTTP 500',
+                    source: 'LOCAL',
+                    checkedAt: new Date('2026-03-05T12:00:00.000Z'),
+                })
+                .mockResolvedValueOnce({ checkedAt: new Date() });
+
+            const result = await service.ingestProbeReport('org-1', {
+                target: 'https://api.example.com/health',
+                success: true,
+                latency: 40,
+                error: null,
+            });
+
+            expect(result).toBeNull();
+            expect(stateService.record).not.toHaveBeenCalled();
+        });
+
         it('returns null when no monitor owns the target', async () => {
             const { service, prisma, stateService } = createService();
             prisma.monitor.findFirst.mockResolvedValue(null);
@@ -693,5 +723,16 @@ describe('probeResultWindowMs', () => {
 
     it('caps the window for slow monitors', () => {
         expect(probeResultWindowMs(86_400)).toBe(15 * 60 * 1000);
+    });
+});
+
+describe('probeReportDedupWindowMs', () => {
+    it('scales with the monitor interval', () => {
+        expect(probeReportDedupWindowMs(10)).toBe(5 * 1000);
+        expect(probeReportDedupWindowMs(60)).toBe(15 * 1000);
+    });
+
+    it('never suppresses reports for longer than the cap', () => {
+        expect(probeReportDedupWindowMs(600)).toBe(30 * 1000);
     });
 });

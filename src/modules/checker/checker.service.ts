@@ -43,6 +43,28 @@ export function probeResultWindowMs(intervalSeconds: number): number {
     );
 }
 
+const PROBE_REPORT_DEDUP_MIN_MS = 5 * 1000;
+const PROBE_REPORT_DEDUP_MAX_MS = 30 * 1000;
+const PROBE_REPORT_DEDUP_INTERVALS = 4;
+
+/**
+ * Probe reports for the same monitor arriving closer together than this are
+ * treated as one round and folded into the state only once: several probes can
+ * cover the same target, and an agent that restarted reports again immediately.
+ *
+ * The window is a fraction of the monitor interval and stays well below it, so a
+ * probe reporting on its own schedule is never suppressed. Raw rows still land in
+ * `probe_results`, so a later local check still sees the full picture.
+ */
+export function probeReportDedupWindowMs(intervalSeconds: number): number {
+    const scaled = (intervalSeconds * 1000) / PROBE_REPORT_DEDUP_INTERVALS;
+
+    return Math.min(
+        Math.max(scaled, PROBE_REPORT_DEDUP_MIN_MS),
+        PROBE_REPORT_DEDUP_MAX_MS,
+    );
+}
+
 export interface CheckExecution extends CheckResult {
     monitorId: string;
     previousStatus: string;
@@ -139,6 +161,23 @@ export class CheckerService {
         });
 
         if (!localLog) return null;
+
+        // Reports inside one round are folded once. The raw ProbeResult rows are
+        // already stored, so the next local check still aggregates all of them -
+        // only the duplicated CheckLog row and state transition are skipped.
+        const lastProbeLog = await this.prisma.checkLog.findFirst({
+            where: { monitorId: monitor.id, source: CheckSource.PROBE },
+            orderBy: { checkedAt: 'desc' },
+            select: { checkedAt: true },
+        });
+
+        if (
+            lastProbeLog &&
+            Date.now() - lastProbeLog.checkedAt.getTime() <
+                probeReportDedupWindowMs(monitor.interval)
+        ) {
+            return null;
+        }
 
         return this.execute(
             monitor,

@@ -354,6 +354,9 @@ async function heartbeat(config) {
         token: config.token,
         path: '/probes/heartbeat',
         method: 'POST',
+        // Lets the backend derive the offline threshold from this probe's own
+        // cadence instead of a fixed window the probe might never meet.
+        body: { intervalSeconds: config.intervalSeconds },
         timeoutMs: config.timeoutMs,
     });
 }

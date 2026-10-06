@@ -19,7 +19,11 @@ import {
 } from '@nestjs/swagger';
 import { ProbesService } from './probes.service';
 import { ProbeValidationService } from './probe-validation.service';
-import { AnswerProbeValidationDto, ReportProbeResultsDto } from './dto';
+import {
+    AnswerProbeValidationDto,
+    ProbeHeartbeatDto,
+    ReportProbeResultsDto,
+} from './dto';
 import { Public } from '../../common/decorators';
 
 /** Header carrying the probe shared secret. */
@@ -48,6 +52,11 @@ export class ProbeIngestController {
         required: true,
         description: 'Probe shared secret',
     })
+    @ApiBody({
+        type: ProbeHeartbeatDto,
+        required: false,
+        description: 'Optional: the interval this probe calls in with',
+    })
     @ApiOkResponse({
         description:
             '{ probe, monitors: [{ id, name, type, target, interval, timeout, expectedStatus }], serverTime }',
@@ -55,8 +64,11 @@ export class ProbeIngestController {
     @ApiUnauthorizedResponse({
         description: 'Missing, unknown or disabled probe',
     })
-    async heartbeat(@Headers(PROBE_SECRET_HEADER) secret: string) {
-        return this.probesService.recordHeartbeat(secret);
+    async heartbeat(
+        @Headers(PROBE_SECRET_HEADER) secret: string,
+        @Body() dto: ProbeHeartbeatDto,
+    ) {
+        return this.probesService.recordHeartbeat(secret, dto.intervalSeconds);
     }
 
     @Post('results')

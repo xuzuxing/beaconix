@@ -121,6 +121,7 @@ export class SystemProbesService {
         secret: string;
         enabled: boolean;
         lastHeartbeat: Date | null;
+        heartbeatIntervalSeconds: number | null;
         status: string;
         maxTenants: number | null;
         priority: number;
@@ -138,6 +139,7 @@ export class SystemProbesService {
             secret: probe.secret,
             enabled: probe.enabled,
             lastHeartbeat: probe.lastHeartbeat,
+            heartbeatIntervalSeconds: probe.heartbeatIntervalSeconds,
             status: probe.status,
             maxTenants: probe.maxTenants,
             priority: probe.priority,

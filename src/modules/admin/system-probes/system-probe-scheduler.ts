@@ -1,11 +1,17 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
+import { RedisService } from '../../../infra/redis/redis.service';
 import { ProbeScope, ProbeStatus } from '../../../generated/prisma/enums';
 import {
     SystemProbeAssignmentStore,
     SystemProbeAssignments,
 } from './system-probe-assignment.store';
+
+/** Lock key/value guard around a recompute; see `rebalance()`. */
+const ASSIGNMENT_LOCK_KEY = 'sys_probe:rebalance:lock';
+const ASSIGNMENT_LOCK_TTL_SECONDS = 30;
 
 @Injectable()
 export class SystemProbeScheduler implements OnModuleInit {
@@ -14,6 +20,7 @@ export class SystemProbeScheduler implements OnModuleInit {
     constructor(
         private readonly prisma: PrismaService,
         private readonly assignmentStore: SystemProbeAssignmentStore,
+        private readonly redisService: RedisService,
     ) {}
 
     async onModuleInit(): Promise<void> {
@@ -27,7 +34,45 @@ export class SystemProbeScheduler implements OnModuleInit {
         await this.rebalance();
     }
 
+    /**
+     * Recomputes the system probe assignment table.
+     *
+     * Triggers overlap constantly (probe heartbeats, probe/monitor CRUD, the
+     * hourly job, a missing table), and every run publishes a full table - so two
+     * concurrent runs used to overwrite each other with tables computed from
+     * different snapshots. A short Redis lock serialises them; the instance that
+     * loses simply reuses whatever is already published.
+     */
     async rebalance(): Promise<SystemProbeAssignments> {
+        const token = randomUUID();
+        const acquired = await this.redisService.setIfAbsent(
+            ASSIGNMENT_LOCK_KEY,
+            token,
+            ASSIGNMENT_LOCK_TTL_SECONDS,
+        );
+
+        if (!acquired) {
+            this.logger.debug(
+                'Rebalance already in progress; reusing the published assignments',
+            );
+
+            return (await this.assignmentStore.get()) ?? {};
+        }
+
+        try {
+            return await this.computeAssignments();
+        } finally {
+            try {
+                await this.redisService.releaseLock(ASSIGNMENT_LOCK_KEY, token);
+            } catch (error) {
+                this.logger.warn(
+                    `Failed to release the rebalance lock: ${(error as Error).message}`,
+                );
+            }
+        }
+    }
+
+    private async computeAssignments(): Promise<SystemProbeAssignments> {
         const probes = await this.prisma.probe.findMany({
             where: {
                 scope: ProbeScope.SYSTEM,

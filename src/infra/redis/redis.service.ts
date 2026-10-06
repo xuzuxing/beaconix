@@ -96,4 +96,39 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     async expire(key: string, ttlSeconds: number): Promise<void> {
         await this.client.expire(key, ttlSeconds);
     }
+
+    /**
+     * Sets a key only when it does not exist yet, returning false when someone
+     * else got there first. Used for short-lived distributed locks.
+     */
+    async setIfAbsent(
+        key: string,
+        value: string,
+        ttlSeconds: number,
+    ): Promise<boolean> {
+        const result = await this.client.set(
+            key,
+            value,
+            'EX',
+            ttlSeconds,
+            'NX',
+        );
+
+        return result === 'OK';
+    }
+
+    /**
+     * Releases a lock only while `value` still owns it, so a lock that already
+     * expired and was taken over by another holder is left untouched.
+     */
+    async releaseLock(key: string, value: string): Promise<boolean> {
+        const released = await this.client.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            1,
+            key,
+            value,
+        );
+
+        return Number(released) === 1;
+    }
 }

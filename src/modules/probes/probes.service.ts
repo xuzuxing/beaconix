@@ -5,9 +5,12 @@ import {
     NotFoundException,
     UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { PROBE_OFFLINE_INTERVAL_FACTOR } from '../../config';
+import type { ProbeConfig } from '../../config';
 import {
     ExecutionStatus,
     ExecutionTrigger,
@@ -33,9 +36,6 @@ import {
     ProbeMonitorEntity,
     ProbeResultEntity,
 } from './entities';
-
-/** A probe that has not called in for this long is considered offline. */
-const PROBE_OFFLINE_AFTER_MS = 2 * 60 * 1000;
 
 /** How many reported targets are folded into monitor state in parallel. */
 const PROBE_REPORT_CONCURRENCY = 5;
@@ -89,6 +89,7 @@ export class ProbesService {
         private readonly checkerService: CheckerService,
         private readonly systemProbeScheduler: SystemProbeScheduler,
         private readonly quotaService: QuotaService,
+        private readonly configService: ConfigService,
     ) {}
 
     async create(orgId: string, dto: CreateProbeDto): Promise<ProbeEntity> {
@@ -328,13 +329,24 @@ export class ProbesService {
     // -- Probe agent API -------------------------------------------------
 
     /** Marks the probe online and hands back the monitors it should check. */
-    async recordHeartbeat(secret: string): Promise<ProbeHeartbeatResult> {
+    async recordHeartbeat(
+        secret: string,
+        heartbeatIntervalSeconds?: number,
+    ): Promise<ProbeHeartbeatResult> {
         const probe = await this.requireProbeBySecret(secret);
         const cameOnline = probe.status !== ProbeStatus.ONLINE;
 
         const updated = await this.prisma.probe.update({
             where: { id: probe.id },
-            data: { lastHeartbeat: new Date(), status: ProbeStatus.ONLINE },
+            data: {
+                lastHeartbeat: new Date(),
+                status: ProbeStatus.ONLINE,
+                // Remembered so the offline sweep can wait three beats instead
+                // of a fixed threshold that slow probes can never meet.
+                ...(heartbeatIntervalSeconds !== undefined
+                    ? { heartbeatIntervalSeconds }
+                    : {}),
+            },
             include: {
                 monitors: { include: { monitor: { select: MONITOR_SELECT } } },
             },
@@ -529,19 +541,43 @@ export class ProbesService {
         };
     }
 
-    /** Flips probes that stopped calling in to OFFLINE. */
+    /**
+     * Flips probes that stopped calling in to OFFLINE.
+     *
+     * The threshold follows the heartbeat interval each probe reported (three
+     * missed beats), falling back to the configured
+     * `PROBE_OFFLINE_AFTER_SECONDS` for probes that never reported one - a fixed
+     * two minutes used to flip slow probes offline between two beats, which also
+     * removed them from the system probe assignment table.
+     */
     @Cron(CronExpression.EVERY_MINUTE, { name: 'probe-offline-sweep' })
     async markStaleProbesOffline(): Promise<number> {
-        const threshold = new Date(Date.now() - PROBE_OFFLINE_AFTER_MS);
+        const now = Date.now();
+
+        const candidates = await this.prisma.probe.findMany({
+            where: { status: ProbeStatus.ONLINE },
+            select: {
+                id: true,
+                lastHeartbeat: true,
+                heartbeatIntervalSeconds: true,
+            },
+        });
+
+        const staleIds = candidates
+            .filter((probe) => {
+                const last = probe.lastHeartbeat?.getTime() ?? 0;
+
+                return (
+                    now - last >=
+                    this.offlineAfterMs(probe.heartbeatIntervalSeconds)
+                );
+            })
+            .map((probe) => probe.id);
+
+        if (staleIds.length === 0) return 0;
 
         const { count } = await this.prisma.probe.updateMany({
-            where: {
-                status: ProbeStatus.ONLINE,
-                OR: [
-                    { lastHeartbeat: null },
-                    { lastHeartbeat: { lt: threshold } },
-                ],
-            },
+            where: { id: { in: staleIds }, status: ProbeStatus.ONLINE },
             data: { status: ProbeStatus.OFFLINE },
         });
 
@@ -551,6 +587,22 @@ export class ProbesService {
         }
 
         return count;
+    }
+
+    /** How long one probe may stay silent before it counts as offline. */
+    private offlineAfterMs(reportedIntervalSeconds: number | null): number {
+        const configured =
+            this.configService.get<ProbeConfig>('probe')!.offlineAfterSeconds *
+            1000;
+
+        if (!reportedIntervalSeconds || reportedIntervalSeconds <= 0) {
+            return configured;
+        }
+
+        return Math.max(
+            configured,
+            reportedIntervalSeconds * 1000 * PROBE_OFFLINE_INTERVAL_FACTOR,
+        );
     }
 
     // -- Helpers ---------------------------------------------------------
@@ -692,6 +744,7 @@ export class ProbesService {
         secret: string;
         enabled: boolean;
         lastHeartbeat: Date | null;
+        heartbeatIntervalSeconds: number | null;
         status: string;
         maxTenants: number | null;
         priority: number;
@@ -734,6 +787,7 @@ export class ProbesService {
             secret: probe.secret,
             enabled: probe.enabled,
             lastHeartbeat: probe.lastHeartbeat,
+            heartbeatIntervalSeconds: probe.heartbeatIntervalSeconds,
             status: probe.status,
             maxTenants: probe.maxTenants,
             priority: probe.priority,

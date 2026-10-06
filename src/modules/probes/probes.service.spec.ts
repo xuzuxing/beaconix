@@ -78,12 +78,16 @@ function createService() {
         assertFeatureAllowed: jest.fn().mockResolvedValue(undefined),
         assertCanCreate: jest.fn().mockResolvedValue(undefined),
     };
+    const configService = {
+        get: jest.fn().mockReturnValue({ offlineAfterSeconds: 120 }),
+    };
 
     const service = new ProbesService(
         prisma as unknown as PrismaService,
         checkerService as unknown as CheckerService,
         systemProbeScheduler as never,
         billingService as never,
+        configService as never,
     );
 
     return {
@@ -92,6 +96,7 @@ function createService() {
         checkerService,
         systemProbeScheduler,
         billingService,
+        configService,
     };
 }
 
@@ -643,21 +648,66 @@ describe('ProbesService', () => {
     });
 
     describe('markStaleProbesOffline', () => {
-        it('flips silent probes offline', async () => {
+        it('flips probes that stayed silent past the configured threshold', async () => {
             const { service, prisma } = createService();
-            prisma.probe.updateMany.mockResolvedValue({ count: 2 });
+            const now = Date.now();
+            prisma.probe.findMany.mockResolvedValue([
+                {
+                    id: 'probe-stale',
+                    lastHeartbeat: new Date(now - 10 * 60 * 1000),
+                    heartbeatIntervalSeconds: null,
+                },
+                {
+                    id: 'probe-fresh',
+                    lastHeartbeat: new Date(now - 30 * 1000),
+                    heartbeatIntervalSeconds: null,
+                },
+            ]);
+            prisma.probe.updateMany.mockResolvedValue({ count: 1 });
 
             const count = await service.markStaleProbesOffline();
 
-            expect(count).toBe(2);
+            expect(count).toBe(1);
             expect(prisma.probe.updateMany).toHaveBeenCalledWith({
-                where: {
-                    status: 'ONLINE',
-                    OR: [
-                        { lastHeartbeat: null },
-                        { lastHeartbeat: { lt: expect.any(Date) } },
-                    ],
+                where: { id: { in: ['probe-stale'] }, status: 'ONLINE' },
+                data: { status: 'OFFLINE' },
+            });
+        });
+
+        it('waits three reported intervals for a slow probe', async () => {
+            const { service, prisma } = createService();
+            const now = Date.now();
+            // 300s cadence -> 15 min threshold, so 10 min of silence is fine.
+            prisma.probe.findMany.mockResolvedValue([
+                {
+                    id: 'probe-slow',
+                    lastHeartbeat: new Date(now - 10 * 60 * 1000),
+                    heartbeatIntervalSeconds: 300,
                 },
+            ]);
+
+            const count = await service.markStaleProbesOffline();
+
+            expect(count).toBe(0);
+            expect(prisma.probe.updateMany).not.toHaveBeenCalled();
+        });
+
+        it('treats a probe that never reported a heartbeat as stale', async () => {
+            const { service, prisma } = createService();
+            prisma.probe.findMany.mockResolvedValue([
+                {
+                    id: 'probe-silent',
+                    lastHeartbeat: null,
+                    heartbeatIntervalSeconds: null,
+                },
+            ]);
+            prisma.probe.updateMany.mockResolvedValue({ count: 1 });
+
+            const count = await service.markStaleProbesOffline();
+
+            expect(count).toBe(1);
+            expect(prisma.probe.updateMany).toHaveBeenCalledWith({
+                where: { id: { in: ['probe-silent'] }, status: 'ONLINE' },
                 data: { status: 'OFFLINE' },
             });
         });

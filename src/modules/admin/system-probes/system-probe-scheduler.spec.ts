@@ -26,11 +26,14 @@ function createScheduler() {
         getJson: jest.fn(),
         setJson: jest.fn(),
         del: jest.fn(),
+        setIfAbsent: jest.fn().mockResolvedValue(true),
+        releaseLock: jest.fn().mockResolvedValue(true),
     };
     const store = new SystemProbeAssignmentStore(redisService as never);
     const scheduler = new SystemProbeScheduler(
         prisma as unknown as PrismaService,
         store,
+        redisService as never,
     );
 
     return { scheduler, prisma, redisService };
@@ -136,5 +139,34 @@ describe('SystemProbeScheduler', () => {
             ['system-a'],
         );
         expect(prisma.monitor.findMany).not.toHaveBeenCalled();
+    });
+
+    it('skips the recompute while another instance holds the lock', async () => {
+        const { scheduler, prisma, redisService } = createScheduler();
+        redisService.setIfAbsent.mockResolvedValue(false);
+        redisService.getJson.mockResolvedValue({ 'system-a': ['monitor-1'] });
+
+        const assignments = await scheduler.rebalance();
+
+        expect(assignments).toEqual({ 'system-a': ['monitor-1'] });
+        expect(prisma.probe.findMany).not.toHaveBeenCalled();
+        expect(redisService.releaseLock).not.toHaveBeenCalled();
+    });
+
+    it('releases the lock after computing', async () => {
+        const { scheduler, prisma, redisService } = createScheduler();
+        prisma.probe.findMany.mockResolvedValue([]);
+
+        await scheduler.rebalance();
+
+        expect(redisService.setIfAbsent).toHaveBeenCalledWith(
+            'sys_probe:rebalance:lock',
+            expect.any(String),
+            30,
+        );
+        expect(redisService.releaseLock).toHaveBeenCalledWith(
+            'sys_probe:rebalance:lock',
+            expect.any(String),
+        );
     });
 });

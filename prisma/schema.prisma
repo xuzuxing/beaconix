@@ -721,19 +721,21 @@ model MonitorState {
 
 // 探针
 model Probe {
-  id             String        @id @default(cuid())
-  scope          ProbeScope    @default(TENANT)
-  organizationId String?
-  name           String
-  provider       ProbeProvider
-  region         String
-  callbackUrl    String
-  secret         String        @unique
-  enabled        Boolean       @default(true)
-  lastHeartbeat  DateTime?
-  status         ProbeStatus   @default(OFFLINE)
-  maxTenants     Int?          @default(0)
-  priority       Int           @default(0)
+  id                       String        @id @default(cuid())
+  scope                    ProbeScope    @default(TENANT)
+  organizationId           String?
+  name                     String
+  provider                 ProbeProvider
+  region                   String
+  callbackUrl              String
+  secret                   String        @unique
+  enabled                  Boolean       @default(true)
+  lastHeartbeat            DateTime?
+  // 探针最近一次上报的心跳周期（秒）；离线阈值按它的倍数推导，null = 未上报过
+  heartbeatIntervalSeconds Int?
+  status                   ProbeStatus   @default(OFFLINE)
+  maxTenants               Int?          @default(0)
+  priority                 Int           @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

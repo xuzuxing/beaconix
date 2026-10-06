@@ -60,6 +60,13 @@ export class ProbeEntity {
     @ApiPropertyOptional({ example: '2026-03-05T12:00:00.000Z' })
     lastHeartbeat: Date | null;
 
+    @ApiPropertyOptional({
+        example: 60,
+        description:
+            'Heartbeat interval the probe reported; the offline threshold is three times this value',
+    })
+    heartbeatIntervalSeconds: number | null;
+
     @ApiProperty({ enum: ['ONLINE', 'OFFLINE'], example: 'ONLINE' })
     status: string;
 
