@@ -244,7 +244,7 @@ model Invitation {
   organizationId String
   role           MembershipRole   @default(MEMBER)
   status         InvitationStatus @default(PENDING)
-  token          String           @unique @default(uuid())
+  token          String           @unique @default(cuid())
   expiresAt      DateTime
   sentById       String
   acceptedAt     DateTime?
@@ -891,7 +891,7 @@ model StatusPage {
 
 // 套餐定义
 model Plan {
-  id           String  @id @default(uuid())
+  id           String  @id @default(cuid())
   code         String  @unique
   name         String
   description  String?
@@ -922,7 +922,7 @@ model Plan {
 
 // 订阅栈
 model Subscription {
-  id             String @id @default(uuid())
+  id             String @id @default(cuid())
   organizationId String
   planId         String
 
@@ -947,7 +947,7 @@ model Subscription {
 
 // 订单
 model Order {
-  id             String @id @default(uuid())
+  id             String @id @default(cuid())
   orderNo        String @unique
   organizationId String
   planId         String
@@ -979,7 +979,7 @@ model Order {
 
 // 支付记录
 model Payment {
-  id            String         @id @default(uuid())
+  id            String         @id @default(cuid())
   orderId       String         @unique
   channel       PaymentChannel
   transactionId String?        @unique
