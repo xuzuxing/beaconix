@@ -1,6 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../infra/database/prisma.service';
+import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
+import {
+    SCHEDULED_JOBS,
+    SCHEDULED_JOB_PATTERNS,
+} from '../../../infra/scheduler/scheduled-jobs.constants';
 
 /**
  * Marks PENDING invitations as EXPIRED when their expiresAt date has passed.
@@ -9,14 +13,22 @@ import { PrismaService } from '../../../infra/database/prisma.service';
  * "EXPIRED — expiresAt passed — set by cron job"
  */
 @Injectable()
-export class InvitationExpiryService {
+export class InvitationExpiryService implements OnModuleInit {
     private readonly logger = new Logger(InvitationExpiryService.name);
 
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly registry: ScheduledJobRegistry,
+    ) {}
 
-    @Cron(CronExpression.EVERY_HOUR, {
-        name: 'invitation-expiry',
-    })
+    onModuleInit(): void {
+        this.registry.register({
+            name: SCHEDULED_JOBS.invitationExpiry,
+            pattern: SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.invitationExpiry],
+            handler: () => this.handleInvitationExpiry(),
+        });
+    }
+
     async handleInvitationExpiry(): Promise<void> {
         const jobStart = Date.now();
         this.logger.log('Starting invitation expiry check...');

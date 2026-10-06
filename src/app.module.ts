@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
-import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -14,6 +13,7 @@ import {
     probeConfig,
     redisConfig,
     resendConfig,
+    schedulerConfig,
     throttlerConfig,
     wechatConfig,
     JwtConfig,
@@ -22,6 +22,7 @@ import {
 import { PrismaModule } from './infra/database/prisma.module';
 import { QueueModule } from './infra/queue/queue.module';
 import { RedisModule } from './infra/redis/redis.module';
+import { ScheduledJobsModule } from './infra/scheduler/scheduled-jobs.module';
 import { WechatModule } from './infra/wechat/wechat.module';
 import { JwtAuthGuard } from './common/guards';
 import { AuthModule } from './modules/auth/auth.module';
@@ -66,6 +67,7 @@ import { LoggerModule } from './infra/logging/logger.module';
                 probeConfig,
                 redisConfig,
                 resendConfig,
+                schedulerConfig,
                 throttlerConfig,
                 wechatConfig,
             ],
@@ -96,7 +98,10 @@ import { LoggerModule } from './infra/logging/logger.module';
                 ];
             },
         }),
-        ScheduleModule.forRoot(),
+        // Recurring work runs through ScheduledJobsModule (BullMQ), so the
+        // in-process ScheduleModule is intentionally not registered: a `@Cron`
+        // decorator would silently never fire. Add ScheduleModule.forRoot() back
+        // if an in-process timer is ever needed again.
         PrismaModule,
         // infra
         CacheModule,
@@ -104,6 +109,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         LoggerModule,
         QueueModule,
         RedisModule,
+        ScheduledJobsModule,
         WechatModule,
         // business
         EmailModule,

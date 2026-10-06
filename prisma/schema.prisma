@@ -322,15 +322,18 @@ model Sprint {
 
 // TASK
 model Task {
-  id          String       @id @default(cuid())
-  number      Int // Auto-incremented task number per project (e.g., PROJ-42)
-  title       String
-  description String?
-  priority    TaskPriority @default(MEDIUM)
-  status      TaskStatus   @default(TODO)
-  storyPoints Int? // Agile story points estimation
-  dueDate     DateTime?
-  completedAt DateTime?
+  id                String       @id @default(cuid())
+  number            Int // Auto-incremented task number per project (e.g., PROJ-42)
+  title             String
+  description       String?
+  priority          TaskPriority @default(MEDIUM)
+  status            TaskStatus   @default(TODO)
+  storyPoints       Int? // Agile story points estimation
+  dueDate           DateTime?
+  completedAt       DateTime?
+  // 提醒去重标记：置位后同一轮提醒不会重复发送（改 dueDate 时重置）
+  dueSoonNotifiedAt DateTime?
+  overdueNotifiedAt DateTime?
 
   // Multi-tenant isolation fields
   organizationId String

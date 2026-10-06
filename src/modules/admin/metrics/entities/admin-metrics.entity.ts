@@ -131,6 +131,12 @@ export class AdminSchedulerJobEntity {
     everyMs: number | null;
 
     @ApiPropertyOptional({
+        example: '0 8 * * *',
+        description: 'Cron pattern for the job, when it is not interval based',
+    })
+    pattern: string | null;
+
+    @ApiPropertyOptional({
         example: '2026-10-06T13:00:10.000Z',
         description: 'When the scheduler fires next',
     })
@@ -175,6 +181,9 @@ export class AdminSchedulerHealthEntity {
 
     @ApiProperty({ type: AdminSchedulerQueueEntity })
     checkQueue: AdminSchedulerQueueEntity;
+
+    @ApiProperty({ type: AdminSchedulerQueueEntity })
+    scheduledQueue: AdminSchedulerQueueEntity;
 
     @ApiProperty({ type: [AdminSchedulerJobEntity] })
     schedulers: AdminSchedulerJobEntity[];

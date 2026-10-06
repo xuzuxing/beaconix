@@ -1,6 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../infra/database/prisma.service';
+import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
+import {
+    SCHEDULED_JOBS,
+    SCHEDULED_JOB_PATTERNS,
+} from '../../../infra/scheduler/scheduled-jobs.constants';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -50,14 +54,22 @@ const RETENTION_TARGETS: RetentionTarget[] = [
  * batches so removing a large backlog never holds one long transaction.
  */
 @Injectable()
-export class MonitorDataCleanupService {
+export class MonitorDataCleanupService implements OnModuleInit {
     private readonly logger = new Logger(MonitorDataCleanupService.name);
 
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly registry: ScheduledJobRegistry,
+    ) {}
 
-    @Cron(CronExpression.EVERY_DAY_AT_3AM, {
-        name: 'monitor-data-cleanup',
-    })
+    onModuleInit(): void {
+        this.registry.register({
+            name: SCHEDULED_JOBS.monitorDataCleanup,
+            pattern: SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.monitorDataCleanup],
+            handler: () => this.handleCleanup(),
+        });
+    }
+
     async handleCleanup(): Promise<void> {
         const startedAt = Date.now();
 

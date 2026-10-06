@@ -3,12 +3,15 @@ import type { PrismaService } from '../../../infra/database/prisma.service';
 
 function createService() {
     const prisma = { $executeRawUnsafe: jest.fn() };
+    const registry = { register: jest.fn() };
 
     return {
         service: new MonitorDataCleanupService(
             prisma as unknown as PrismaService,
+            registry as never,
         ),
         prisma,
+        registry,
     };
 }
 

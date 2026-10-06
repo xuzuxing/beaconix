@@ -34,6 +34,7 @@ function createScheduler() {
         prisma as unknown as PrismaService,
         store,
         redisService as never,
+        { register: jest.fn() } as never,
     );
 
     return { scheduler, prisma, redisService };

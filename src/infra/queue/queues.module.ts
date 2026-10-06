@@ -5,6 +5,7 @@ import {
     MONITOR_SCAN_QUEUE,
 } from '../../modules/checker/checker.queue';
 import { NOTIFICATION_QUEUE } from '../../modules/notifier/notifier.queue';
+import { SCHEDULED_JOBS_QUEUE } from '../scheduler/scheduled-jobs.constants';
 import { QueueModule, registerQueue } from './queue.module';
 
 /**
@@ -15,6 +16,7 @@ const QUEUE_NAMES = [
     MONITOR_SCAN_QUEUE,
     MONITOR_CHECK_QUEUE,
     NOTIFICATION_QUEUE,
+    SCHEDULED_JOBS_QUEUE,
 ];
 
 /**

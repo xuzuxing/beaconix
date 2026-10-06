@@ -32,6 +32,17 @@ const userSelect = {
     avatarUrl: true,
 } as const;
 
+/**
+ * A task reminder cycle restarts only when the due date actually moves, so
+ * editing other fields keeps the "already reminded" markers intact.
+ */
+export function dueDateChanged(
+    previous: Date | null | undefined,
+    next: Date | null,
+): boolean {
+    return (next?.getTime() ?? null) !== (previous?.getTime() ?? null);
+}
+
 // Human-readable labels for the fields tracked by buildActivityRecords
 const TRACKED_FIELD_LABELS: Record<string, string> = {
     title: 'title',
@@ -288,7 +299,15 @@ export class TasksService {
         // Handle status change → auto-set completedAt
         const data: any = { ...dto };
         if (dto.dueDate !== undefined) {
-            data.dueDate = dto.dueDate ? new Date(dto.dueDate) : null;
+            const nextDueDate = dto.dueDate ? new Date(dto.dueDate) : null;
+
+            data.dueDate = nextDueDate;
+
+            // A changed due date starts a fresh reminder cycle.
+            if (dueDateChanged(existing.dueDate, nextDueDate)) {
+                data.dueSoonNotifiedAt = null;
+                data.overdueNotifiedAt = null;
+            }
         }
         if (dto.status === 'DONE' && existing.status !== 'DONE') {
             data.completedAt = new Date();

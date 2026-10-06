@@ -1,8 +1,12 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { RedisService } from '../../../infra/redis/redis.service';
+import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
+import {
+    SCHEDULED_JOBS,
+    SCHEDULED_JOB_PATTERNS,
+} from '../../../infra/scheduler/scheduled-jobs.constants';
 import { ProbeScope, ProbeStatus } from '../../../generated/prisma/enums';
 import {
     SystemProbeAssignmentStore,
@@ -21,15 +25,22 @@ export class SystemProbeScheduler implements OnModuleInit {
         private readonly prisma: PrismaService,
         private readonly assignmentStore: SystemProbeAssignmentStore,
         private readonly redisService: RedisService,
+        private readonly registry: ScheduledJobRegistry,
     ) {}
 
     async onModuleInit(): Promise<void> {
+        this.registry.register({
+            name: SCHEDULED_JOBS.systemProbeAssignmentRefresh,
+            pattern:
+                SCHEDULED_JOB_PATTERNS[
+                    SCHEDULED_JOBS.systemProbeAssignmentRefresh
+                ],
+            handler: () => this.refreshAssignments(),
+        });
+
         await this.rebalance();
     }
 
-    @Cron(CronExpression.EVERY_HOUR, {
-        name: 'system-probe-assignment-refresh',
-    })
     async refreshAssignments(): Promise<void> {
         await this.rebalance();
     }

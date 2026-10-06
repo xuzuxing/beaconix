@@ -3,12 +3,17 @@ import {
     Injectable,
     Logger,
     NotFoundException,
+    OnModuleInit,
     UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { ScheduledJobRegistry } from '../../infra/scheduler/scheduled-job.registry';
+import {
+    SCHEDULED_JOBS,
+    SCHEDULED_JOB_PATTERNS,
+} from '../../infra/scheduler/scheduled-jobs.constants';
 import { PROBE_OFFLINE_INTERVAL_FACTOR } from '../../config';
 import type { ProbeConfig } from '../../config';
 import {
@@ -81,7 +86,7 @@ export interface ProbeHeartbeatResult {
 }
 
 @Injectable()
-export class ProbesService {
+export class ProbesService implements OnModuleInit {
     private readonly logger = new Logger(ProbesService.name);
 
     constructor(
@@ -90,7 +95,16 @@ export class ProbesService {
         private readonly systemProbeScheduler: SystemProbeScheduler,
         private readonly quotaService: QuotaService,
         private readonly configService: ConfigService,
+        private readonly registry: ScheduledJobRegistry,
     ) {}
+
+    onModuleInit(): void {
+        this.registry.register({
+            name: SCHEDULED_JOBS.probeOfflineSweep,
+            pattern: SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.probeOfflineSweep],
+            handler: () => this.markStaleProbesOffline(),
+        });
+    }
 
     async create(orgId: string, dto: CreateProbeDto): Promise<ProbeEntity> {
         await this.quotaService.assertFeatureAllowed(orgId, 'tenantProbe');
@@ -550,7 +564,6 @@ export class ProbesService {
      * two minutes used to flip slow probes offline between two beats, which also
      * removed them from the system probe assignment table.
      */
-    @Cron(CronExpression.EVERY_MINUTE, { name: 'probe-offline-sweep' })
     async markStaleProbesOffline(): Promise<number> {
         const now = Date.now();
 

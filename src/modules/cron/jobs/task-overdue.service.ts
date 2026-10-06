@@ -1,6 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../infra/database/prisma.service';
+import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
+import {
+    SCHEDULED_JOBS,
+    SCHEDULED_JOB_PATTERNS,
+} from '../../../infra/scheduler/scheduled-jobs.constants';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { EmailService } from '../../email/email.service';
 import { EmailTemplate } from '../../email/email.types';
@@ -12,30 +16,44 @@ import { EmailTemplate } from '../../email/email.types';
  * NotificationType.TASK_OVERDUE — sent to watchers when a task is past its due date.
  */
 @Injectable()
-export class TaskOverdueService {
+export class TaskOverdueService implements OnModuleInit {
     private readonly logger = new Logger(TaskOverdueService.name);
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
         private readonly emailService: EmailService,
+        private readonly registry: ScheduledJobRegistry,
     ) {}
 
-    @Cron(CronExpression.EVERY_DAY_AT_8AM, {
-        name: 'task-overdue',
-    })
+    onModuleInit(): void {
+        this.registry.register({
+            name: SCHEDULED_JOBS.taskOverdue,
+            pattern: SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.taskOverdue],
+            handler: () => this.handleTaskOverdue(),
+        });
+    }
+
     async handleTaskOverdue(): Promise<void> {
         const jobStart = Date.now();
         this.logger.log('Starting task overdue check...');
 
         try {
             const now = new Date();
+            const dayStart = new Date(now);
+            dayStart.setHours(0, 0, 0, 0);
 
             const tasks = await this.prisma.task.findMany({
                 where: {
                     dueDate: { lt: now },
                     deletedAt: null,
                     status: { notIn: ['DONE', 'CANCELLED'] },
+                    // Reminded at most once per day; without this the job would
+                    // re-notify every overdue task on every run.
+                    OR: [
+                        { overdueNotifiedAt: null },
+                        { overdueNotifiedAt: { lt: dayStart } },
+                    ],
                 },
                 include: {
                     project: { select: { key: true } },
@@ -49,8 +67,25 @@ export class TaskOverdueService {
             this.logger.log(`Found ${tasks.length} overdue task(s)`);
 
             let notifiedCount = 0;
+            let remindedCount = 0;
 
             for (const task of tasks) {
+                // Claim today's reminder before sending: several replicas (or a
+                // retried job) must not notify the same task twice in one day.
+                const { count } = await this.prisma.task.updateMany({
+                    where: {
+                        id: task.id,
+                        OR: [
+                            { overdueNotifiedAt: null },
+                            { overdueNotifiedAt: { lt: dayStart } },
+                        ],
+                    },
+                    data: { overdueNotifiedAt: new Date() },
+                });
+
+                if (count === 0) continue;
+                remindedCount += 1;
+
                 const watcherIds = task.watchers.map((w) => w.userId);
 
                 // Notify all watchers via SSE
@@ -93,7 +128,8 @@ export class TaskOverdueService {
             const duration = Date.now() - jobStart;
             this.logger.log(
                 `Task overdue check completed in ${duration}ms — ` +
-                    `tasks: ${tasks.length}, notifications: ${notifiedCount}`,
+                    `tasks: ${tasks.length}, reminded: ${remindedCount}, ` +
+                    `notifications: ${notifiedCount}`,
             );
         } catch (error) {
             const duration = Date.now() - jobStart;

@@ -1,0 +1,46 @@
+/**
+ * Queue that carries every recurring job. A single scheduler in Redis produces
+ * the jobs and any number of replicas may host a worker, but each job is
+ * delivered to exactly one worker - that is what replaces the in-process
+ * `@Cron` timers, which ran once per replica.
+ */
+export const SCHEDULED_JOBS_QUEUE = 'scheduled-jobs';
+
+/**
+ * Stable job ids. They double as the BullMQ job scheduler id and the queue job
+ * name, and they match the names the old `@Cron(...)` decorators used.
+ */
+export const SCHEDULED_JOBS = {
+    invitationExpiry: 'invitation-expiry',
+    taskDueSoon: 'task-due-soon',
+    taskOverdue: 'task-overdue',
+    tokenCleanup: 'token-cleanup',
+    monitorDataCleanup: 'monitor-data-cleanup',
+    orderExpirySweep: 'order-expiry-sweep',
+    subscriptionExpirySweep: 'subscription-expiry-sweep',
+    systemProbeAssignmentRefresh: 'system-probe-assignment-refresh',
+    probeOfflineSweep: 'probe-offline-sweep',
+} as const;
+
+export type ScheduledJobName =
+    (typeof SCHEDULED_JOBS)[keyof typeof SCHEDULED_JOBS];
+
+/**
+ * Cron pattern per job, in **five fields** (`minute hour day month weekday`) as
+ * cron-parser - and therefore BullMQ - expects them.
+ *
+ * The old `@nestjs/schedule` expressions were a mix of five and six fields
+ * (for example `EVERY_HOUR = '0 0-23/1 * * *'`), so they must not be copied over
+ * verbatim; keep this table as the single source of truth for the schedule.
+ */
+export const SCHEDULED_JOB_PATTERNS: Record<ScheduledJobName, string> = {
+    'invitation-expiry': '0 * * * *',
+    'task-due-soon': '0 */6 * * *',
+    'task-overdue': '0 8 * * *',
+    'token-cleanup': '0 2 * * *',
+    'monitor-data-cleanup': '0 3 * * *',
+    'order-expiry-sweep': '*/5 * * * *',
+    'subscription-expiry-sweep': '0 * * * *',
+    'system-probe-assignment-refresh': '0 * * * *',
+    'probe-offline-sweep': '* * * * *',
+};

@@ -88,6 +88,7 @@ function createService() {
         systemProbeScheduler as never,
         billingService as never,
         configService as never,
+        { register: jest.fn() } as never,
     );
 
     return {

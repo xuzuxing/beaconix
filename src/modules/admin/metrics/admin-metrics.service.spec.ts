@@ -39,14 +39,31 @@ function createService() {
             completed: 9,
         }),
     };
+    const scheduledQueue = {
+        getJobCounts: jest.fn().mockResolvedValue({
+            waiting: 0,
+            active: 0,
+            delayed: 9,
+            failed: 0,
+            completed: 42,
+        }),
+        getJobSchedulers: jest.fn().mockResolvedValue([
+            {
+                id: 'task-overdue',
+                pattern: '0 8 * * *',
+                next: 1_760_000_000_000,
+            },
+        ]),
+    };
 
     const service = new AdminMetricsService(
         prisma as unknown as PrismaService,
         scanQueue as never,
         checkQueue as never,
+        scheduledQueue as never,
     );
 
-    return { service, prisma, scanQueue, checkQueue };
+    return { service, prisma, scanQueue, checkQueue, scheduledQueue };
 }
 
 describe('AdminMetricsService', () => {
@@ -187,7 +204,7 @@ describe('AdminMetricsService', () => {
     });
 
     it('reports queue backlog, registered schedulers and the due backlog', async () => {
-        const { service, prisma, scanQueue } = createService();
+        const { service, prisma, scanQueue, scheduledQueue } = createService();
         prisma.monitor.count.mockResolvedValue(320);
         prisma.probe.groupBy.mockResolvedValue([
             { status: 'ONLINE', _count: 45 },
@@ -204,12 +221,31 @@ describe('AdminMetricsService', () => {
             'failed',
             'completed',
         );
+        expect(scheduledQueue.getJobCounts).toHaveBeenCalledWith(
+            'waiting',
+            'active',
+            'delayed',
+            'failed',
+            'completed',
+        );
         expect(health.scanQueue).toMatchObject({ delayed: 1, completed: 5 });
         expect(health.checkQueue).toMatchObject({ waiting: 2, active: 1 });
+        expect(health.scheduledQueue).toMatchObject({
+            delayed: 9,
+            completed: 42,
+        });
+        // Interval based ticks and cron based jobs are reported together.
         expect(health.schedulers).toEqual([
             {
                 id: 'monitor-checker',
                 everyMs: 10000,
+                pattern: null,
+                nextRunAt: new Date(1_760_000_000_000),
+            },
+            {
+                id: 'task-overdue',
+                everyMs: null,
+                pattern: '0 8 * * *',
                 nextRunAt: new Date(1_760_000_000_000),
             },
         ]);

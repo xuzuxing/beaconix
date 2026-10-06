@@ -1,6 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../infra/database/prisma.service';
+import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
+import {
+    SCHEDULED_JOBS,
+    SCHEDULED_JOB_PATTERNS,
+} from '../../../infra/scheduler/scheduled-jobs.constants';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { EmailService } from '../../email/email.service';
 import { EmailTemplate } from '../../email/email.types';
@@ -12,18 +16,24 @@ import { EmailTemplate } from '../../email/email.types';
  * NotificationType.TASK_DUE_SOON — sent to watchers when due date approaches.
  */
 @Injectable()
-export class TaskDueSoonService {
+export class TaskDueSoonService implements OnModuleInit {
     private readonly logger = new Logger(TaskDueSoonService.name);
 
     constructor(
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
         private readonly emailService: EmailService,
+        private readonly registry: ScheduledJobRegistry,
     ) {}
 
-    @Cron(CronExpression.EVERY_6_HOURS, {
-        name: 'task-due-soon',
-    })
+    onModuleInit(): void {
+        this.registry.register({
+            name: SCHEDULED_JOBS.taskDueSoon,
+            pattern: SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.taskDueSoon],
+            handler: () => this.handleTaskDueSoon(),
+        });
+    }
+
     async handleTaskDueSoon(): Promise<void> {
         const jobStart = Date.now();
         this.logger.log('Starting task due-soon check...');
@@ -37,6 +47,9 @@ export class TaskDueSoonService {
                     dueDate: { gte: now, lte: in24h },
                     deletedAt: null,
                     status: { notIn: ['DONE', 'CANCELLED'] },
+                    // Reminded already for this due date; the marker is cleared
+                    // whenever the due date changes.
+                    dueSoonNotifiedAt: null,
                 },
                 include: {
                     project: { select: { key: true } },
@@ -52,8 +65,20 @@ export class TaskDueSoonService {
             );
 
             let notifiedCount = 0;
+            let remindedCount = 0;
 
             for (const task of tasks) {
+                // Claim the reminder before sending anything: with several app
+                // replicas (or a retried job) only one caller may notify, and
+                // the 24h window would otherwise fire on every 6h run.
+                const { count } = await this.prisma.task.updateMany({
+                    where: { id: task.id, dueSoonNotifiedAt: null },
+                    data: { dueSoonNotifiedAt: new Date() },
+                });
+
+                if (count === 0) continue;
+                remindedCount += 1;
+
                 const watcherIds = task.watchers.map((w) => w.userId);
 
                 // Notify all watchers via SSE
@@ -96,7 +121,8 @@ export class TaskDueSoonService {
             const duration = Date.now() - jobStart;
             this.logger.log(
                 `Task due-soon check completed in ${duration}ms — ` +
-                    `tasks: ${tasks.length}, notifications: ${notifiedCount}`,
+                    `tasks: ${tasks.length}, reminded: ${remindedCount}, ` +
+                    `notifications: ${notifiedCount}`,
             );
         } catch (error) {
             const duration = Date.now() - jobStart;

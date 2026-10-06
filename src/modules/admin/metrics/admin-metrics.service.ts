@@ -7,6 +7,7 @@ import {
     MONITOR_CHECK_QUEUE,
     MONITOR_SCAN_QUEUE,
 } from '../../checker/checker.queue';
+import { SCHEDULED_JOBS_QUEUE } from '../../../infra/scheduler/scheduled-jobs.constants';
 import {
     AdminMetricsOverviewEntity,
     AdminSchedulerBacklogEntity,
@@ -27,6 +28,8 @@ export class AdminMetricsService {
         private readonly scanQueue: Queue,
         @InjectQueue(MONITOR_CHECK_QUEUE)
         private readonly checkQueue: Queue,
+        @InjectQueue(SCHEDULED_JOBS_QUEUE)
+        private readonly scheduledQueue: Queue,
     ) {}
 
     /**
@@ -37,6 +40,7 @@ export class AdminMetricsService {
         const [
             scanCounts,
             checkCounts,
+            scheduledCounts,
             schedulers,
             dueMonitors,
             enabledMonitors,
@@ -44,7 +48,8 @@ export class AdminMetricsService {
         ] = await Promise.all([
             this.countJobs(this.scanQueue),
             this.countJobs(this.checkQueue),
-            this.scanQueue.getJobSchedulers(),
+            this.countJobs(this.scheduledQueue),
+            this.getSchedulers(),
             this.countDueMonitors(),
             this.prisma.monitor.count({
                 where: { enabled: true, deletedAt: null },
@@ -58,16 +63,8 @@ export class AdminMetricsService {
         return new AdminSchedulerHealthEntity({
             scanQueue: scanCounts,
             checkQueue: checkCounts,
-            schedulers: schedulers.map(
-                (scheduler) =>
-                    new AdminSchedulerJobEntity({
-                        id: scheduler.id ?? scheduler.key,
-                        everyMs: scheduler.every ?? null,
-                        nextRunAt: scheduler.next
-                            ? new Date(scheduler.next)
-                            : null,
-                    }),
-            ),
+            scheduledQueue: scheduledCounts,
+            schedulers,
             backlog: new AdminSchedulerBacklogEntity({
                 enabledMonitors,
                 dueMonitors,
@@ -77,6 +74,24 @@ export class AdminMetricsService {
                 offline: probeCount(ProbeStatus.OFFLINE),
             }),
         });
+    }
+
+    /** Schedules published by the monitor tick and by the recurring jobs. */
+    private async getSchedulers(): Promise<AdminSchedulerJobEntity[]> {
+        const [scanSchedulers, scheduledSchedulers] = await Promise.all([
+            this.scanQueue.getJobSchedulers(),
+            this.scheduledQueue.getJobSchedulers(),
+        ]);
+
+        return [...scanSchedulers, ...scheduledSchedulers].map(
+            (scheduler) =>
+                new AdminSchedulerJobEntity({
+                    id: scheduler.id ?? scheduler.key,
+                    everyMs: scheduler.every ?? null,
+                    pattern: scheduler.pattern ?? null,
+                    nextRunAt: scheduler.next ? new Date(scheduler.next) : null,
+                }),
+        );
     }
 
     async getOverview(): Promise<AdminMetricsOverviewEntity> {

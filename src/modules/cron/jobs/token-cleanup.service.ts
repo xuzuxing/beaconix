@@ -1,6 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../../infra/database/prisma.service';
+import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
+import {
+    SCHEDULED_JOBS,
+    SCHEDULED_JOB_PATTERNS,
+} from '../../../infra/scheduler/scheduled-jobs.constants';
 
 /**
  * Cleans up expired and revoked refresh tokens from the database.
@@ -9,14 +13,22 @@ import { PrismaService } from '../../../infra/database/prisma.service';
  * "Cron: DELETE WHERE expiresAt < now() to keep table clean"
  */
 @Injectable()
-export class TokenCleanupService {
+export class TokenCleanupService implements OnModuleInit {
     private readonly logger = new Logger(TokenCleanupService.name);
 
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly registry: ScheduledJobRegistry,
+    ) {}
 
-    @Cron(CronExpression.EVERY_DAY_AT_2AM, {
-        name: 'token-cleanup',
-    })
+    onModuleInit(): void {
+        this.registry.register({
+            name: SCHEDULED_JOBS.tokenCleanup,
+            pattern: SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.tokenCleanup],
+            handler: () => this.handleTokenCleanup(),
+        });
+    }
+
     async handleTokenCleanup(): Promise<void> {
         const jobStart = Date.now();
         this.logger.log('Starting expired token cleanup...');
