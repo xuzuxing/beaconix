@@ -9,6 +9,8 @@ export interface HttpCheckOptions {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** How many leading characters of the response body to keep for rules. */
+const BODY_SNIPPET_LENGTH = 512;
 
 @Injectable()
 export class HttpChecker {
@@ -52,13 +54,16 @@ export class HttpChecker {
 
             const latency = Date.now() - startedAt;
 
-            // Drain the body so the connection can be reused/closed cleanly.
-            await response.arrayBuffer().catch(() => undefined);
+            // Read a bounded body snippet for bodyContains rules; this also
+            // drains the body so the connection can be reused/closed cleanly.
+            const bodyContains = await this.readBodySnippet(response);
 
             if (response.status !== expectedStatus) {
                 return this.failure(
                     latency,
                     `Unexpected status ${response.status} (expected ${expectedStatus})`,
+                    response.status,
+                    bodyContains,
                 );
             }
 
@@ -76,6 +81,8 @@ export class HttpChecker {
                         error: sslFailure,
                         checkedAt: new Date(),
                         ssl,
+                        statusCode: response.status,
+                        bodyContains,
                     };
                 }
 
@@ -85,6 +92,8 @@ export class HttpChecker {
                     error: null,
                     checkedAt: new Date(),
                     ssl,
+                    statusCode: response.status,
+                    bodyContains,
                 };
             }
 
@@ -93,6 +102,8 @@ export class HttpChecker {
                 latency,
                 error: null,
                 checkedAt: new Date(),
+                statusCode: response.status,
+                bodyContains,
             };
         } catch (error) {
             return this.failure(
@@ -102,8 +113,27 @@ export class HttpChecker {
         }
     }
 
-    private failure(latency: number, error: string): CheckResult {
-        return { success: false, latency, error, checkedAt: new Date() };
+    private failure(
+        latency: number,
+        error: string,
+        statusCode: number | null = null,
+        bodyContains: string | null = null,
+    ): CheckResult {
+        return {
+            success: false,
+            latency,
+            error,
+            checkedAt: new Date(),
+            statusCode,
+            bodyContains,
+        };
+    }
+
+    /** Reads a bounded body snippet (also drains the response body). */
+    private async readBodySnippet(response: Response): Promise<string | null> {
+        const text = await response.text().catch(() => '');
+        const trimmed = text.trim();
+        return trimmed ? trimmed.slice(0, BODY_SNIPPET_LENGTH) : null;
     }
 
     private inspectSslCertificate(

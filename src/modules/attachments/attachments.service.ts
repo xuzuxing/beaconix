@@ -9,7 +9,7 @@ import 'multer';
 import type { Attachment } from '../../generated/prisma/client';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { SaveAttachmentDto } from './dto';
-import { AttachmentEntity } from './entities';
+import { AttachmentEntity, PublicUploadEntity } from './entities';
 import { StorageService } from './storage';
 import { SettingsService } from '../settings';
 
@@ -123,6 +123,36 @@ export class AttachmentsService {
         });
 
         return new AttachmentEntity(updated);
+    }
+
+    async uploadPublic(file: Express.Multer.File | undefined, userId: string) {
+        if (!file) {
+            throw new BadRequestException('File is required');
+        }
+
+        await this.validateFile(file);
+
+        const stored = await this.storage.putObject({
+            buffer: file.buffer,
+            filename: file.originalname,
+            mimeType: file.mimetype || 'application/octet-stream',
+            size: file.size,
+            organizationId: 'public',
+            taskId: 'public',
+            uploadedById: userId,
+        });
+
+        return new PublicUploadEntity({
+            filename: file.originalname,
+            mimeType: file.mimetype || 'application/octet-stream',
+            size: file.size,
+            storageProvider: stored.provider,
+            bucket: stored.bucket,
+            fileKey: stored.key,
+            url: stored.url,
+            checksum: stored.checksum,
+            uploadedById: userId,
+        });
     }
 
     async getDownload(taskId: string, attachmentId: string) {

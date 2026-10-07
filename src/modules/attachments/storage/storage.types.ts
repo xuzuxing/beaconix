@@ -9,7 +9,7 @@ export interface PutObjectInput {
     size: number;
     organizationId: string;
     taskId: string;
-    uploadedById: string;
+    uploadedById?: string;
 }
 
 export interface PutObjectResult {

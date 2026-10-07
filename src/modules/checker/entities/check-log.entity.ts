@@ -31,6 +31,12 @@ export class CheckLogEntity {
     @ApiPropertyOptional({ example: 'connect ECONNREFUSED' })
     error: string | null;
 
+    @ApiPropertyOptional({
+        example: 200,
+        description: 'Actual HTTP status code; null for TCP or no response',
+    })
+    statusCode: number | null;
+
     @ApiProperty({
         enum: CheckSource,
         example: CheckSource.LOCAL,

@@ -322,6 +322,7 @@ describe('ProbesService', () => {
                         success: false,
                         latency: 30,
                         error: 'boom',
+                        statusCode: null,
                         checkedAt: expect.any(Date),
                     },
                     {
@@ -330,6 +331,7 @@ describe('ProbesService', () => {
                         success: true,
                         latency: 5,
                         error: null,
+                        statusCode: null,
                         checkedAt: expect.any(Date),
                     },
                 ],

@@ -38,6 +38,16 @@ export class ProbeResultItemDto {
     error?: string;
 
     @ApiPropertyOptional({
+        example: 200,
+        description: 'Actual HTTP status code observed by the probe (optional)',
+    })
+    @IsOptional()
+    @IsInt()
+    @Min(100)
+    @Max(599)
+    statusCode?: number;
+
+    @ApiPropertyOptional({
         example: '2026-03-05T12:00:00.000Z',
         description: 'Defaults to the time the report is received',
     })

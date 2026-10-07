@@ -6,10 +6,10 @@
  * 拉同一份数据驱动渲染。
  */
 
-// 核心字段（阶段 1，检测链路已存在）
+// 核心字段：检测器一贯提供
 export type CoreRuleField = 'success' | 'latency' | 'certDaysRemaining';
 
-// 扩展字段（阶段 2，需先扩展采集层）
+// 扩展字段：需要检测器额外采集（实际状态码、响应体片段）
 export type ExtendedRuleField = 'statusCode' | 'bodyContains';
 
 export type RuleField = CoreRuleField | ExtendedRuleField;
@@ -48,7 +48,6 @@ export interface RuleContext {
     success?: boolean;
     latency?: number;
     certDaysRemaining?: number;
-    /** 阶段 2： */
     statusCode?: number;
     bodyContains?: string;
 }

@@ -169,6 +169,7 @@ describe('CheckerService', () => {
                 ssl: undefined,
                 localSuccess: true,
                 rescuedByProbe: false,
+                statusCode: null,
             });
             expect(notifierService.notifyTransition).toHaveBeenCalledTimes(1);
             expect(prisma.probeExecution.create).toHaveBeenCalledWith({
@@ -336,6 +337,7 @@ describe('CheckerService', () => {
                 ssl: undefined,
                 localSuccess: false,
                 rescuedByProbe: true,
+                statusCode: null,
             });
         });
 
@@ -537,8 +539,46 @@ describe('CheckerService', () => {
                 ssl: undefined,
                 localSuccess: false,
                 rescuedByProbe: true,
+                statusCode: null,
             });
             expect(result?.monitorId).toBe('monitor-1');
+        });
+
+        it('carries the probe-reported status code into the check outcome', async () => {
+            const { service, prisma, stateService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.checkLog.findFirst.mockResolvedValue({
+                id: 'log-1',
+                monitorId: 'monitor-1',
+                success: false,
+                latency: 30,
+                error: 'HTTP 500',
+                source: 'LOCAL',
+                checkedAt: checkResult.checkedAt,
+            });
+            prisma.probeResult.findMany.mockResolvedValue([
+                {
+                    id: 'probe-result-1',
+                    probeId: 'probe-1',
+                    target: monitorRow.target,
+                    success: false,
+                    latency: 40,
+                    error: 'timeout',
+                    checkedAt: checkResult.checkedAt,
+                },
+            ]);
+
+            await service.ingestProbeReport('org-1', {
+                target: 'https://api.example.com/health',
+                success: false,
+                latency: 40,
+                statusCode: 503,
+            });
+
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({ statusCode: 503 }),
+            );
         });
 
         it('does not apply a probe report before any local baseline exists', async () => {
@@ -985,6 +1025,7 @@ describe('CheckerService', () => {
                     success: true,
                     latency: 12,
                     certDaysRemaining: undefined,
+                    statusCode: undefined,
                 },
             );
             expect(notifierService.notifyRuleAlert).toHaveBeenCalledWith(
@@ -1092,6 +1133,39 @@ describe('CheckerService', () => {
                 sent: 0,
                 failed: 0,
             });
+        });
+
+        it('passes the actual HTTP status code into the rule context', async () => {
+            const {
+                service,
+                prisma,
+                stateService,
+                httpChecker,
+                ruleEvaluator,
+                ruleGroups,
+            } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            stateService.record.mockResolvedValue({
+                monitor: monitorRow,
+                state: stateRow,
+                transition: noChangeTransition,
+            });
+            httpChecker.check.mockResolvedValue({
+                success: false,
+                latency: 30,
+                error: 'Unexpected status 503 (expected 200)',
+                checkedAt: checkResult.checkedAt,
+                statusCode: 503,
+            });
+            ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
+            ruleEvaluator.evaluate.mockReturnValue(true);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(ruleEvaluator.evaluate).toHaveBeenCalledWith(
+                binding.ruleGroup.tree,
+                expect.objectContaining({ statusCode: 503 }),
+            );
         });
     });
 });

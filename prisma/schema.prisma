@@ -930,6 +930,8 @@ model ProbeResult {
   target    String
   success   Boolean
   error     String?
+  // 探针观测到的实际 HTTP 状态码（可选）
+  statusCode Int?
   latency   Int
   checkedAt DateTime @default(now())
 
@@ -978,6 +980,8 @@ model CheckLog {
   rescuedByProbe Boolean     @default(false)
   latency        Int
   error          String?
+  // 实际 HTTP 状态码（服务器有响应时），供规则与历史使用
+  statusCode     Int?
   source         CheckSource @default(LOCAL)
   checkedAt      DateTime    @default(now())
 

@@ -64,9 +64,11 @@ export class OssStorageProvider implements AttachmentStorageProvider {
                 ContentType: input.mimeType,
                 Metadata: {
                     checksum,
-                    uploadedById: input.uploadedById,
                     taskId: input.taskId,
                     organizationId: input.organizationId,
+                    ...(input.uploadedById
+                        ? { uploadedById: input.uploadedById }
+                        : {}),
                 },
             }),
         );

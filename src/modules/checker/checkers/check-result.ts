@@ -14,6 +14,10 @@ export interface CheckResult {
     checkedAt: Date;
     /** Present when SSL certificate monitoring was requested. */
     ssl?: SslCertificateInfo | null;
+    /** Actual HTTP status code when the server responded (null otherwise). */
+    statusCode?: number | null;
+    /** Bounded snippet of the response body, for bodyContains rules. */
+    bodyContains?: string | null;
 }
 
 /** A result reported by a remote probe. */
@@ -23,6 +27,8 @@ export interface ProbeReport {
     latency: number;
     error?: string | null;
     checkedAt?: Date;
+    /** Actual HTTP status code the probe observed, when it has one. */
+    statusCode?: number | null;
 }
 
 /** Normalizes fetch/socket failures into a short, human-readable message. */

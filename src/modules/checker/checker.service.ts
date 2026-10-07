@@ -202,6 +202,8 @@ export class CheckerService {
                 latency: localLog.latency,
                 error: localLog.error,
                 checkedAt: report.checkedAt ?? new Date(),
+                statusCode:
+                    report.statusCode ?? localLog.statusCode ?? null,
             },
             ExecutionTrigger.CALLBACK,
         );
@@ -353,6 +355,7 @@ export class CheckerService {
                 ssl: result.ssl,
                 localSuccess: localResult.success,
                 rescuedByProbe,
+                statusCode: result.statusCode ?? null,
             },
         );
 
@@ -659,7 +662,8 @@ export class CheckerService {
             success: result.success,
             latency: result.latency,
             certDaysRemaining: result.ssl?.daysRemaining,
-            // 阶段 2：statusCode / bodyContains
+            statusCode: result.statusCode ?? undefined,
+            bodyContains: result.bodyContains ?? undefined,
         };
     }
 

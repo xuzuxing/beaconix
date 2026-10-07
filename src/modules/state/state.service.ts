@@ -24,6 +24,8 @@ export interface CheckOutcome {
     localSuccess?: boolean | null;
     /** True when a failing local check was rescued by a successful probe. */
     rescuedByProbe?: boolean;
+    /** Actual HTTP status code, persisted on the CheckLog row. */
+    statusCode?: number | null;
 }
 
 export interface DerivedState {
@@ -142,6 +144,7 @@ export class StateService {
                     rescuedByProbe,
                     latency: outcome.latency,
                     error,
+                    statusCode: outcome.statusCode ?? null,
                     source,
                     checkedAt,
                 },

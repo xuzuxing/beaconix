@@ -682,6 +682,7 @@ All endpoints are prefixed with `/api`. Protected endpoints require a `Bearer` t
 
 | Method | Endpoint | Description | Min Role |
 |---|---|---|---|
+| `POST` | `/api/attachments/upload` | Upload a file without creating task attachment metadata | Authenticated |
 | `GET` | `/api/tasks/:taskId/attachments` | List attachments for a task | MEMBER |
 | `POST` | `/api/tasks/:taskId/attachments/upload` | Upload a file and save metadata | MEMBER |
 | `POST` | `/api/tasks/:taskId/attachments` | Save attachment metadata | MEMBER |

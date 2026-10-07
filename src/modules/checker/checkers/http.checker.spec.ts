@@ -2,7 +2,7 @@ import { HttpChecker } from './http.checker';
 
 interface FakeResponse {
     status: number;
-    arrayBuffer?: () => Promise<ArrayBuffer>;
+    text: () => Promise<string>;
 }
 
 function mockFetch(implementation: () => Promise<unknown>) {
@@ -11,10 +11,10 @@ function mockFetch(implementation: () => Promise<unknown>) {
     return spy;
 }
 
-function response(status: number): FakeResponse {
+function response(status: number, body = ''): FakeResponse {
     return {
         status,
-        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        text: () => Promise.resolve(body),
     };
 }
 
@@ -39,6 +39,35 @@ describe('HttpChecker', () => {
         expect(result.success).toBe(true);
         expect(result.error).toBeNull();
         expect(result.latency).toBeGreaterThanOrEqual(0);
+        expect(result.statusCode).toBe(200);
+    });
+
+    it('captures a truncated body snippet for bodyContains rules', async () => {
+        const body = 'x'.repeat(1000);
+        mockFetch(() => Promise.resolve(response(200, body)));
+
+        const result = await checker.check(
+            'https://example.com/health',
+            1000,
+            200,
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.bodyContains).toBe('x'.repeat(512));
+    });
+
+    it('keeps the body snippet on a status mismatch', async () => {
+        mockFetch(() => Promise.resolve(response(503, 'upstream down')));
+
+        const result = await checker.check(
+            'https://example.com/health',
+            1000,
+            200,
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.statusCode).toBe(503);
+        expect(result.bodyContains).toBe('upstream down');
     });
 
     it('includes SSL certificate details when SSL monitoring is enabled', async () => {
@@ -105,6 +134,7 @@ describe('HttpChecker', () => {
 
         expect(result.success).toBe(false);
         expect(result.error).toBe('Unexpected status 503 (expected 200)');
+        expect(result.statusCode).toBe(503);
     });
 
     it('fails on a transport error', async () => {
@@ -118,6 +148,7 @@ describe('HttpChecker', () => {
 
         expect(result.success).toBe(false);
         expect(result.error).toBe('connect ECONNREFUSED');
+        expect(result.statusCode).toBeNull();
     });
 
     it('reports a timeout as a readable error', async () => {

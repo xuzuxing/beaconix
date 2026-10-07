@@ -118,6 +118,7 @@ describe('StateService', () => {
                 success: false,
                 latency: 30,
                 error: 'Unexpected status 500 (expected 200)',
+                statusCode: 500,
             });
 
             expect(prisma.checkLog.create).toHaveBeenCalledWith({
@@ -128,6 +129,7 @@ describe('StateService', () => {
                     rescuedByProbe: false,
                     latency: 30,
                     error: 'Unexpected status 500 (expected 200)',
+                    statusCode: 500,
                     source: 'LOCAL',
                     checkedAt: expect.any(Date),
                 },

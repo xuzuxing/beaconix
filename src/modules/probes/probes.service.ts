@@ -436,6 +436,7 @@ export class ProbesService implements OnModuleInit {
                 success: result.success,
                 latency: result.latency,
                 error: result.error ?? null,
+                statusCode: result.statusCode ?? null,
                 checkedAt: result.checkedAt
                     ? new Date(result.checkedAt)
                     : new Date(),
@@ -512,6 +513,7 @@ export class ProbesService implements OnModuleInit {
             latency: result.latency,
             error: result.error ?? null,
             checkedAt: reportedAt,
+            statusCode: result.statusCode ?? null,
         };
 
         const execution =

@@ -180,6 +180,17 @@ export class AppController {
         };
     }
 
+    @Get('rules-test')
+    @Public()
+    @Render('rules-test')
+    rulesTestPage() {
+        return {
+            title: 'Beacon Rule Engine Test',
+            apiBase: '/api',
+            renderedAt: new Date().toISOString(),
+        };
+    }
+
     @Head()
     @Public()
     @HttpCode(HttpStatus.OK)
