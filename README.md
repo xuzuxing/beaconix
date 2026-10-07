@@ -42,6 +42,14 @@
   - [Labels](#labels-endpoints)
   - [Notifications](#notifications-endpoints)
   - [Audit Logs](#audit-logs-endpoints)
+  - [Monitoring](#monitoring-endpoints)
+  - [Probes](#probes-endpoints)
+  - [Status Pages](#status-pages-endpoints)
+  - [Notification Channels](#notification-channels-endpoints)
+  - [Developer Access](#developer-access-endpoints)
+  - [Billing](#billing-endpoints)
+  - [Admin](#admin-endpoints)
+  - [WeChat Auth](#wechat-auth-endpoints)
 - [Database Schema](#database-schema)
 - [Cron Jobs](#cron-jobs)
 - [Email Templates](#email-templates)
@@ -66,6 +74,8 @@
 ## Overview
 
 BeaconFlow is a **SaaS-style, multi-tenant Agile project management platform** designed for teams that follow agile methodologies. It provides a complete backend system where multiple organizations operate in full isolation from one another, each with their own projects, sprints, tasks, and members.
+
+The current codebase keeps that Agile workspace foundation and extends it with uptime monitoring, distributed probes, status pages, notification channels, billing, developer API credentials, and WeChat integrations.
 
 **What problem does it solve?**
 
@@ -106,6 +116,13 @@ Managing agile workflows across distributed teams requires robust tooling: organ
 | **Attachments** | File uploads via UploadThing with metadata tracking |
 | **Labels** | Organization-wide and project-scoped labels with task tagging |
 | **Notifications** | Real-time SSE streaming, in-app read/unread, email alerts |
+| **Monitoring** | HTTP/TCP monitors, local checks, probe-assisted checks, state tracking, and check history |
+| **Probes** | Tenant and system probes with heartbeat, result ingestion, and validation challenges |
+| **Status Pages** | Public status pages backed by selected monitor state |
+| **Alert Channels** | Feishu, WeCom, DingTalk, WeChat Subscribe Message, and email notification channels |
+| **Billing** | Plans, quotas, subscriptions, orders, WeChat Pay callback support, and expiry jobs |
+| **Developer API** | Organization API keys, personal access tokens, scoped `/developer/v1` endpoints |
+| **WeChat Login** | Web, mini-program, scan-login, official account, work WeChat, and payment clients |
 | **Audit Logging** | Immutable, decorator-driven audit trail with before/after snapshots |
 | **Cron Jobs** | Automated invitation expiry, task due-soon/overdue alerts, token cleanup |
 | **Email** | Transactional emails via Resend (verification, invitation, password reset, task alerts) |
@@ -138,9 +155,12 @@ The full interactive API documentation is available at:
 | **Validation** | `class-validator` + `class-transformer` | DTO validation and transformation pipeline |
 | **API Docs** | `@nestjs/swagger` (OpenAPI) | Auto-generated interactive API documentation |
 | **Rate Limiting** | `@nestjs/throttler` | Configurable request throttling |
-| **Scheduling** | `@nestjs/schedule` (cron) | Automated background jobs |
+| **Scheduling** | BullMQ scheduled jobs on Redis | Automated background jobs |
+| **Queue/Cache** | Redis + BullMQ + node-cache | Scheduled jobs, notification work, and runtime caching |
 | **Email** | Resend SDK | Transactional email delivery |
 | **File Upload** | UploadThing | Server-side file upload handling |
+| **API Reference UI** | Scalar | Swagger/OpenAPI document viewer at `/reference` |
+| **Logging** | Pino / nestjs-pino | Structured request and application logging |
 | **Security** | Helmet | HTTP security headers |
 | **Containerization** | Docker + Docker Compose | Multi-stage builds, local PostgreSQL |
 | **CI/CD** | GitHub Actions | Automated type-check, lint, and build |
@@ -418,10 +438,12 @@ beacon/
 │   └── PULL_REQUEST_TEMPLATE.md
 ├── assets/images/                       # Logos and ERD diagram
 ├── prisma/
-│   ├── schema.prisma                    # Database schema (17 models, 12 enums)
+│   ├── schema.prisma                    # Database schema (35 models, 27 enums)
 │   └── migrations/                      # Prisma migration history
 ├── scripts/
-│   └── test-resend.ts                   # Resend integration test script
+│   ├── test-resend.ts                   # Resend integration test script
+│   ├── probe-agent.js                   # Long-running/local probe agent
+│   └── probe-agent-scf.js               # Tencent SCF probe entry
 ├── src/
 │   ├── main.ts                          # Application bootstrap
 │   ├── app.module.ts                    # Root module
@@ -454,12 +476,23 @@ beacon/
 │   │   ├── resend.config.ts            # Resend API key, from address
 │   │   ├── throttler.config.ts         # Rate limiter TTL and limit
 │   │   └── env.ts                      # requireEnv / optionalEnv helpers
-│   ├── database/
-│   │   ├── prisma.module.ts            # Global Prisma module
-│   │   └── prisma.service.ts           # PrismaClient with pg adapter, logging
+│   ├── infra/
+│   │   ├── cache/                      # In-process cache helpers
+│   │   ├── cls/                        # Request ID / CLS context
+│   │   ├── database/                   # Global Prisma module + pg adapter
+│   │   ├── logging/                    # Pino structured logging
+│   │   ├── queue/                      # BullMQ queue configuration
+│   │   ├── redis/                      # Redis connection service
+│   │   ├── scheduler/                  # Redis/BullMQ scheduled jobs
+│   │   └── wechat/                     # WeChat clients: pay, mini, web, OA, work
 │   ├── generated/prisma/               # Auto-generated Prisma client
+│   ├── shared/
+│   │   ├── quota/                      # Plan/quota enforcement
+│   │   └── subscription/               # Effective subscription lookup
 │   └── modules/
+│       ├── admin/                       # SUPER_ADMIN tenant, metrics, system probe admin
 │       ├── auth/                        # Registration, login, JWT, OTP, profile
+│       │   └── wechat/                  # Web, mini-program, and scan-login auth
 │       ├── organizations/               # Org CRUD, ownership transfer
 │       ├── memberships/                 # Member listing, role changes, removal
 │       ├── invitations/                 # Invite send, accept, decline, revoke
@@ -471,14 +504,29 @@ beacon/
 │       ├── labels/                      # Org/project labels, task tagging
 │       ├── notifications/               # SSE stream, read/unread, CRUD
 │       ├── audit-logs/                  # Immutable audit log queries
+│       ├── monitors/                    # HTTP/TCP monitor CRUD, pause/resume/restore
+│       ├── checker/                     # HTTP/TCP checks and check history
+│       ├── state/                       # Monitor state read model
+│       ├── monitoring/                  # Org/project monitoring overview
+│       ├── probes/                      # Tenant probes, ingest, validation, results
+│       ├── notifier/                    # Alert channels and notification delivery queue
+│       ├── status-pages/                # Tenant status pages and public status endpoint
+│       ├── billing/                     # Plans, subscriptions, orders, payment
+│       ├── developer-api/               # API keys, PATs, scoped /developer/v1 API
 │       ├── cron/                        # Scheduled background jobs
 │       │   └── jobs/
 │       │       ├── invitation-expiry.service.ts
 │       │       ├── task-due-soon.service.ts
 │       │       ├── task-overdue.service.ts
-│       │       └── token-cleanup.service.ts
+│       │       ├── token-cleanup.service.ts
+│       │       └── monitor-data-cleanup.service.ts
 │       ├── email/                       # Resend email service + templates
 │       └── users/                       # User lookup service
+├── views/                               # Local HBS smoke-test pages
+│   ├── monitor-test.hbs
+│   ├── monitoring-test.hbs
+│   ├── billing-test.hbs
+│   └── upload-test.hbs
 ├── test/
 │   └── jest-e2e.json                    # E2E test configuration
 ├── docker-compose.yml                   # Local PostgreSQL service
@@ -505,6 +553,25 @@ modules/<feature>/
 └── entities/                   # Response shape definitions (Swagger)
     └── <feature>.entity.ts
 ```
+
+### Added Module Map
+
+| Module | Responsibility |
+|---|---|
+| `monitors` | Tenant monitor configuration for HTTP/TCP targets, including pause, resume, soft delete, and restore |
+| `checker` | Manual and scheduled check execution, HTTP/TCP checker implementations, and check history |
+| `state` | Current monitor state, failure counters, latency/error snapshots, and SSL metadata |
+| `monitoring` | Aggregated organization/project monitoring overview endpoints |
+| `probes` | Tenant probe management, probe heartbeat/result ingestion, probe validation challenges, and probe execution logs |
+| `notifier` | Notification channel configuration, channel tests, delivery logs, and async alert sending |
+| `status-pages` | Tenant-managed public status pages backed by selected monitors |
+| `billing` | Plan catalog, quota summary, subscription stack, orders, payment creation, and WeChat Pay callback handling |
+| `developer-api` | Organization API keys, user personal access tokens, scoped `/developer/v1` monitor/probe/status-page APIs |
+| `admin` | SUPER_ADMIN tenant operations, metrics, audit-log queries, and system-probe management |
+| `auth/wechat` | WeChat web login, mini-program login, mini-program QR code, and scan-login polling |
+| `infra/wechat` | Low-level clients for WeChat Pay, mini-program, web login, official account, and work WeChat |
+| `infra/scheduler` | BullMQ-backed recurring jobs that replace replica-local `@Cron` timers |
+| `shared/quota` | Shared quota enforcement for monitoring/billing limits |
 
 ---
 
@@ -615,6 +682,7 @@ All endpoints are prefixed with `/api`. Protected endpoints require a `Bearer` t
 
 | Method | Endpoint | Description | Min Role |
 |---|---|---|---|
+| `POST` | `/api/uploadthing` | UploadThing route handler for the `taskAttachment` file route | JWT |
 | `GET` | `/api/tasks/:taskId/attachments` | List attachments for a task | MEMBER |
 | `POST` | `/api/tasks/:taskId/attachments` | Save attachment metadata | MEMBER |
 | `DELETE` | `/api/tasks/:taskId/attachments/:id` | Remove an attachment | MEMBER |
@@ -649,13 +717,141 @@ All endpoints are prefixed with `/api`. Protected endpoints require a `Bearer` t
 |---|---|---|---|
 | `GET` | `/api/organizations/:orgId/audit-logs` | List audit logs for an organization | ADMIN |
 
+### Monitoring Endpoints
+
+| Method | Endpoint | Description | Min Role |
+|---|---|---|---|
+| `GET` | `/api/projects/:projectId/monitors` | List monitors in a project | MEMBER |
+| `POST` | `/api/projects/:projectId/monitors` | Create an HTTP/TCP monitor | MEMBER |
+| `GET` | `/api/projects/:projectId/monitors/:id` | Get monitor details | MEMBER |
+| `PATCH` | `/api/projects/:projectId/monitors/:id` | Update monitor configuration | MEMBER |
+| `POST` | `/api/projects/:projectId/monitors/:id/pause` | Pause monitor checks | MEMBER |
+| `POST` | `/api/projects/:projectId/monitors/:id/resume` | Resume monitor checks | MEMBER |
+| `DELETE` | `/api/projects/:projectId/monitors/:id` | Soft-delete a monitor | MEMBER |
+| `POST` | `/api/projects/:projectId/monitors/:id/restore` | Restore a soft-deleted monitor | MEMBER |
+| `POST` | `/api/projects/:projectId/monitors/:monitorId/check` | Run a manual check | MEMBER |
+| `GET` | `/api/projects/:projectId/monitors/:monitorId/checks` | List check history | MEMBER |
+| `GET` | `/api/projects/:projectId/monitors/:monitorId/state` | Get current monitor state | MEMBER |
+| `GET` | `/api/organizations/:orgId/monitoring/overview` | Organization monitoring overview | MEMBER |
+| `GET` | `/api/projects/:projectId/monitoring/overview` | Project monitoring overview | MEMBER |
+
+### Probes Endpoints
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/organizations/:orgId/probes` | List tenant probes | MEMBER |
+| `POST` | `/api/organizations/:orgId/probes` | Create tenant probe and return secret once | MEMBER |
+| `GET` | `/api/organizations/:orgId/probes/:id` | Get probe details | MEMBER |
+| `PATCH` | `/api/organizations/:orgId/probes/:id` | Update probe metadata/configuration | MEMBER |
+| `DELETE` | `/api/organizations/:orgId/probes/:id` | Delete a probe | MEMBER |
+| `POST` | `/api/organizations/:orgId/probes/:id/rotate-secret` | Rotate probe secret | MEMBER |
+| `POST` | `/api/organizations/:orgId/probes/:id/validate` | Trigger manual validation challenge | MEMBER |
+| `POST` | `/api/organizations/:orgId/probes/:id/monitors` | Bind monitors to a probe | MEMBER |
+| `DELETE` | `/api/organizations/:orgId/probes/:id/monitors/:monitorId` | Unbind monitor from probe | MEMBER |
+| `GET` | `/api/organizations/:orgId/probes/:id/results` | List probe result history | MEMBER |
+| `GET` | `/api/organizations/:orgId/probes/:id/executions` | List probe execution logs | MEMBER |
+| `POST` | `/api/probes/heartbeat` | Probe agent heartbeat and assignment pull | Probe secret |
+| `POST` | `/api/probes/results` | Probe agent batch result report | Probe secret |
+| `POST` | `/api/probes/validation/pull` | Probe agent pulls pending validation challenge | Probe secret |
+| `POST` | `/api/probes/validation/:validationId/answer` | Probe agent answers validation challenge | Probe secret |
+
+### Status Pages Endpoints
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/organizations/:orgId/status-pages` | List status pages | MEMBER |
+| `POST` | `/api/organizations/:orgId/status-pages` | Create status page | MEMBER |
+| `GET` | `/api/organizations/:orgId/status-pages/:id` | Get status page config | MEMBER |
+| `PATCH` | `/api/organizations/:orgId/status-pages/:id` | Update status page config | MEMBER |
+| `DELETE` | `/api/organizations/:orgId/status-pages/:id` | Delete status page | MEMBER |
+| `GET` | `/api/status/:slug` | Public status page payload | Public |
+
+### Notification Channels Endpoints
+
+| Method | Endpoint | Description | Min Role |
+|---|---|---|---|
+| `GET` | `/api/organizations/:orgId/notification-channels` | List alert channels | MEMBER |
+| `POST` | `/api/organizations/:orgId/notification-channels` | Create alert channel | MEMBER |
+| `GET` | `/api/organizations/:orgId/notification-channels/:id` | Get alert channel | MEMBER |
+| `PATCH` | `/api/organizations/:orgId/notification-channels/:id` | Update alert channel | MEMBER |
+| `DELETE` | `/api/organizations/:orgId/notification-channels/:id` | Delete alert channel | MEMBER |
+| `POST` | `/api/organizations/:orgId/notification-channels/:id/test` | Send channel test notification | MEMBER |
+| `GET` | `/api/organizations/:orgId/notification-channels/:id/logs` | List channel delivery logs | MEMBER |
+
+### Developer Access Endpoints
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `POST` | `/api/organizations/:orgId/api-keys` | Create organization API key | JWT |
+| `GET` | `/api/organizations/:orgId/api-keys` | List organization API keys | JWT |
+| `POST` | `/api/organizations/:orgId/api-keys/:id/revoke` | Revoke organization API key | JWT |
+| `POST` | `/api/users/me/personal-access-tokens` | Create user personal access token | JWT |
+| `GET` | `/api/users/me/personal-access-tokens` | List personal access tokens | JWT |
+| `POST` | `/api/users/me/personal-access-tokens/:id/revoke` | Revoke personal access token | JWT |
+| `GET` | `/api/developer/v1/organizations/:orgId/overview` | Developer API organization overview | API key / PAT |
+| `GET` | `/api/developer/v1/organizations/:orgId/monitors` | Developer API organization monitors | API key / PAT |
+| `GET` | `/api/developer/v1/projects/:projectId/monitors` | Developer API project monitors | API key / PAT |
+| `POST` | `/api/developer/v1/projects/:projectId/monitors` | Developer API create monitor | API key / PAT |
+| `PATCH` | `/api/developer/v1/projects/:projectId/monitors/:id` | Developer API update monitor | API key / PAT |
+| `DELETE` | `/api/developer/v1/projects/:projectId/monitors/:id` | Developer API delete monitor | API key / PAT |
+| `GET` | `/api/developer/v1/organizations/:orgId/probes` | Developer API probes | API key / PAT |
+| `GET` | `/api/developer/v1/organizations/:orgId/status-pages` | Developer API status pages | API key / PAT |
+
+### Billing Endpoints
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/plans` | List enabled plans | Public/JWT |
+| `GET` | `/api/plans/:id` | Get plan details | Public/JWT |
+| `GET` | `/api/organizations/:orgId/subscription` | Get effective subscription stack | JWT |
+| `GET` | `/api/organizations/:orgId/quota` | Get quota usage and limits | JWT |
+| `POST` | `/api/organizations/:orgId/orders` | Create plan order | JWT |
+| `GET` | `/api/organizations/:orgId/orders` | List organization orders | JWT |
+| `GET` | `/api/orders/:id` | Get order details | JWT |
+| `POST` | `/api/orders/:id/cancel` | Cancel pending order | JWT |
+| `POST` | `/api/orders/:id/pay` | Create payment payload | JWT |
+| `POST` | `/api/payment/wechat/callback` | WeChat Pay callback | WeChat Pay |
+
+### Admin Endpoints
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/admin/tenants` | List tenants | SUPER_ADMIN |
+| `GET` | `/api/admin/tenants/:id` | Get tenant detail | SUPER_ADMIN |
+| `PATCH` | `/api/admin/tenants/:id/toggle` | Enable/disable tenant | SUPER_ADMIN |
+| `GET` | `/api/admin/metrics/overview` | System metrics overview | SUPER_ADMIN |
+| `GET` | `/api/admin/metrics/scheduler` | Scheduler metrics | SUPER_ADMIN |
+| `GET` | `/api/admin/metrics/tenants` | Tenant metrics | SUPER_ADMIN |
+| `GET` | `/api/admin/audit-logs` | Cross-tenant audit-log query | SUPER_ADMIN |
+| `POST` | `/api/admin/system-probes` | Create system probe | SUPER_ADMIN |
+| `GET` | `/api/admin/system-probes` | List system probes | SUPER_ADMIN |
+| `GET` | `/api/admin/system-probes/:id` | Get system probe | SUPER_ADMIN |
+| `PATCH` | `/api/admin/system-probes/:id` | Update system probe | SUPER_ADMIN |
+| `PATCH` | `/api/admin/system-probes/:id/toggle` | Enable/disable system probe | SUPER_ADMIN |
+| `DELETE` | `/api/admin/system-probes/:id` | Delete system probe | SUPER_ADMIN |
+| `POST` | `/api/admin/system-probes/:id/validate` | Validate system probe | SUPER_ADMIN |
+| `POST` | `/api/admin/system-probes/rebalance` | Rebalance system probe assignments | SUPER_ADMIN |
+
+### WeChat Auth Endpoints
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/auth/wechat/web/authorize-url` | Build WeChat web authorize URL | Public |
+| `POST` | `/api/auth/wechat/web/login` | Login with WeChat web authorization code | Public |
+| `POST` | `/api/auth/wechat/miniprogram/login` | Login with mini-program code | Public |
+| `POST` | `/api/auth/wechat/miniprogram/qrcode` | Create mini-program scan-login QR code | Public |
+| `POST` | `/api/auth/wechat/miniprogram/scan-login` | Confirm scan login from mini-program | Public |
+| `GET` | `/api/auth/wechat/miniprogram/qrcode/status` | Poll scan-login status | Public |
+
 ---
 
 ## Database Schema
 
-The database contains **17 models** and **12 enums** managed through Prisma migrations on PostgreSQL.
+The original Agile workspace schema contains the core models below. The current codebase has grown to **35 models** and **27 enums** with additional monitoring, probe, notification-channel, status-page, developer-credential, and billing tables.
 
 **Models:** User, OtpCode, RefreshToken, Organization, Membership, Invitation, Project, Sprint, Task, TaskDependency, TaskWatcher, TaskActivity, Comment, Attachment, Label, TaskLabel, Notification, AuditLog
+
+**Additional model groups:** Monitor, MonitorState, Probe, MonitorProbe, ProbeResult, ProbeExecution, CheckLog, NotificationChannel, NotificationLog, StatusPage, ApiKey, PersonalAccessToken, Plan, Subscription, Order, Payment, UserIdentity.
 
 **Enums:**
 
@@ -686,7 +882,7 @@ Key design decisions:
 
 ## Cron Jobs
 
-Four scheduled background jobs run automatically to maintain system health and send timely alerts:
+Recurring background jobs run through BullMQ scheduled jobs on Redis, so only one worker handles each scheduled run even when multiple API replicas are running:
 
 | Job | Schedule | Purpose |
 |---|---|---|
@@ -694,6 +890,11 @@ Four scheduled background jobs run automatically to maintain system health and s
 | **Task Due Soon** | Every 6 hours | Notifies watchers (SSE) and emails assignees about tasks due within 24 hours |
 | **Task Overdue** | Daily at 8:00 AM | Notifies watchers (SSE) and emails assignees about past-due tasks |
 | **Token Cleanup** | Daily at 2:00 AM | Deletes expired and revoked refresh tokens from the database |
+| **Monitor Data Cleanup** | Daily at 3:00 AM | Prunes old monitoring/check data |
+| **Order Expiry Sweep** | Every 5 minutes | Cancels expired pending orders |
+| **Subscription Expiry Sweep** | Every hour | Marks expired subscriptions |
+| **System Probe Assignment Refresh** | Every hour | Refreshes system probe tenant assignments |
+| **Probe Offline Sweep** | Every minute | Marks probes offline after missed heartbeat threshold |
 
 ---
 
@@ -950,7 +1151,7 @@ pnpm prisma:migrate
 pnpm start:dev
 ```
 
-The API will be available at `http://localhost:3000/api` and Swagger docs at `http://localhost:3000/api/docs`.
+The API will be available at `http://localhost:3000/api`, and the Scalar API reference is available at `http://localhost:3000/reference`.
 
 **Available scripts:**
 
@@ -1008,6 +1209,8 @@ Contributions are welcome. Please read the [Contributing Guide](CONTRIBUTING.md)
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is based on team-flow by Khaled Saeed, licensed under the MIT License.
 
-Copyright (c) 2026 Xuzuxing
+Modifications Copyright (c) 2026 Xu Zuxing, also released under the MIT License.
+
+MIT License. See [LICENSE](LICENSE).
