@@ -59,6 +59,8 @@ function createService() {
             update: jest.fn(),
         },
         project: { findFirst: jest.fn().mockResolvedValue(projectRow) },
+        notificationChannel: { count: jest.fn().mockResolvedValue(0) },
+        checkLog: { findMany: jest.fn() },
     };
     const systemProbeScheduler = { rebalance: jest.fn().mockResolvedValue({}) };
     const quotaService = {
@@ -66,13 +68,26 @@ function createService() {
         assertIntervalAllowed: jest.fn().mockResolvedValue(undefined),
     };
 
+    const notifierService = {
+        notifyAvailabilityAlert: jest
+            .fn()
+            .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
+    };
+
     const service = new MonitorsService(
         prisma as unknown as PrismaService,
         systemProbeScheduler as never,
         quotaService as never,
+        notifierService as never,
     );
 
-    return { service, prisma, systemProbeScheduler, quotaService };
+    return {
+        service,
+        prisma,
+        systemProbeScheduler,
+        quotaService,
+        notifierService,
+    };
 }
 
 describe('MonitorsService', () => {
@@ -99,7 +114,7 @@ describe('MonitorsService', () => {
                     projectId: 'project-1',
                     state: { create: {} },
                 },
-                include: { state: true },
+                include: { state: true, notificationChannels: true },
             });
             expect(result.status).toBe('UP');
             expect(result.lastLatency).toBe(128);
@@ -128,6 +143,51 @@ describe('MonitorsService', () => {
                     name: 'Database',
                     type: 'TCP',
                     target: 'db.internal:not-a-port',
+                }),
+            ).rejects.toThrow(BadRequestException);
+            expect(prisma.monitor.create).not.toHaveBeenCalled();
+        });
+
+        it('binds notification channels that belong to the organization', async () => {
+            const { service, prisma } = createService();
+            prisma.notificationChannel.count.mockResolvedValue(1);
+            prisma.monitor.create.mockResolvedValue({
+                ...monitorRow,
+                state: stateRow,
+                notificationChannels: [{ channelId: 'channel-1' }],
+            });
+
+            const result = await service.create('project-1', {
+                name: 'Production API',
+                type: 'HTTP',
+                target: 'https://api.example.com/health',
+                notificationChannelIds: ['channel-1'],
+            });
+
+            expect(prisma.notificationChannel.count).toHaveBeenCalledWith({
+                where: { id: { in: ['channel-1'] }, organizationId: 'org-1' },
+            });
+            expect(prisma.monitor.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    notificationChannels: {
+                        create: [{ channelId: 'channel-1' }],
+                    },
+                }),
+                include: { state: true, notificationChannels: true },
+            });
+            expect(result.notificationChannelIds).toEqual(['channel-1']);
+        });
+
+        it('rejects notification channels from another organization', async () => {
+            const { service, prisma } = createService();
+            prisma.notificationChannel.count.mockResolvedValue(0);
+
+            await expect(
+                service.create('project-1', {
+                    name: 'Production API',
+                    type: 'HTTP',
+                    target: 'https://api.example.com/health',
+                    notificationChannelIds: ['foreign-channel'],
                 }),
             ).rejects.toThrow(BadRequestException);
             expect(prisma.monitor.create).not.toHaveBeenCalled();
@@ -174,7 +234,7 @@ describe('MonitorsService', () => {
                         },
                     },
                 },
-                include: { state: true },
+                include: { state: true, notificationChannels: true },
             });
         });
 
@@ -200,7 +260,7 @@ describe('MonitorsService', () => {
                     name: 'Renamed API',
                     state: undefined,
                 },
-                include: { state: true },
+                include: { state: true, notificationChannels: true },
             });
         });
     });
@@ -216,7 +276,7 @@ describe('MonitorsService', () => {
 
             expect(prisma.monitor.findMany).toHaveBeenCalledWith({
                 where: { projectId: 'project-1', deletedAt: null },
-                include: { state: true },
+                include: { state: true, notificationChannels: true },
                 orderBy: { createdAt: 'desc' },
             });
             expect(result.status).toBe('UNKNOWN');
@@ -252,7 +312,7 @@ describe('MonitorsService', () => {
                         },
                     },
                 },
-                include: { state: true },
+                include: { state: true, notificationChannels: true },
             });
             expect(result.enabled).toBe(false);
             expect(result.status).toBe('PAUSED');
@@ -294,7 +354,7 @@ describe('MonitorsService', () => {
                         upsert: { create: {}, update: { status: 'UNKNOWN' } },
                     },
                 },
-                include: { state: true },
+                include: { state: true, notificationChannels: true },
             });
             expect(result.enabled).toBe(true);
         });
@@ -322,6 +382,66 @@ describe('MonitorsService', () => {
             await expect(
                 service.findOne('project-1', 'monitor-1'),
             ).rejects.toThrow(NotFoundException);
+        });
+    });
+
+    describe('sendTestAlert', () => {
+        it('sends a flagged test alert using the current availability', async () => {
+            const { service, prisma, notifierService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                availabilityThreshold: 90,
+                availabilityWindow: 10,
+                state: stateRow,
+                notificationChannels: [{ channelId: 'channel-1' }],
+            });
+            prisma.checkLog.findMany.mockResolvedValue([
+                { success: true },
+                { success: false },
+            ]);
+
+            const result = await service.sendTestAlert(
+                'project-1',
+                'monitor-1',
+            );
+
+            expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                orderBy: { checkedAt: 'desc' },
+                take: 10,
+                select: { success: true },
+            });
+            expect(
+                notifierService.notifyAvailabilityAlert,
+            ).toHaveBeenCalledWith(
+                expect.objectContaining({ id: 'monitor-1' }),
+                stateRow,
+                {
+                    availabilityPercent: 50,
+                    threshold: 90,
+                    window: 10,
+                    sampleSize: 2,
+                    isTest: true,
+                },
+            );
+            expect(result.availabilityPercent).toBe(50);
+            expect(result.delivery).toEqual({
+                skipped: false,
+                sent: 1,
+                failed: 0,
+            });
+        });
+
+        it('throws when the monitor is not in the project', async () => {
+            const { service, prisma, notifierService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(null);
+
+            await expect(
+                service.sendTestAlert('project-1', 'monitor-1'),
+            ).rejects.toThrow(NotFoundException);
+            expect(
+                notifierService.notifyAvailabilityAlert,
+            ).not.toHaveBeenCalled();
         });
     });
 });

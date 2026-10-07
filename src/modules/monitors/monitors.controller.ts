@@ -206,4 +206,24 @@ export class MonitorsController {
     ) {
         return this.monitorsService.restore(projectId, id);
     }
+
+    @Post(':id/test-alert')
+    @HttpCode(HttpStatus.OK)
+    @UseGuards(RolesGuard)
+    @Roles('ADMIN')
+    @ApiOperation({
+        summary: 'Send a test availability alert to the bound channels',
+    })
+    @ApiParam({ name: 'projectId', description: 'Project UUID' })
+    @ApiParam({ name: 'id', description: 'Monitor UUID' })
+    @ApiOkResponse({ description: 'Test alert delivery result' })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
+    @ApiNotFoundResponse({ description: 'Monitor not found' })
+    async sendTestAlert(
+        @Param('projectId') projectId: string,
+        @Param('id') id: string,
+    ) {
+        return this.monitorsService.sendTestAlert(projectId, id);
+    }
 }

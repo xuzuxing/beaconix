@@ -47,6 +47,33 @@ export class MonitorEntity {
     @ApiProperty({ example: true })
     enabled: boolean;
 
+    @ApiProperty({
+        example: false,
+        description: 'Whether availability-based alerting is enabled',
+    })
+    availabilityEnabled: boolean;
+
+    @ApiPropertyOptional({
+        example: 90,
+        description: 'Availability threshold in percent',
+    })
+    availabilityThreshold: number | null;
+
+    @ApiPropertyOptional({
+        example: 10,
+        description:
+            'Number of most recent checks used to compute availability',
+    })
+    availabilityWindow: number | null;
+
+    @ApiProperty({
+        example: ['clx123channel1'],
+        description:
+            'Bound notification channel IDs (empty = org-wide fallback)',
+        type: [String],
+    })
+    notificationChannelIds: string[];
+
     // ── Runtime state (flattened from MonitorState) ─────────────────────
     @ApiProperty({
         enum: ['UNKNOWN', 'UP', 'DEGRADED', 'DOWN', 'PAUSED'],

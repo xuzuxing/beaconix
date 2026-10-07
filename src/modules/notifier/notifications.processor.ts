@@ -2,7 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { StateService } from '../state/state.service';
 import { NotifierService } from './notifier.service';
-import { NOTIFICATION_QUEUE } from './notifier.queue';
+import { MONITOR_AVAILABILITY_JOB, NOTIFICATION_QUEUE } from './notifier.queue';
 import type { NotificationJobData } from './notifier.queue';
 
 @Processor(NOTIFICATION_QUEUE)
@@ -18,6 +18,12 @@ export class NotificationsProcessor extends WorkerHost {
         const { channelId, payload, transitionStatus, sslAlert } = job.data;
 
         await this.notifierService.deliver(channelId, payload);
+
+        // Availability alerts are a separate dimension from the status
+        // transition, so they must not touch the transition dedup markers.
+        if (job.name === MONITOR_AVAILABILITY_JOB) {
+            return;
+        }
 
         await this.stateService.markNotified(
             payload.monitorId,

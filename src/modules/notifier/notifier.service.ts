@@ -22,10 +22,16 @@ import {
 } from './senders';
 import { toMonitorEvent } from './notifier.types';
 import type {
+    AvailabilityAlertInfo,
+    AvailabilityAlertState,
     NotificationChannelSender,
     NotificationPayload,
 } from './notifier.types';
-import { MONITOR_TRANSITION_JOB, NOTIFICATION_QUEUE } from './notifier.queue';
+import {
+    MONITOR_AVAILABILITY_JOB,
+    MONITOR_TRANSITION_JOB,
+    NOTIFICATION_QUEUE,
+} from './notifier.queue';
 import type { NotificationJobData } from './notifier.queue';
 
 /** Statuses that are worth telling humans about. */
@@ -228,6 +234,134 @@ export class NotifierService {
         } catch (error) {
             return { delivered: false, error: (error as Error).message };
         }
+    }
+
+    /**
+     * Enqueues an availability alert for the monitor. Delivers to the channels
+     * bound to the monitor; when the monitor has no binding at all, it falls
+     * back to every enabled channel of the organization.
+     */
+    async notifyAvailabilityAlert(
+        monitor: MonitorModel,
+        state: AvailabilityAlertState,
+        alert: AvailabilityAlertInfo,
+    ): Promise<NotificationResult> {
+        return this.enqueueAvailability(
+            monitor,
+            state,
+            alert,
+            'AVAILABILITY_ALERT',
+        );
+    }
+
+    /** Enqueues an availability-recovered notice for the monitor. */
+    async notifyAvailabilityRecovery(
+        monitor: MonitorModel,
+        state: AvailabilityAlertState,
+        alert: AvailabilityAlertInfo,
+    ): Promise<NotificationResult> {
+        return this.enqueueAvailability(
+            monitor,
+            state,
+            alert,
+            'AVAILABILITY_RECOVERED',
+        );
+    }
+
+    private async enqueueAvailability(
+        monitor: MonitorModel,
+        state: AvailabilityAlertState,
+        alert: AvailabilityAlertInfo,
+        event: 'AVAILABILITY_ALERT' | 'AVAILABILITY_RECOVERED',
+    ): Promise<NotificationResult> {
+        const channels = await this.resolveAlertChannels(monitor);
+
+        if (channels.length === 0) {
+            return { skipped: true, sent: 0, failed: 0 };
+        }
+
+        const payload: NotificationPayload = {
+            monitorId: monitor.id,
+            monitorName: monitor.name,
+            monitorType: monitor.type,
+            target: monitor.target,
+            organizationId: monitor.organizationId,
+            previousStatus: state.status,
+            status: state.status,
+            event,
+            failCount: state.failCount,
+            latency: state.lastLatency ?? null,
+            error: state.lastError ?? null,
+            checkedAt: state.lastCheckAt ?? new Date(),
+            availabilityPercent: alert.availabilityPercent,
+            availabilityThreshold: alert.threshold,
+            availabilityWindow: alert.window,
+            availabilitySampleSize: alert.sampleSize,
+            test: alert.isTest,
+        };
+
+        const deliveries = await Promise.allSettled(
+            channels.map((channel) =>
+                this.notificationQueue.add(
+                    MONITOR_AVAILABILITY_JOB,
+                    {
+                        channelId: channel.id,
+                        payload,
+                        transitionStatus: state.status,
+                        sslAlert: false,
+                    },
+                    {
+                        attempts: 3,
+                        backoff: { type: 'exponential', delay: 5000 },
+                        removeOnComplete: true,
+                        removeOnFail: 100,
+                    },
+                ),
+            ),
+        );
+
+        const failed = deliveries.filter(
+            (delivery) => delivery.status === 'rejected',
+        ).length;
+
+        for (const delivery of deliveries) {
+            if (delivery.status === 'rejected') {
+                this.logger.warn(
+                    `Failed to enqueue availability alert: ${(delivery.reason as Error).message}`,
+                );
+            }
+        }
+
+        return {
+            skipped: false,
+            sent: channels.length - failed,
+            failed,
+        };
+    }
+
+    /**
+     * Channels an alert should reach: the monitor's bound channels when any
+     * binding exists (disabled ones are dropped), otherwise every enabled
+     * channel of the organization.
+     */
+    private async resolveAlertChannels(
+        monitor: MonitorModel,
+    ): Promise<NotificationChannelModel[]> {
+        const bindings = await this.prisma.monitorNotificationChannel.findMany({
+            where: { monitorId: monitor.id },
+            include: { channel: true },
+        });
+
+        if (bindings.length > 0) {
+            return bindings
+                .map((binding) => binding.channel)
+                .filter((channel) => channel.enabled);
+        }
+
+        return this.prisma.notificationChannel.findMany({
+            where: { organizationId: monitor.organizationId, enabled: true },
+            orderBy: { createdAt: 'asc' },
+        });
     }
 
     // -- Helpers ---------------------------------------------------------

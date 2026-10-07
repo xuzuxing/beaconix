@@ -63,6 +63,7 @@ function createService() {
         },
         probeResult: { findMany: jest.fn().mockResolvedValue([]) },
         probeExecution: { create: jest.fn() },
+        monitorState: { update: jest.fn() },
     };
     const stateService = {
         record: jest.fn().mockResolvedValue({
@@ -79,6 +80,12 @@ function createService() {
     };
     const notifierService = {
         notifyTransition: jest
+            .fn()
+            .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
+        notifyAvailabilityAlert: jest
+            .fn()
+            .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
+        notifyAvailabilityRecovery: jest
             .fn()
             .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
     };
@@ -707,6 +714,196 @@ describe('CheckerService', () => {
             await expect(
                 service.listCheckLogs('project-1', 'monitor-1', {}),
             ).rejects.toThrow(NotFoundException);
+        });
+    });
+
+    describe('availability alert', () => {
+        const alertMonitor = {
+            ...monitorRow,
+            availabilityEnabled: true,
+            availabilityThreshold: 90,
+            availabilityWindow: 10,
+        };
+
+        const recordWith = (overrides: Record<string, unknown>) => ({
+            monitor: alertMonitor,
+            state: { ...stateRow, ...overrides },
+            transition: {
+                previousStatus: 'UP',
+                previousFailCount: 0,
+                status: 'DOWN',
+                failCount: 3,
+                changed: true,
+            },
+        });
+
+        it('alerts once when failures reached the threshold and availability is below it', async () => {
+            const { service, prisma, stateService, notifierService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
+            stateService.record.mockResolvedValue(
+                recordWith({
+                    status: 'DOWN',
+                    failCount: 3,
+                    availabilityAlertActive: false,
+                }),
+            );
+            prisma.checkLog.findMany.mockResolvedValue([
+                { success: true },
+                { success: false },
+                { success: false },
+                { success: false },
+            ]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                orderBy: { checkedAt: 'desc' },
+                take: 10,
+                select: { success: true },
+            });
+            expect(
+                notifierService.notifyAvailabilityAlert,
+            ).toHaveBeenCalledWith(
+                alertMonitor,
+                expect.objectContaining({ failCount: 3 }),
+                {
+                    availabilityPercent: 25,
+                    threshold: 90,
+                    window: 10,
+                    sampleSize: 4,
+                },
+            );
+            expect(prisma.monitorState.update).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                data: {
+                    availabilityAlertActive: true,
+                    lastAvailabilityAlertAt: expect.any(Date),
+                },
+            });
+        });
+
+        it('stays silent while already alerting', async () => {
+            const { service, prisma, stateService, notifierService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
+            stateService.record.mockResolvedValue(
+                recordWith({
+                    status: 'DOWN',
+                    failCount: 3,
+                    availabilityAlertActive: true,
+                }),
+            );
+            prisma.checkLog.findMany.mockResolvedValue([
+                { success: false },
+                { success: false },
+            ]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(
+                notifierService.notifyAvailabilityAlert,
+            ).not.toHaveBeenCalled();
+            expect(prisma.monitorState.update).not.toHaveBeenCalled();
+        });
+
+        it('sends a recovery notice when availability climbs back', async () => {
+            const { service, prisma, stateService, notifierService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
+            stateService.record.mockResolvedValue(
+                recordWith({
+                    status: 'UP',
+                    failCount: 0,
+                    availabilityAlertActive: true,
+                }),
+            );
+            prisma.checkLog.findMany.mockResolvedValue(
+                Array.from({ length: 10 }, () => ({ success: true })),
+            );
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(
+                notifierService.notifyAvailabilityRecovery,
+            ).toHaveBeenCalledWith(
+                alertMonitor,
+                expect.objectContaining({ failCount: 0 }),
+                expect.objectContaining({ availabilityPercent: 100 }),
+            );
+            expect(prisma.monitorState.update).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                data: { availabilityAlertActive: false },
+            });
+        });
+
+        it('does not alert while consecutive failures are below the threshold', async () => {
+            const { service, prisma, stateService, notifierService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
+            stateService.record.mockResolvedValue(
+                recordWith({
+                    status: 'DEGRADED',
+                    failCount: 1,
+                    availabilityAlertActive: false,
+                }),
+            );
+            prisma.checkLog.findMany.mockResolvedValue([
+                { success: false },
+                { success: true },
+            ]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(
+                notifierService.notifyAvailabilityAlert,
+            ).not.toHaveBeenCalled();
+            expect(prisma.monitorState.update).not.toHaveBeenCalled();
+        });
+
+        it('does not alert when availability is at or above the threshold', async () => {
+            const { service, prisma, stateService, notifierService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
+            stateService.record.mockResolvedValue(
+                recordWith({
+                    status: 'DOWN',
+                    failCount: 3,
+                    availabilityAlertActive: false,
+                }),
+            );
+            // 10 checks, 9 successful => 90%, not below the 90% threshold.
+            prisma.checkLog.findMany.mockResolvedValue([
+                ...Array.from({ length: 9 }, () => ({ success: true })),
+                { success: false },
+            ]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(
+                notifierService.notifyAvailabilityAlert,
+            ).not.toHaveBeenCalled();
+            expect(
+                notifierService.notifyAvailabilityRecovery,
+            ).not.toHaveBeenCalled();
+            expect(prisma.monitorState.update).not.toHaveBeenCalled();
+        });
+
+        it('does nothing when availability alerting is disabled', async () => {
+            const { service, prisma, stateService, notifierService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            stateService.record.mockResolvedValue(
+                recordWith({ status: 'DOWN', failCount: 3 }),
+            );
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(prisma.checkLog.findMany).not.toHaveBeenCalled();
+            expect(
+                notifierService.notifyAvailabilityAlert,
+            ).not.toHaveBeenCalled();
         });
     });
 });

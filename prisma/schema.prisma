@@ -709,6 +709,11 @@ model Monitor {
   sslExpiryThreshold Int         @default(30)
   enabled            Boolean     @default(true)
 
+  // 可用率告警（内嵌阈值告警）：最近 N 次检查可用率 < 阈值且连续失败达阈值时报警
+  availabilityEnabled   Boolean @default(false)
+  availabilityThreshold Float?  @default(90) // 可用率阈值 %，< 该值触发
+  availabilityWindow    Int?    @default(10) // 统计窗口：最近 N 次检查
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -720,6 +725,8 @@ model Monitor {
   probes       MonitorProbe[]
   checkLogs    CheckLog[]
   executions   ProbeExecution[]
+  // 该 monitor 绑定的通知渠道（多选）；为空时回退组织全部启用渠道
+  notificationChannels MonitorNotificationChannel[]
 
   @@index([organizationId])
   @@index([projectId])
@@ -745,11 +752,30 @@ model MonitorState {
   sslIssuer          String?
   sslSubject         String?
   sslLastNotifiedAt  DateTime?
+  // 最近一次可用率告警的发送时间（信息用途）
+  lastAvailabilityAlertAt DateTime?
+  // 是否处于可用率告警状态：命中时置真并只告警一次，恢复时发恢复通知并置假
+  availabilityAlertActive Boolean    @default(false)
   updatedAt          DateTime       @updatedAt
 
   monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
 
   @@map("monitor_states")
+}
+
+// monitor 与通知渠道的多对多绑定（可用率告警发送目标）
+model MonitorNotificationChannel {
+  monitorId String
+  channelId String
+  createdAt DateTime @default(now())
+
+  monitor Monitor             @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([monitorId, channelId])
+  @@index([monitorId])
+  @@index([channelId])
+  @@map("monitor_notification_channels")
 }
 
 // 探针
@@ -878,6 +904,7 @@ model NotificationChannel {
 
   organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   logs         NotificationLog[]
+  monitors     MonitorNotificationChannel[]
 
   @@index([organizationId])
   @@index([enabled])

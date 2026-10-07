@@ -1,6 +1,9 @@
 import { NotFoundException } from '@nestjs/common';
 import { NotifierService } from './notifier.service';
-import { MONITOR_TRANSITION_JOB } from './notifier.queue';
+import {
+    MONITOR_AVAILABILITY_JOB,
+    MONITOR_TRANSITION_JOB,
+} from './notifier.queue';
 import type { PrismaService } from '../../infra/database/prisma.service';
 
 const monitorRow = {
@@ -64,6 +67,7 @@ function createService() {
             findUnique: jest.fn(),
         },
         notificationLog: { create: jest.fn() },
+        monitorNotificationChannel: { findMany: jest.fn() },
     };
     const stateService = {
         markNotified: jest.fn(),
@@ -294,6 +298,92 @@ describe('NotifierService', () => {
             expect(result.skipped).toBe(true);
             expect(prisma.notificationChannel.findMany).not.toHaveBeenCalled();
             expect(queue.add).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('notifyAvailabilityAlert', () => {
+        const alert = {
+            availabilityPercent: 25,
+            threshold: 90,
+            window: 10,
+            sampleSize: 4,
+        };
+
+        it('delivers to the channels bound to the monitor', async () => {
+            const { service, prisma, queue } = createService();
+            prisma.monitorNotificationChannel.findMany.mockResolvedValue([
+                {
+                    monitorId: 'monitor-1',
+                    channelId: 'channel-1',
+                    channel: channelRow,
+                },
+            ]);
+            queue.add.mockResolvedValue({ id: 'job-1' });
+
+            const result = await service.notifyAvailabilityAlert(
+                monitorRow as never,
+                { ...stateRow, status: 'DOWN' } as never,
+                alert,
+            );
+
+            expect(prisma.notificationChannel.findMany).not.toHaveBeenCalled();
+            expect(queue.add).toHaveBeenCalledWith(
+                MONITOR_AVAILABILITY_JOB,
+                {
+                    channelId: 'channel-1',
+                    payload: expect.objectContaining({
+                        event: 'AVAILABILITY_ALERT',
+                        availabilityPercent: 25,
+                        availabilityThreshold: 90,
+                        availabilityWindow: 10,
+                        availabilitySampleSize: 4,
+                    }),
+                    transitionStatus: 'DOWN',
+                    sslAlert: false,
+                },
+                expect.objectContaining({ attempts: 3 }),
+            );
+            expect(result).toEqual({ skipped: false, sent: 1, failed: 0 });
+        });
+
+        it('falls back to every organization channel when there is no binding', async () => {
+            const { service, prisma, queue } = createService();
+            prisma.monitorNotificationChannel.findMany.mockResolvedValue([]);
+            prisma.notificationChannel.findMany.mockResolvedValue([channelRow]);
+            queue.add.mockResolvedValue({ id: 'job-1' });
+
+            const result = await service.notifyAvailabilityAlert(
+                monitorRow as never,
+                { ...stateRow, status: 'DOWN' } as never,
+                alert,
+            );
+
+            expect(prisma.notificationChannel.findMany).toHaveBeenCalledWith({
+                where: { organizationId: 'org-1', enabled: true },
+                orderBy: { createdAt: 'asc' },
+            });
+            expect(result).toEqual({ skipped: false, sent: 1, failed: 0 });
+        });
+
+        it('sends nothing when every bound channel is disabled', async () => {
+            const { service, prisma, queue } = createService();
+            prisma.monitorNotificationChannel.findMany.mockResolvedValue([
+                {
+                    monitorId: 'monitor-1',
+                    channelId: 'channel-1',
+                    channel: { ...channelRow, enabled: false },
+                },
+            ]);
+
+            const result = await service.notifyAvailabilityAlert(
+                monitorRow as never,
+                { ...stateRow, status: 'DOWN' } as never,
+                alert,
+            );
+
+            expect(prisma.notificationChannel.findMany).not.toHaveBeenCalled();
+            expect(queue.add).not.toHaveBeenCalled();
+            expect(result).toEqual({ skipped: true, sent: 0, failed: 0 });
         });
     });
 

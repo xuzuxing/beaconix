@@ -1,8 +1,10 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
+    IsArray,
     IsBoolean,
     IsEnum,
     IsInt,
+    IsNumber,
     IsOptional,
     IsString,
     Max,
@@ -91,4 +93,44 @@ export class UpdateMonitorDto {
     @IsOptional()
     @IsBoolean()
     enabled?: boolean;
+
+    @ApiPropertyOptional({
+        example: true,
+        description: 'Enable availability-based alerting for this monitor',
+    })
+    @IsOptional()
+    @IsBoolean()
+    availabilityEnabled?: boolean;
+
+    @ApiPropertyOptional({
+        example: 90,
+        description: 'Availability threshold in percent',
+    })
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    @Max(100)
+    availabilityThreshold?: number;
+
+    @ApiPropertyOptional({
+        example: 10,
+        description:
+            'Number of most recent checks used to compute availability',
+    })
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Max(1000)
+    availabilityWindow?: number;
+
+    @ApiPropertyOptional({
+        example: ['clx123channel1'],
+        description:
+            'Notification channel IDs bound to this monitor (multi-select); empty array clears bindings',
+        type: [String],
+    })
+    @IsOptional()
+    @IsArray()
+    @IsString({ each: true })
+    notificationChannelIds?: string[];
 }

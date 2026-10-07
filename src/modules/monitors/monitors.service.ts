@@ -6,17 +6,21 @@ import {
 import { PrismaService } from '../../infra/database/prisma.service';
 import { CreateMonitorDto, UpdateMonitorDto } from './dto';
 import { MonitorEntity } from './entities';
-import { MonitorType } from '../../generated/prisma/enums';
+import { MonitorStatus, MonitorType } from '../../generated/prisma/enums';
 import type {
     MonitorModel,
     MonitorStateModel,
     ProjectModel,
 } from '../../generated/prisma/models';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
+import { NotifierService } from '../notifier/notifier.service';
 import { QuotaService } from '../../shared/quota/quota.service';
 
-/** A monitor row with its companion state row eagerly loaded. */
-type MonitorWithState = MonitorModel & { state?: MonitorStateModel | null };
+/** A monitor row with its companion state row and channel bindings loaded. */
+type MonitorWithState = MonitorModel & {
+    state?: MonitorStateModel | null;
+    notificationChannels?: { channelId: string }[];
+};
 
 @Injectable()
 export class MonitorsService {
@@ -24,6 +28,7 @@ export class MonitorsService {
         private readonly prisma: PrismaService,
         private readonly systemProbeScheduler: SystemProbeScheduler,
         private readonly quotaService: QuotaService,
+        private readonly notifierService: NotifierService,
     ) {}
 
     async create(projectId: string, dto: CreateMonitorDto) {
@@ -39,16 +44,29 @@ export class MonitorsService {
         this.validateTarget(dto.type, dto.target);
         this.validateSslConfig(dto.type, dto.target, dto.checkSsl ?? false);
 
-        // The nested write creates the companion MonitorState row in the same
-        // transaction as the monitor itself.
+        const { notificationChannelIds, ...monitorData } = dto;
+        await this.assertChannelsBelongToOrg(
+            project.organizationId,
+            notificationChannelIds,
+        );
+
+        // The nested write creates the companion MonitorState row and the
+        // channel bindings in the same transaction as the monitor itself.
         const monitor = await this.prisma.monitor.create({
             data: {
-                ...dto,
+                ...monitorData,
                 organizationId: project.organizationId,
                 projectId,
                 state: { create: {} },
+                notificationChannels: notificationChannelIds?.length
+                    ? {
+                          create: notificationChannelIds.map((channelId) => ({
+                              channelId,
+                          })),
+                      }
+                    : undefined,
             },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
         });
 
         await this.systemProbeScheduler.rebalance();
@@ -61,7 +79,7 @@ export class MonitorsService {
 
         const monitors = await this.prisma.monitor.findMany({
             where: { projectId, deletedAt: null },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
             orderBy: { createdAt: 'desc' },
         });
 
@@ -72,7 +90,7 @@ export class MonitorsService {
     async findAllByOrg(orgId: string) {
         const monitors = await this.prisma.monitor.findMany({
             where: { organizationId: orgId, deletedAt: null },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
             orderBy: { createdAt: 'desc' },
         });
 
@@ -106,10 +124,16 @@ export class MonitorsService {
         this.validateTarget(nextType, nextTarget);
         this.validateSslConfig(nextType, nextTarget, nextCheckSsl);
 
+        const { notificationChannelIds, ...monitorData } = dto;
+        await this.assertChannelsBelongToOrg(
+            existing.organizationId,
+            notificationChannelIds,
+        );
+
         const monitor = await this.prisma.monitor.update({
             where: { id: monitorId },
             data: {
-                ...dto,
+                ...monitorData,
                 state:
                     targetChanged || sslConfigChanged
                         ? {
@@ -131,8 +155,18 @@ export class MonitorsService {
                               },
                           }
                         : undefined,
+                ...(notificationChannelIds !== undefined
+                    ? {
+                          notificationChannels: {
+                              deleteMany: {},
+                              create: notificationChannelIds.map(
+                                  (channelId) => ({ channelId }),
+                              ),
+                          },
+                      }
+                    : {}),
             },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
         });
 
         if (targetChanged || dto.enabled !== undefined) {
@@ -160,7 +194,7 @@ export class MonitorsService {
                     },
                 },
             },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
         });
 
         await this.systemProbeScheduler.rebalance();
@@ -184,7 +218,7 @@ export class MonitorsService {
                     upsert: { create: {}, update: { status: 'UNKNOWN' } },
                 },
             },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
         });
 
         await this.systemProbeScheduler.rebalance();
@@ -198,7 +232,7 @@ export class MonitorsService {
         const updated = await this.prisma.monitor.update({
             where: { id: monitorId },
             data: { deletedAt: new Date() },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
         });
 
         await this.systemProbeScheduler.rebalance();
@@ -225,7 +259,7 @@ export class MonitorsService {
         const updated = await this.prisma.monitor.update({
             where: { id: monitorId },
             data: { deletedAt: null },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
         });
 
         await this.systemProbeScheduler.rebalance();
@@ -234,6 +268,60 @@ export class MonitorsService {
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
+
+    /**
+     * Sends a one-off test availability alert to the monitor's bound channels
+     * (or the organization fallback) so operators can verify delivery without
+     * waiting for a real outage. The payload is flagged as a test.
+     */
+    async sendTestAlert(projectId: string, monitorId: string) {
+        const monitor = await this.ensureMonitorExists(projectId, monitorId);
+
+        const window = monitor.availabilityWindow ?? 10;
+        const threshold = monitor.availabilityThreshold ?? 90;
+
+        const recent = await this.prisma.checkLog.findMany({
+            where: { monitorId },
+            orderBy: { checkedAt: 'desc' },
+            take: window,
+            select: { success: true },
+        });
+
+        const sampleSize = recent.length;
+        const successes = recent.filter((log) => log.success).length;
+        const availabilityPercent =
+            sampleSize > 0
+                ? Math.round((successes / sampleSize) * 10000) / 100
+                : 0;
+
+        const state = monitor.state ?? {
+            status: MonitorStatus.UNKNOWN,
+            failCount: 0,
+            lastLatency: null,
+            lastError: null,
+            lastCheckAt: null,
+        };
+
+        const delivery = await this.notifierService.notifyAvailabilityAlert(
+            monitor,
+            state,
+            {
+                availabilityPercent,
+                threshold,
+                window,
+                sampleSize,
+                isTest: true,
+            },
+        );
+
+        return {
+            delivery,
+            availabilityPercent,
+            threshold,
+            window,
+            sampleSize,
+        };
+    }
 
     private async ensureProjectExists(
         projectId: string,
@@ -329,7 +417,7 @@ export class MonitorsService {
     ): Promise<MonitorWithState> {
         const monitor = await this.prisma.monitor.findFirst({
             where: { id: monitorId, projectId, deletedAt: null },
-            include: { state: true },
+            include: { state: true, notificationChannels: true },
         });
 
         if (!monitor) {
@@ -339,12 +427,33 @@ export class MonitorsService {
         return monitor;
     }
 
+    /** Rejects channel IDs that are missing or belong to another organization. */
+    private async assertChannelsBelongToOrg(
+        organizationId: string,
+        channelIds?: string[],
+    ): Promise<void> {
+        if (!channelIds || channelIds.length === 0) return;
+
+        const uniqueIds = [...new Set(channelIds)];
+        const found = await this.prisma.notificationChannel.count({
+            where: { id: { in: uniqueIds }, organizationId },
+        });
+
+        if (found !== uniqueIds.length) {
+            throw new BadRequestException(
+                'One or more notification channels do not belong to this organization',
+            );
+        }
+    }
+
     /** Flattens the companion state row into the monitor response. */
     private toEntity(monitor: MonitorWithState): MonitorEntity {
-        const { state, ...rest } = monitor;
+        const { state, notificationChannels, ...rest } = monitor;
 
         return new MonitorEntity({
             ...rest,
+            notificationChannelIds:
+                notificationChannels?.map((binding) => binding.channelId) ?? [],
             status: state?.status ?? 'UNKNOWN',
             failCount: state?.failCount ?? 0,
             lastCheckAt: state?.lastCheckAt ?? null,

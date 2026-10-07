@@ -2,18 +2,51 @@ import type { NotificationPayload } from './notifier.types';
 
 /** Short headline, e.g. "[DOWN] Production API". */
 export function renderTitle(payload: NotificationPayload): string {
+    const prefix = payload.test ? '[TEST] ' : '';
+
+    if (payload.event === 'AVAILABILITY_RECOVERED') {
+        return `${prefix}[AVAILABILITY RECOVERED] ${payload.monitorName}`;
+    }
+    if (payload.event === 'AVAILABILITY_ALERT') {
+        return `${prefix}[LOW AVAILABILITY] ${payload.monitorName}`;
+    }
     if (payload.event === 'RECOVER') {
         return `[RECOVERED] ${payload.monitorName}`;
     }
     return `[${payload.status}] ${payload.monitorName}`;
 }
 
+function isAvailabilityEvent(payload: NotificationPayload): boolean {
+    return (
+        payload.event === 'AVAILABILITY_ALERT' ||
+        payload.event === 'AVAILABILITY_RECOVERED'
+    );
+}
+
+/** One-line availability summary, or null when the alert carries no figures. */
+function availabilityLine(payload: NotificationPayload): string | null {
+    if (payload.availabilityPercent === undefined) return null;
+
+    const sample = payload.availabilitySampleSize ?? payload.availabilityWindow;
+    const sampleSuffix =
+        sample !== undefined ? ` over last ${sample} checks` : '';
+    const comparator = payload.event === 'AVAILABILITY_RECOVERED' ? '>=' : '<';
+
+    return `Availability: ${payload.availabilityPercent}% (${comparator} ${payload.availabilityThreshold}%${sampleSuffix})`;
+}
+
 function detailLines(payload: NotificationPayload): string[] {
-    const lines = [
-        `Target: ${payload.target}`,
-        `Status: ${payload.previousStatus} -> ${payload.status}`,
-        `Checked at: ${payload.checkedAt.toISOString()}`,
-    ];
+    const lines = [`Target: ${payload.target}`];
+
+    if (isAvailabilityEvent(payload)) {
+        const availability = availabilityLine(payload);
+        if (availability) lines.push(availability);
+        lines.push(`Status: ${payload.status}`);
+    } else {
+        lines.push(`Status: ${payload.previousStatus} -> ${payload.status}`);
+    }
+
+    lines.push(`Checked at: ${payload.checkedAt.toISOString()}`);
 
     if (payload.latency !== null) {
         lines.push(`Latency: ${payload.latency}ms`);
@@ -35,16 +68,22 @@ export function renderText(payload: NotificationPayload): string {
 
 /** Markdown rendering, used by the WeCom / DingTalk robots. */
 export function renderMarkdown(payload: NotificationPayload): string {
-    const status =
-        payload.event === 'RECOVER'
-            ? `**${payload.status}**`
-            : `**${payload.status}** (was ${payload.previousStatus})`;
-
     const lines = [
         `### ${renderTitle(payload)}`,
         `**Target:** ${payload.target}`,
-        `**Status:** ${status}`,
     ];
+
+    if (isAvailabilityEvent(payload)) {
+        const availability = availabilityLine(payload);
+        if (availability) lines.push(`**${availability}**`);
+        lines.push(`**Status:** **${payload.status}**`);
+    } else {
+        const status =
+            payload.event === 'RECOVER'
+                ? `**${payload.status}**`
+                : `**${payload.status}** (was ${payload.previousStatus})`;
+        lines.push(`**Status:** ${status}`);
+    }
 
     if (payload.latency !== null) {
         lines.push(`**Latency:** ${payload.latency}ms`);

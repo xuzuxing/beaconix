@@ -341,6 +341,10 @@ export class CheckerService {
             },
         );
 
+        // Availability alerting rides on the same aggregated verdict and runs
+        // before the transition notification, but is independent of it.
+        await this.evaluateAvailabilityAlert(monitor, state);
+
         const notified = await this.notifyIfChanged(monitor, state, transition);
 
         await this.writeExecution(monitor, result, trigger, {
@@ -534,5 +538,89 @@ export class CheckerService {
         if (!lastCheckAt) return true;
 
         return Date.now() - lastCheckAt.getTime() >= intervalSeconds * 1000;
+    }
+
+    /**
+     * Applies the availability rule to a fresh check outcome.
+     *
+     * - the alert fires once when availability is below the threshold AND the
+     *   consecutive-failure threshold is reached, then stays silent until the
+     *   monitor recovers;
+     * - recovery is announced once availability climbs back to the threshold.
+     *
+     * Alerting must never break the check pipeline: a failed enqueue or write
+     * only logs, the check outcome still stands.
+     */
+    private async evaluateAvailabilityAlert(
+        monitor: MonitorModel,
+        state: MonitorStateModel,
+    ): Promise<void> {
+        if (!monitor.availabilityEnabled) return;
+
+        const threshold = monitor.availabilityThreshold ?? 90;
+        const window = monitor.availabilityWindow ?? 10;
+
+        const recent = await this.prisma.checkLog.findMany({
+            where: { monitorId: monitor.id },
+            orderBy: { checkedAt: 'desc' },
+            take: window,
+            select: { success: true },
+        });
+
+        if (recent.length === 0) return;
+
+        const successes = recent.filter((log) => log.success).length;
+        const availabilityPercent =
+            Math.round((successes / recent.length) * 10000) / 100;
+        const alert = {
+            availabilityPercent,
+            threshold,
+            window,
+            sampleSize: recent.length,
+        };
+
+        const belowThreshold = availabilityPercent < threshold;
+        const failuresReached = state.failCount >= monitor.failureThreshold;
+
+        try {
+            if (belowThreshold && failuresReached) {
+                // Already alerting: stay silent so a persistent outage does
+                // not re-notify on every check.
+                if (state.availabilityAlertActive) return;
+
+                await this.notifierService.notifyAvailabilityAlert(
+                    monitor,
+                    state,
+                    alert,
+                );
+
+                await this.prisma.monitorState.update({
+                    where: { monitorId: monitor.id },
+                    data: {
+                        availabilityAlertActive: true,
+                        lastAvailabilityAlertAt: new Date(),
+                    },
+                });
+                return;
+            }
+
+            // Availability recovered: announce it once and clear the flag.
+            if (state.availabilityAlertActive) {
+                await this.notifierService.notifyAvailabilityRecovery(
+                    monitor,
+                    state,
+                    alert,
+                );
+
+                await this.prisma.monitorState.update({
+                    where: { monitorId: monitor.id },
+                    data: { availabilityAlertActive: false },
+                });
+            }
+        } catch (error) {
+            this.logger.warn(
+                `Availability alert failed for monitor ${monitor.id}: ${(error as Error).message}`,
+            );
+        }
     }
 }
