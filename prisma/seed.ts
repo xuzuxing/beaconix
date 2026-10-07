@@ -5,6 +5,78 @@ import { PrismaClient } from '../src/generated/prisma/client';
 
 const FREE_SUBSCRIPTION_EXPIRY = new Date('2099-12-31T23:59:59.000Z');
 
+interface DefaultRuleGroup {
+    name: string;
+    description: string;
+    tree: Record<string, unknown>;
+}
+
+/**
+ * 默认规则组：覆盖常规检测场景，组织级（projectId = null）。
+ * 只创建、不自动绑定 —— 由用户在监控上按需绑定。
+ */
+const DEFAULT_RULE_GROUPS: DefaultRuleGroup[] = [
+    {
+        name: '请求失败',
+        description: '任意一次检测失败（success = false）',
+        tree: {
+            type: 'condition',
+            id: 'request-failed',
+            field: 'success',
+            operator: 'eq',
+            value: false,
+        },
+    },
+    {
+        name: '响应缓慢',
+        description: '响应时间超过 3000ms',
+        tree: {
+            type: 'condition',
+            id: 'slow-response',
+            field: 'latency',
+            operator: 'gt',
+            value: 3000,
+        },
+    },
+    {
+        name: '证书即将过期',
+        description: 'HTTPS 证书剩余有效期不足 7 天',
+        tree: {
+            type: 'condition',
+            id: 'cert-expiring',
+            field: 'certDaysRemaining',
+            operator: 'lte',
+            value: 7,
+        },
+    },
+    {
+        name: '证书已过期',
+        description: 'HTTPS 证书已过期',
+        tree: {
+            type: 'condition',
+            id: 'cert-expired',
+            field: 'certDaysRemaining',
+            operator: 'lt',
+            value: 0,
+        },
+    },
+];
+
+/** 从规则树提取用到的字段名（与 RuleEvaluatorService.extractFields 一致）。 */
+function extractRuleFields(node: unknown, acc = new Set<string>()): string[] {
+    const n = node as {
+        type?: string;
+        field?: string;
+        children?: unknown[];
+    };
+    if (n.type === 'condition' && n.field) {
+        acc.add(n.field);
+    } else if (Array.isArray(n.children)) {
+        for (const child of n.children) extractRuleFields(child, acc);
+    }
+    return [...acc];
+}
+
 async function main() {
     const pool = new Pool({ connectionString: process.env['DATABASE_URL'] });
     const adapter = new PrismaPg(pool);
@@ -93,6 +165,29 @@ async function main() {
                     status: 'ACTIVE',
                     startsAt: new Date(),
                     expiresAt: FREE_SUBSCRIPTION_EXPIRY,
+                },
+            });
+        }
+
+        // 默认规则组（组织级，不绑定）—— 幂等：同名已存在则跳过。
+        for (const ruleGroup of DEFAULT_RULE_GROUPS) {
+            const existingRuleGroup = await prisma.ruleGroup.findFirst({
+                where: {
+                    organizationId: organization.id,
+                    name: ruleGroup.name,
+                },
+                select: { id: true },
+            });
+
+            if (existingRuleGroup) continue;
+
+            await prisma.ruleGroup.create({
+                data: {
+                    organizationId: organization.id,
+                    name: ruleGroup.name,
+                    description: ruleGroup.description,
+                    tree: ruleGroup.tree as never,
+                    fieldsUsed: extractRuleFields(ruleGroup.tree),
                 },
             });
         }

@@ -1120,27 +1120,32 @@ cp .env.example .env
 | `JWT_REFRESH_EXPIRES_IN` | No | Refresh token TTL (default: `7d`) |
 | `THROTTLE_TTL` | No | Rate limit window in seconds (default: `60`) |
 | `THROTTLE_LIMIT` | No | Max requests per window (default: `10`) |
-| `STORAGE_DRIVER` | No | `local` or `oss` (default: `local`) |
 | `STORAGE_LOCAL_ROOT` | No | Local upload directory (default: `storage/uploads`) |
-| `STORAGE_PUBLIC_BASE_URL` | No | Optional public base URL for local/static serving |
 | `STORAGE_OSS_ENDPOINT` | Required for OSS | S3-compatible endpoint |
 | `STORAGE_OSS_REGION` | No | OSS region (default: `auto`) |
 | `STORAGE_OSS_BUCKET` | Required for OSS | OSS bucket name |
 | `STORAGE_OSS_ACCESS_KEY_ID` | Required for OSS | OSS access key ID |
 | `STORAGE_OSS_ACCESS_KEY_SECRET` | Required for OSS | OSS access key secret |
 | `STORAGE_OSS_FORCE_PATH_STYLE` | No | Use path-style URLs for MinIO/S3-compatible providers |
-| `STORAGE_OSS_PUBLIC_BASE_URL` | No | Optional public/CDN base URL |
-| `STORAGE_OSS_SIGNED_URL_TTL_SECONDS` | No | Signed download URL TTL |
-| `ATTACHMENT_MAX_IMAGE_SIZE_MB` | No | Image upload limit (default: `8`) |
-| `ATTACHMENT_MAX_PDF_SIZE_MB` | No | PDF upload limit (default: `16`) |
-| `ATTACHMENT_MAX_BLOB_SIZE_MB` | No | Other allowed file upload limit (default: `32`) |
-| `ATTACHMENT_MAX_FILES_PER_REQUEST` | No | Reserved batch upload limit (default: `5`) |
 | `RESEND_API_KEY` | Yes¹ | Resend email service API key |
 | `RESEND_FROM_EMAIL` | No | Sender email address |
 | `RESEND_FROM_NAME` | No | Sender display name (default: `Beacon`) |
 | `CORS_ORIGINS` | No | Comma-separated allowed origins |
 
 ¹ Not required when `NODE_ENV=development`, because application emails are printed to stdout instead of sent.
+
+Runtime-tunable attachment settings live in the `settings` table and can be managed by SUPER_ADMIN users through `/api/admin/settings`. Built-in defaults are used when a row is absent:
+
+| Setting key | Default | Description |
+|---|---:|---|
+| `storage.driver` | `local` | Active attachment storage driver: `local` or `oss` |
+| `storage.publicBaseUrl` | empty | Optional public base URL for local/static serving |
+| `storage.oss.publicBaseUrl` | empty | Optional public/CDN base URL for OSS objects |
+| `storage.oss.signedUrlTtlSeconds` | `300` | Signed OSS download URL TTL |
+| `attachments.maxImageSizeMb` | `8` | Image upload limit |
+| `attachments.maxPdfSizeMb` | `16` | PDF upload limit |
+| `attachments.maxBlobSizeMb` | `32` | Other allowed file upload limit |
+| `attachments.maxFilesPerRequest` | `5` | Reserved batch upload limit |
 
 ### Running the Application
 
@@ -1198,7 +1203,7 @@ docker run -p 3000:3000 \
   -e JWT_SECRET="your-secret" \
   -e JWT_REFRESH_SECRET="your-refresh-secret" \
   -e RESEND_API_KEY="your-resend-key" \
-  -e STORAGE_DRIVER="local" \
+  -e STORAGE_LOCAL_ROOT="storage/uploads" \
   Beacon
 ```
 

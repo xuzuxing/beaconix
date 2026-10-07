@@ -5,6 +5,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { StorageConfig } from '../../../config';
+import { SettingsService } from '../../settings';
 import {
     AttachmentStorageProvider,
     DownloadResult,
@@ -17,7 +18,10 @@ import { buildObjectKey } from './filename.util';
 export class LocalStorageProvider implements AttachmentStorageProvider {
     private readonly root: string;
 
-    constructor(private readonly configService: ConfigService) {
+    constructor(
+        private readonly configService: ConfigService,
+        private readonly settingsService: SettingsService,
+    ) {
         const storage = this.configService.get<StorageConfig>('storage')!;
         this.root = resolve(process.cwd(), storage.localRoot);
     }
@@ -36,7 +40,7 @@ export class LocalStorageProvider implements AttachmentStorageProvider {
         return {
             provider: 'LOCAL',
             key,
-            url: '',
+            url: await this.publicUrl(key),
             checksum: createHash('sha256').update(input.buffer).digest('hex'),
         };
     }
@@ -48,11 +52,16 @@ export class LocalStorageProvider implements AttachmentStorageProvider {
         });
     }
 
-    getDownload(key: string): Promise<DownloadResult> {
-        return Promise.resolve({
+    async getDownload(key: string): Promise<DownloadResult> {
+        const publicUrl = await this.publicUrl(key);
+        if (publicUrl) {
+            return { type: 'redirect', url: publicUrl };
+        }
+
+        return {
             type: 'stream',
             stream: createReadStream(this.resolveKey(key)),
-        });
+        };
     }
 
     private resolveKey(key: string): string {
@@ -61,5 +70,12 @@ export class LocalStorageProvider implements AttachmentStorageProvider {
             throw new Error('Resolved attachment path escapes storage root');
         }
         return target;
+    }
+
+    private async publicUrl(key: string): Promise<string> {
+        const base = (
+            await this.settingsService.getString('storage.publicBaseUrl', '')
+        ).replace(/\/$/, '');
+        return base ? `${base}/${key}` : '';
     }
 }

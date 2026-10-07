@@ -9,6 +9,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHash, randomUUID } from 'node:crypto';
 import type { StorageConfig } from '../../../config';
+import { SettingsService } from '../../settings';
 import {
     AttachmentStorageProvider,
     DownloadResult,
@@ -22,7 +23,10 @@ export class OssStorageProvider implements AttachmentStorageProvider {
     private readonly config: StorageConfig;
     private readonly client: S3Client;
 
-    constructor(private readonly configService: ConfigService) {
+    constructor(
+        private readonly configService: ConfigService,
+        private readonly settingsService: SettingsService,
+    ) {
         this.config = this.configService.get<StorageConfig>('storage')!;
         const oss = this.config.oss;
         this.client = new S3Client({
@@ -71,7 +75,7 @@ export class OssStorageProvider implements AttachmentStorageProvider {
             provider: 'OSS',
             bucket,
             key,
-            url: this.publicUrl(key),
+            url: await this.publicUrl(key),
             checksum,
         };
     }
@@ -89,10 +93,15 @@ export class OssStorageProvider implements AttachmentStorageProvider {
         key: string,
         bucket?: string | null,
     ): Promise<DownloadResult> {
-        const publicUrl = this.publicUrl(key);
+        const publicUrl = await this.publicUrl(key);
         if (publicUrl) {
             return { type: 'redirect', url: publicUrl };
         }
+
+        const signedUrlTtlSeconds = await this.settingsService.getNumber(
+            'storage.oss.signedUrlTtlSeconds',
+            300,
+        );
 
         const url = await getSignedUrl(
             this.client,
@@ -100,7 +109,7 @@ export class OssStorageProvider implements AttachmentStorageProvider {
                 Bucket: bucket || this.bucket(),
                 Key: key,
             }),
-            { expiresIn: this.config.oss.signedUrlTtlSeconds },
+            { expiresIn: signedUrlTtlSeconds },
         );
 
         return { type: 'redirect', url };
@@ -114,8 +123,13 @@ export class OssStorageProvider implements AttachmentStorageProvider {
         return bucket;
     }
 
-    private publicUrl(key: string): string {
-        const base = this.config.oss.publicBaseUrl.replace(/\/$/, '');
+    private async publicUrl(key: string): Promise<string> {
+        const base = (
+            await this.settingsService.getString(
+                'storage.oss.publicBaseUrl',
+                '',
+            )
+        ).replace(/\/$/, '');
         return base ? `${base}/${key}` : '';
     }
 }

@@ -42,6 +42,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { EmailModule } from './modules/email/email.module';
 import { CronModule } from './modules/cron/cron.module';
 import { MonitorsModule } from './modules/monitors/monitors.module';
+import { RulesModule } from './modules/rules/rules.module';
 import { ProbesModule } from './modules/probes/probes.module';
 import { CheckerModule } from './modules/checker/checker.module';
 import { StateModule } from './modules/state/state.module';
@@ -53,6 +54,7 @@ import { DeveloperApiModule } from './modules/developer-api/developer-api.module
 import { isDeveloperApiRoute } from './modules/developer-api/common/developer-throttle';
 import { QuotaModule } from './shared/quota/quota.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { SettingsModule } from './modules/settings';
 import { ClsModule } from './infra/cls/cls.module';
 import { CacheModule } from './infra/cache/cache.module';
 import { LoggerModule } from './infra/logging/logger.module';
@@ -124,6 +126,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         ScheduledJobsModule,
         WechatModule,
         // business
+        SettingsModule,
         EmailModule,
         AuthModule,
         UsersModule,
@@ -140,6 +143,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         NotificationsModule,
         CronModule,
         MonitorsModule,
+        RulesModule,
         ProbesModule,
         CheckerModule,
         StateModule,

@@ -96,6 +96,13 @@ enum AttachmentStorageProvider {
   EXTERNAL
 }
 
+enum SettingValueType {
+  STRING
+  NUMBER
+  BOOLEAN
+  JSON
+}
+
 enum CommentType {
   TEXT
   SYSTEM
@@ -245,6 +252,9 @@ model Organization {
   orders        Order[]
   apiKeys       ApiKey[]
 
+  // 规则引擎
+  ruleGroups RuleGroup[]
+
   @@index([ownerId])
   @@index([createdAt])
   @@index([deletedAt])
@@ -321,6 +331,7 @@ model Project {
   labels       Label[]
   auditLogs    AuditLog[]
   monitors     Monitor[]
+  ruleGroups   RuleGroup[]
 
   // Enforce unique project key per organization (e.g. no two "PROJ" in same org)
   @@unique([organizationId, key])
@@ -524,6 +535,23 @@ model Attachment {
   @@map("attachments")
 }
 
+// SETTING
+model Setting {
+  key         String           @id
+  name        String
+  value       Json
+  valueType   SettingValueType
+  description String?
+  isSecret    Boolean          @default(false)
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isSecret])
+  @@map("settings")
+}
+
 // LABEL
 model Label {
   id             String  @id @default(cuid())
@@ -631,6 +659,13 @@ enum MonitorStatus {
   PAUSED
 }
 
+// 规则命中后的动作
+enum RuleAction {
+  ALERT // 触发通知
+  MARK_DOWN // 标记 monitor 为 DOWN
+  SILENCE // 静默，不通知
+}
+
 enum ProbeScope {
   SYSTEM
   TENANT
@@ -736,6 +771,8 @@ model Monitor {
   executions   ProbeExecution[]
   // 该 monitor 绑定的通知渠道（多选）；为空时回退组织全部启用渠道
   notificationChannels MonitorNotificationChannel[]
+  // 该 monitor 绑定的嵌套规则组（高级模式）
+  ruleBindings MonitorRuleBinding[]
 
   @@index([organizationId])
   @@index([projectId])
@@ -785,6 +822,58 @@ model MonitorNotificationChannel {
   @@index([monitorId])
   @@index([channelId])
   @@map("monitor_notification_channels")
+}
+
+// ==================== 规则引擎（嵌套规则） ====================
+
+// 规则组：一棵逻辑树（LogicNode | ConditionNode 的 JSON）
+model RuleGroup {
+  id             String   @id @default(cuid())
+  organizationId String
+  projectId      String? // null = 组织级，非空 = 项目级
+  name           String
+  description    String?
+  // 整棵逻辑树：LogicNode | ConditionNode 的 JSON
+  tree           Json
+  // 冗余：树里用到的字段名，便于按字段反查规则
+  fieldsUsed     String[] @default([])
+  enabled        Boolean  @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  bindings     MonitorRuleBinding[]
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([enabled])
+  @@index([deletedAt])
+  @@map("rule_groups")
+}
+
+// monitor 与规则组的绑定
+model MonitorRuleBinding {
+  id          String     @id @default(cuid())
+  monitorId   String
+  ruleGroupId String
+  action      RuleAction @default(ALERT)
+  // 同一个 monitor 绑定多个规则组时的优先级，数字越大越先求值
+  priority    Int        @default(0)
+  enabled     Boolean    @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  monitor   Monitor   @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  ruleGroup RuleGroup @relation(fields: [ruleGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([monitorId, ruleGroupId])
+  @@index([monitorId])
+  @@index([ruleGroupId])
+  @@map("monitor_rule_bindings")
 }
 
 // 探针

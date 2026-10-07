@@ -4,6 +4,10 @@ import type { NotificationPayload } from './notifier.types';
 export function renderTitle(payload: NotificationPayload): string {
     const prefix = payload.test ? '[TEST] ' : '';
 
+    if (payload.event === 'RULE_ALERT') {
+        const rule = payload.ruleGroupName ? ` (${payload.ruleGroupName})` : '';
+        return `${prefix}[RULE MATCHED]${rule} ${payload.monitorName}`;
+    }
     if (payload.event === 'AVAILABILITY_RECOVERED') {
         return `${prefix}[AVAILABILITY RECOVERED] ${payload.monitorName}`;
     }

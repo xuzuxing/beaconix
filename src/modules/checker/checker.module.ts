@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { QueuesModule } from '../../infra/queue/queues.module';
 import { AdminModule } from '../admin/admin.module';
 import { NotifierModule } from '../notifier/notifier.module';
+import { RulesModule } from '../rules/rules.module';
 import { StateModule } from '../state/state.module';
 import { CheckerController } from './checker.controller';
 import { CheckerScheduler } from './checker.scheduler';
@@ -11,7 +12,13 @@ import { MonitorCheckProcessor } from './monitor-check.processor';
 import { MonitorScanProcessor } from './monitor-scan.processor';
 
 @Module({
-    imports: [StateModule, NotifierModule, AdminModule, QueuesModule],
+    imports: [
+        StateModule,
+        NotifierModule,
+        RulesModule,
+        AdminModule,
+        QueuesModule,
+    ],
     controllers: [CheckerController],
     providers: [
         CheckerService,

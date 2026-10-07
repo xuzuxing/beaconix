@@ -7,7 +7,8 @@ export type MonitorEvent =
     | 'DEGRADED'
     | 'RECOVER'
     | 'AVAILABILITY_ALERT'
-    | 'AVAILABILITY_RECOVERED';
+    | 'AVAILABILITY_RECOVERED'
+    | 'RULE_ALERT';
 
 export interface NotificationPayload {
     monitorId: string;
@@ -33,6 +34,9 @@ export interface NotificationPayload {
     availabilitySampleSize?: number;
     /** True for a manually triggered test alert. */
     test?: boolean;
+    /** Rule-alert only: the rule group that matched. */
+    ruleGroupId?: string;
+    ruleGroupName?: string;
 }
 
 /** Input for an availability alert raised by the checker pipeline. */

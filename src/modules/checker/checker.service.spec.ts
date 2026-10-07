@@ -88,11 +88,19 @@ function createService() {
         notifyAvailabilityRecovery: jest
             .fn()
             .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
+        notifyRuleAlert: jest
+            .fn()
+            .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
     };
     const httpChecker = { check: jest.fn().mockResolvedValue(checkResult) };
     const tcpChecker = { check: jest.fn().mockResolvedValue(checkResult) };
     const systemProbeScheduler = {
         getAssignedProbes: jest.fn().mockResolvedValue([]),
+    };
+
+    const ruleEvaluator = { evaluate: jest.fn().mockReturnValue(false) };
+    const ruleGroups = {
+        findBindingsForMonitor: jest.fn().mockResolvedValue([]),
     };
 
     const service = new CheckerService(
@@ -102,6 +110,8 @@ function createService() {
         httpChecker as never,
         tcpChecker,
         systemProbeScheduler as never,
+        ruleEvaluator as never,
+        ruleGroups as never,
     );
 
     return {
@@ -112,6 +122,8 @@ function createService() {
         httpChecker,
         tcpChecker,
         systemProbeScheduler,
+        ruleEvaluator,
+        ruleGroups,
     };
 }
 
@@ -904,6 +916,182 @@ describe('CheckerService', () => {
             expect(
                 notifierService.notifyAvailabilityAlert,
             ).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('rule groups (advanced mode)', () => {
+        const binding = {
+            id: 'binding-1',
+            monitorId: 'monitor-1',
+            ruleGroupId: 'rg-1',
+            action: 'ALERT',
+            priority: 0,
+            enabled: true,
+            ruleGroup: {
+                id: 'rg-1',
+                organizationId: 'org-1',
+                projectId: null,
+                name: 'High latency',
+                description: null,
+                tree: {
+                    type: 'condition',
+                    id: 'c1',
+                    field: 'latency',
+                    operator: 'gt',
+                    value: 100,
+                },
+                fieldsUsed: ['latency'],
+                enabled: true,
+                createdAt: new Date('2026-03-05T12:00:00.000Z'),
+                updatedAt: new Date('2026-03-05T12:00:00.000Z'),
+                deletedAt: null,
+            },
+        };
+
+        const noChangeTransition = {
+            previousStatus: 'UP',
+            previousFailCount: 0,
+            status: 'UP',
+            failCount: 0,
+            changed: false,
+        };
+
+        it('notifies when a bound rule matches', async () => {
+            const {
+                service,
+                prisma,
+                stateService,
+                ruleEvaluator,
+                ruleGroups,
+                notifierService,
+            } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            stateService.record.mockResolvedValue({
+                monitor: monitorRow,
+                state: stateRow,
+                transition: noChangeTransition,
+            });
+            ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
+            ruleEvaluator.evaluate.mockReturnValue(true);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(ruleGroups.findBindingsForMonitor).toHaveBeenCalledWith(
+                'monitor-1',
+            );
+            expect(ruleEvaluator.evaluate).toHaveBeenCalledWith(
+                binding.ruleGroup.tree,
+                {
+                    success: true,
+                    latency: 12,
+                    certDaysRemaining: undefined,
+                },
+            );
+            expect(notifierService.notifyRuleAlert).toHaveBeenCalledWith(
+                monitorRow,
+                expect.objectContaining({ status: 'UP' }),
+                { id: 'rg-1', name: 'High latency' },
+            );
+        });
+
+        it('does not notify when no rule matches', async () => {
+            const {
+                service,
+                prisma,
+                stateService,
+                ruleEvaluator,
+                ruleGroups,
+                notifierService,
+            } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            stateService.record.mockResolvedValue({
+                monitor: monitorRow,
+                state: stateRow,
+                transition: noChangeTransition,
+            });
+            ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
+            ruleEvaluator.evaluate.mockReturnValue(false);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(notifierService.notifyRuleAlert).not.toHaveBeenCalled();
+        });
+
+        it('skips evaluation when the monitor has no bound rule group', async () => {
+            const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            stateService.record.mockResolvedValue({
+                monitor: monitorRow,
+                state: stateRow,
+                transition: noChangeTransition,
+            });
+            ruleGroups.findBindingsForMonitor.mockResolvedValue([]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(ruleEvaluator.evaluate).not.toHaveBeenCalled();
+        });
+
+        it('forces the monitor DOWN when a MARK_DOWN rule matches', async () => {
+            const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            stateService.record.mockResolvedValue({
+                monitor: monitorRow,
+                state: stateRow,
+                transition: noChangeTransition,
+            });
+            ruleGroups.findBindingsForMonitor.mockResolvedValue([
+                { ...binding, action: 'MARK_DOWN' },
+            ]);
+            ruleEvaluator.evaluate.mockReturnValue(true);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+
+            expect(prisma.monitorState.update).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+                data: { status: 'DOWN' },
+            });
+        });
+
+        it('suppresses the transition notification when a SILENCE rule matches', async () => {
+            const {
+                service,
+                prisma,
+                stateService,
+                ruleEvaluator,
+                ruleGroups,
+                notifierService,
+            } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            stateService.record.mockResolvedValue({
+                monitor: monitorRow,
+                state: stateRow,
+                transition: {
+                    previousStatus: 'UP',
+                    previousFailCount: 0,
+                    status: 'DOWN',
+                    failCount: 3,
+                    changed: true,
+                },
+            });
+            ruleGroups.findBindingsForMonitor.mockResolvedValue([
+                { ...binding, action: 'SILENCE' },
+            ]);
+            ruleEvaluator.evaluate.mockReturnValue(true);
+
+            const result = await service.checkMonitorForProject(
+                'project-1',
+                'monitor-1',
+            );
+
+            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
+            expect(result.notified).toEqual({
+                skipped: true,
+                sent: 0,
+                failed: 0,
+            });
         });
     });
 });

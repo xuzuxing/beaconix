@@ -11,8 +11,7 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { SaveAttachmentDto } from './dto';
 import { AttachmentEntity } from './entities';
 import { StorageService } from './storage';
-import type { StorageConfig } from '../../config';
-import { ConfigService } from '@nestjs/config';
+import { SettingsService } from '../settings';
 
 const uploaderSelect = { id: true, name: true, email: true } as const;
 const ALLOWED_BLOB_MIME_TYPES = new Set([
@@ -30,7 +29,7 @@ export class AttachmentsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly storage: StorageService,
-        private readonly configService: ConfigService,
+        private readonly settingsService: SettingsService,
     ) {}
 
     async findAll(taskId: string) {
@@ -58,7 +57,7 @@ export class AttachmentsService {
                 storageProvider:
                     (dto.storageProvider as any) ??
                     (dto.source === 'UPLOAD'
-                        ? this.storage.activeProviderName()
+                        ? await this.storage.activeProviderName()
                         : 'EXTERNAL'),
                 bucket: dto.bucket ?? null,
                 checksum: dto.checksum ?? null,
@@ -82,7 +81,7 @@ export class AttachmentsService {
         }
 
         const task = await this.ensureTaskExists(taskId);
-        this.validateFile(file);
+        await this.validateFile(file);
 
         const stored = await this.storage.putObject({
             buffer: file.buffer,
@@ -212,24 +211,24 @@ export class AttachmentsService {
         return attachment;
     }
 
-    private validateFile(file: Express.Multer.File) {
-        const config = this.configService.get<StorageConfig>('storage')!;
+    private async validateFile(file: Express.Multer.File) {
+        const settings = await this.settingsService.getAttachmentSettings();
         const mimeType = file.mimetype || 'application/octet-stream';
         const sizeMb = file.size / 1024 / 1024;
 
         if (mimeType.startsWith('image/')) {
-            if (sizeMb > config.attachments.maxImageSizeMb) {
+            if (sizeMb > settings.maxImageSizeMb) {
                 throw new BadRequestException(
-                    `Image exceeds ${config.attachments.maxImageSizeMb}MB`,
+                    `Image exceeds ${settings.maxImageSizeMb}MB`,
                 );
             }
             return;
         }
 
         if (mimeType === 'application/pdf') {
-            if (sizeMb > config.attachments.maxPdfSizeMb) {
+            if (sizeMb > settings.maxPdfSizeMb) {
                 throw new BadRequestException(
-                    `PDF exceeds ${config.attachments.maxPdfSizeMb}MB`,
+                    `PDF exceeds ${settings.maxPdfSizeMb}MB`,
                 );
             }
             return;
@@ -239,9 +238,9 @@ export class AttachmentsService {
             throw new BadRequestException(`Unsupported file type: ${mimeType}`);
         }
 
-        if (sizeMb > config.attachments.maxBlobSizeMb) {
+        if (sizeMb > settings.maxBlobSizeMb) {
             throw new BadRequestException(
-                `File exceeds ${config.attachments.maxBlobSizeMb}MB`,
+                `File exceeds ${settings.maxBlobSizeMb}MB`,
             );
         }
     }

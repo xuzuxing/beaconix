@@ -300,6 +300,51 @@ export class NotifierService {
             test: alert.isTest,
         };
 
+        return this.enqueuePayload(channels, payload, state.status);
+    }
+
+    /**
+     * Enqueues a rule-alert notification for the monitor. Delivers to the
+     * monitor's bound channels (org-wide fallback), flagged with the matched
+     * rule group.
+     */
+    async notifyRuleAlert(
+        monitor: MonitorModel,
+        state: AvailabilityAlertState,
+        ruleGroup: { id: string; name: string },
+    ): Promise<NotificationResult> {
+        const channels = await this.resolveAlertChannels(monitor);
+
+        if (channels.length === 0) {
+            return { skipped: true, sent: 0, failed: 0 };
+        }
+
+        const payload: NotificationPayload = {
+            monitorId: monitor.id,
+            monitorName: monitor.name,
+            monitorType: monitor.type,
+            target: monitor.target,
+            organizationId: monitor.organizationId,
+            previousStatus: state.status,
+            status: state.status,
+            event: 'RULE_ALERT',
+            failCount: state.failCount,
+            latency: state.lastLatency ?? null,
+            error: state.lastError ?? null,
+            checkedAt: state.lastCheckAt ?? new Date(),
+            ruleGroupId: ruleGroup.id,
+            ruleGroupName: ruleGroup.name,
+        };
+
+        return this.enqueuePayload(channels, payload, state.status);
+    }
+
+    /** Enqueues one delivery job per channel for the given payload. */
+    private async enqueuePayload(
+        channels: NotificationChannelModel[],
+        payload: NotificationPayload,
+        transitionStatus: MonitorStatus,
+    ): Promise<NotificationResult> {
         const deliveries = await Promise.allSettled(
             channels.map((channel) =>
                 this.notificationQueue.add(
@@ -307,7 +352,7 @@ export class NotifierService {
                     {
                         channelId: channel.id,
                         payload,
-                        transitionStatus: state.status,
+                        transitionStatus,
                         sslAlert: false,
                     },
                     {
@@ -327,7 +372,7 @@ export class NotifierService {
         for (const delivery of deliveries) {
             if (delivery.status === 'rejected') {
                 this.logger.warn(
-                    `Failed to enqueue availability alert: ${(delivery.reason as Error).message}`,
+                    `Failed to enqueue notification job: ${(delivery.reason as Error).message}`,
                 );
             }
         }

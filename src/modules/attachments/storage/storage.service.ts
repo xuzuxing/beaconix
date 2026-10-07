@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import type { StorageConfig } from '../../../config';
+import { SettingsService } from '../../settings';
 import { LocalStorageProvider } from './local-storage.provider';
 import { OssStorageProvider } from './oss-storage.provider';
 import {
@@ -13,13 +12,13 @@ import {
 @Injectable()
 export class StorageService {
     constructor(
-        private readonly configService: ConfigService,
+        private readonly settingsService: SettingsService,
         private readonly local: LocalStorageProvider,
         private readonly oss: OssStorageProvider,
     ) {}
 
-    putObject(input: PutObjectInput): Promise<PutObjectResult> {
-        return this.activeProvider().putObject(input);
+    async putObject(input: PutObjectInput): Promise<PutObjectResult> {
+        return (await this.activeProvider()).putObject(input);
     }
 
     deleteObject(
@@ -38,13 +37,16 @@ export class StorageService {
         return this.provider(provider).getDownload(key, bucket);
     }
 
-    activeProviderName(): 'LOCAL' | 'OSS' {
-        const storage = this.configService.get<StorageConfig>('storage')!;
-        return storage.driver === 'oss' ? 'OSS' : 'LOCAL';
+    async activeProviderName(): Promise<'LOCAL' | 'OSS'> {
+        const driver = await this.settingsService.getString(
+            'storage.driver',
+            'local',
+        );
+        return driver === 'oss' ? 'OSS' : 'LOCAL';
     }
 
-    private activeProvider(): AttachmentStorageProvider {
-        return this.provider(this.activeProviderName());
+    private async activeProvider(): Promise<AttachmentStorageProvider> {
+        return this.provider(await this.activeProviderName());
     }
 
     private provider(provider: string): AttachmentStorageProvider {

@@ -5,7 +5,9 @@ import {
     CheckSource,
     ExecutionStatus,
     ExecutionTrigger,
+    MonitorStatus,
     MonitorType,
+    RuleAction,
 } from '../../generated/prisma/enums';
 import type {
     MonitorModel,
@@ -17,6 +19,9 @@ import type { MonitorTransition } from '../state/state.service';
 import { NotifierService } from '../notifier/notifier.service';
 import type { NotificationResult } from '../notifier/notifier.service';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
+import { RuleEvaluatorService } from '../rules/rule-evaluator.service';
+import { RuleGroupsService } from '../rules/rule-groups.service';
+import type { RuleContext, RuleNode } from '../rules/types';
 import { HttpChecker, TcpChecker } from './checkers';
 import type { CheckResult, ProbeReport } from './checkers';
 import { QueryCheckLogsDto } from './dto';
@@ -84,6 +89,14 @@ interface EvaluatedResult {
     rescuedByProbe: boolean;
 }
 
+/** Actions a matched rule group requests for the current check round. */
+interface RuleEffects {
+    /** A SILENCE rule matched: suppress this round's notifications. */
+    silenced: boolean;
+    /** A MARK_DOWN rule matched: force the monitor status to DOWN. */
+    markDown: boolean;
+}
+
 @Injectable()
 export class CheckerService {
     private readonly logger = new Logger(CheckerService.name);
@@ -95,6 +108,8 @@ export class CheckerService {
         private readonly httpChecker: HttpChecker,
         private readonly tcpChecker: TcpChecker,
         private readonly systemProbeScheduler: SystemProbeScheduler,
+        private readonly ruleEvaluator: RuleEvaluatorService,
+        private readonly ruleGroups: RuleGroupsService,
     ) {}
 
     /** Runs a check for one monitor of a project (tenant-scoped entry). */
@@ -341,11 +356,25 @@ export class CheckerService {
             },
         );
 
-        // Availability alerting rides on the same aggregated verdict and runs
-        // before the transition notification, but is independent of it.
+        // Availability (simple mode) and rule-tree (advanced mode) alerting both
+        // ride on the same aggregated verdict and run before the transition
+        // notification, but are independent of it.
         await this.evaluateAvailabilityAlert(monitor, state);
+        const ruleEffects = await this.evaluateRuleGroups(
+            monitor,
+            state,
+            result,
+        );
 
-        const notified = await this.notifyIfChanged(monitor, state, transition);
+        // MARK_DOWN forces the monitor DOWN (the state machine recovers it on
+        // the next successful check). SILENCE suppresses this round's alert.
+        if (ruleEffects.markDown) {
+            await this.markDownByRule(monitor.id);
+        }
+
+        const notified = ruleEffects.silenced
+            ? { skipped: true, sent: 0, failed: 0 }
+            : await this.notifyIfChanged(monitor, state, transition);
 
         await this.writeExecution(monitor, result, trigger, {
             previousStatus: transition.previousStatus,
@@ -620,6 +649,92 @@ export class CheckerService {
         } catch (error) {
             this.logger.warn(
                 `Availability alert failed for monitor ${monitor.id}: ${(error as Error).message}`,
+            );
+        }
+    }
+
+    /** 构造规则求值上下文，来自聚合后的 CheckResult。 */
+    private buildRuleContext(result: CheckResult): RuleContext {
+        return {
+            success: result.success,
+            latency: result.latency,
+            certDaysRemaining: result.ssl?.daysRemaining,
+            // 阶段 2：statusCode / bodyContains
+        };
+    }
+
+    /**
+     * Evaluates the monitor's bound rule groups (advanced mode) against the
+     * aggregated verdict. Matched ALERT bindings enqueue a rule notification.
+     * Never throws: a failed evaluation only logs, the check outcome stands.
+     */
+    private async evaluateRuleGroups(
+        monitor: MonitorModel,
+        state: MonitorStateModel,
+        result: CheckResult,
+    ): Promise<RuleEffects> {
+        const effects: RuleEffects = { silenced: false, markDown: false };
+
+        let bindings;
+        try {
+            bindings = await this.ruleGroups.findBindingsForMonitor(monitor.id);
+        } catch (error) {
+            this.logger.warn(
+                `Failed to load rule bindings for monitor ${monitor.id}: ${(error as Error).message}`,
+            );
+            return effects;
+        }
+
+        if (bindings.length === 0) return effects;
+
+        const ctx = this.buildRuleContext(result);
+
+        for (const binding of bindings) {
+            try {
+                const matched = this.ruleEvaluator.evaluate(
+                    binding.ruleGroup.tree as RuleNode,
+                    ctx,
+                );
+                if (!matched) continue;
+
+                switch (binding.action) {
+                    case RuleAction.ALERT:
+                        await this.notifierService.notifyRuleAlert(
+                            monitor,
+                            state,
+                            {
+                                id: binding.ruleGroup.id,
+                                name: binding.ruleGroup.name,
+                            },
+                        );
+                        break;
+                    case RuleAction.SILENCE:
+                        effects.silenced = true;
+                        break;
+                    case RuleAction.MARK_DOWN:
+                        effects.markDown = true;
+                        break;
+                }
+            } catch (error) {
+                this.logger.warn(
+                    `Rule evaluation failed for monitor ${monitor.id}: ${(error as Error).message}`,
+                );
+            }
+        }
+
+        return effects;
+    }
+
+    /** Forces a monitor DOWN because a MARK_DOWN rule matched. */
+    private async markDownByRule(monitorId: string): Promise<void> {
+        try {
+            await this.prisma.monitorState.update({
+                where: { monitorId },
+                data: { status: MonitorStatus.DOWN },
+            });
+        } catch (error) {
+            this.logger.warn(
+                `Failed to mark monitor ${monitorId} DOWN by rule: ${(error as Error).message}`,
             );
         }
     }
