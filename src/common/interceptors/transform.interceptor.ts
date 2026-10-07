@@ -9,6 +9,7 @@ import { RENDER_METADATA } from '@nestjs/common/constants';
 import { ClsService } from 'nestjs-cls';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
+import { SKIP_TRANSFORM_KEY } from '../decorators/skip-transform.decorator';
 
 export interface ApiResponse<T> {
     data: T;
@@ -34,7 +35,12 @@ export class TransformInterceptor<T> implements NestInterceptor<
             context.getHandler(),
         );
 
-        if (renderTemplate) {
+        const skipTransform = Reflect.getMetadata(
+            SKIP_TRANSFORM_KEY,
+            context.getHandler(),
+        );
+
+        if (renderTemplate || skipTransform) {
             return next.handle() as Observable<ApiResponse<T>>;
         }
 

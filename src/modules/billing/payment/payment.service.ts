@@ -21,6 +21,12 @@ import type {
 
 type OrderForPayment = OrderModel;
 
+/** WeChat Pay V3 callback acknowledgement body (`code` + `message`). */
+export interface PaymentCallbackResponse {
+    code: 'SUCCESS' | 'FAIL';
+    message?: string;
+}
+
 @Injectable()
 export class PaymentService {
     constructor(
@@ -67,7 +73,7 @@ export class PaymentService {
         rawBody: string,
         signature: string,
         headers?: PaymentCallbackHeaders,
-    ) {
+    ): Promise<PaymentCallbackResponse> {
         return this.handleCallback(
             PaymentChannel.WECHAT,
             rawBody,
@@ -82,7 +88,7 @@ export class PaymentService {
         rawBody: string,
         signature: string,
         headers?: PaymentCallbackHeaders,
-    ) {
+    ): Promise<PaymentCallbackResponse> {
         const provider = this.paymentProviderFactory.get(channel);
         const callback = await provider.verifyCallback(
             rawBody,
@@ -107,7 +113,7 @@ export class PaymentService {
         }
 
         if (payment.status === PaymentStatus.SUCCESS) {
-            return { code: 'SUCCESS' };
+            return { code: 'SUCCESS', message: '成功' };
         }
 
         await this.prisma.$transaction(async (tx) => {
@@ -145,7 +151,7 @@ export class PaymentService {
             await this.activateSubscription(tx, payment.order);
         });
 
-        return { code: 'SUCCESS' };
+        return { code: 'SUCCESS', message: '成功' };
     }
 
     // -- Helpers ---------------------------------------------------------

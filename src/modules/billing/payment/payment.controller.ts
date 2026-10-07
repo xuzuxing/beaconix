@@ -7,6 +7,7 @@ import {
     Param,
     Post,
     Req,
+    Res,
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import {
@@ -18,8 +19,8 @@ import {
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import type { Request } from 'express';
-import { CurrentUser, Public } from '../../../common/decorators';
+import type { Request, Response } from 'express';
+import { CurrentUser, Public, SkipTransform } from '../../../common/decorators';
 import type { JwtPayload } from '../../../common/interfaces/jwt-payload.interface';
 import { CreatePaymentDto } from './dto';
 import type { PaymentCallbackHeaders } from './payment-provider.interface';
@@ -67,27 +68,36 @@ export class PaymentController {
 
     @Post('payment/wechat/callback')
     @Public()
-    @HttpCode(HttpStatus.OK)
+    @SkipTransform()
     @ApiOperation({ summary: 'WeChat Pay callback (idempotent)' })
     @ApiBody({
         description:
             'WeChat Pay notification envelope with an encrypted resource',
     })
-    @ApiOkResponse({ description: '{ code: "SUCCESS" | "FAIL" }' })
+    @ApiOkResponse({ description: '{ code: "SUCCESS", message: "成功" }' })
     async wechatCallback(
         @Req() request: RawBodyRequest<Request>,
         @Headers() headers: PaymentCallbackHeaders,
         @Body() body: unknown,
+        @Res({ passthrough: true }) response: Response,
     ) {
         // WeChat signs the exact bytes it sent, so verification must use the raw
         // payload captured by `rawBody: true` — never a re-serialized object.
         const rawBody =
             request.rawBody?.toString('utf8') ?? JSON.stringify(body);
 
-        return this.paymentService.handleWechatCallback(
+        const result = await this.paymentService.handleWechatCallback(
             rawBody,
             readHeader(headers, 'wechatpay-signature') ?? '',
             headers,
         );
+
+        // WeChat Pay V3 expects a bare acknowledgement body (no envelope) and a
+        // non-2xx status for FAIL so it will retry.
+        response.status(
+            result.code === 'SUCCESS' ? HttpStatus.OK : HttpStatus.BAD_REQUEST,
+        );
+
+        return result;
     }
 }

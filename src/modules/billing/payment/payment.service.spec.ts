@@ -115,7 +115,7 @@ describe('PaymentService', () => {
                 'signature',
             );
 
-            expect(result).toEqual({ code: 'SUCCESS' });
+            expect(result).toEqual({ code: 'SUCCESS', message: '成功' });
             expect(tx.payment.updateMany).toHaveBeenCalledWith(
                 expect.objectContaining({
                     where: expect.objectContaining({
@@ -163,7 +163,7 @@ describe('PaymentService', () => {
                 'signature',
             );
 
-            expect(result).toEqual({ code: 'SUCCESS' });
+            expect(result).toEqual({ code: 'SUCCESS', message: '成功' });
             expect(prisma.$transaction).not.toHaveBeenCalled();
         });
 
@@ -199,7 +199,7 @@ describe('PaymentService', () => {
                 'signature',
             );
 
-            expect(result).toEqual({ code: 'SUCCESS' });
+            expect(result).toEqual({ code: 'SUCCESS', message: '成功' });
             expect(tx.payment.updateMany).toHaveBeenCalled();
             expect(tx.order.update).not.toHaveBeenCalled();
             expect(tx.subscription.findFirst).not.toHaveBeenCalled();
@@ -238,7 +238,7 @@ describe('PaymentService', () => {
                 'signature',
             );
 
-            expect(result).toEqual({ code: 'SUCCESS' });
+            expect(result).toEqual({ code: 'SUCCESS', message: '成功' });
             expect(tx.payment.updateMany).toHaveBeenCalledWith(
                 expect.objectContaining({
                     data: expect.objectContaining({
