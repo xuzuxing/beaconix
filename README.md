@@ -113,7 +113,7 @@ Managing agile workflows across distributed teams requires robust tooling: organ
 | **Task Watching** | Users can watch tasks and receive notifications on changes |
 | **Task Activity Log** | Automatic timeline of all field changes on a task |
 | **Comments** | Threaded (nested) comments with edit tracking and soft-delete |
-| **Attachments** | File uploads via UploadThing with metadata tracking |
+| **Attachments** | First-party local/OSS file uploads with metadata tracking |
 | **Labels** | Organization-wide and project-scoped labels with task tagging |
 | **Notifications** | Real-time SSE streaming, in-app read/unread, email alerts |
 | **Monitoring** | HTTP/TCP monitors, local checks, probe-assisted checks, state tracking, and check history |
@@ -158,7 +158,7 @@ The full interactive API documentation is available at:
 | **Scheduling** | BullMQ scheduled jobs on Redis | Automated background jobs |
 | **Queue/Cache** | Redis + BullMQ + node-cache | Scheduled jobs, notification work, and runtime caching |
 | **Email** | Resend SDK | Transactional email delivery |
-| **File Upload** | UploadThing | Server-side file upload handling |
+| **File Upload** | Local disk / S3-compatible OSS | Server-side attachment upload and storage abstraction |
 | **API Reference UI** | Scalar | Swagger/OpenAPI document viewer at `/reference` |
 | **Logging** | Pino / nestjs-pino | Structured request and application logging |
 | **Security** | Helmet | HTTP security headers |
@@ -217,7 +217,7 @@ graph TB
 
     DB[("PostgreSQL 16")]
     Resend["Resend<br/>Email Service"]
-    UploadThing["UploadThing<br/>File Storage"]
+    Storage["Local / OSS<br/>File Storage"]
 
     Client -->|"HTTPS"| API
     API --> Helmet --> CORS --> Throttle --> Validation --> Transform
@@ -228,7 +228,7 @@ graph TB
 
     Auth & Orgs & Members & Invites & Projects & Sprints & Tasks & Comments & Attach & Labels & Notif & Audit & Cron -->|"Prisma ORM"| DB
     Email -->|"API"| Resend
-    Attach -->|"API"| UploadThing
+    Attach -->|"StorageService"| Storage
     Cron -->|"Scheduled"| Email
     Cron -->|"Scheduled"| Notif
 ```
@@ -500,7 +500,7 @@ beacon/
 │       ├── sprints/                     # Sprint CRUD, start, complete
 │       ├── tasks/                       # Task CRUD, assign, move, watch, dependencies
 │       ├── comments/                    # Threaded comments CRUD
-│       ├── attachments/                 # File upload metadata, UploadThing router
+│       ├── attachments/                 # Local/OSS uploads, metadata, download/delete
 │       ├── labels/                      # Org/project labels, task tagging
 │       ├── notifications/               # SSE stream, read/unread, CRUD
 │       ├── audit-logs/                  # Immutable audit log queries
@@ -682,9 +682,10 @@ All endpoints are prefixed with `/api`. Protected endpoints require a `Bearer` t
 
 | Method | Endpoint | Description | Min Role |
 |---|---|---|---|
-| `POST` | `/api/uploadthing` | UploadThing route handler for the `taskAttachment` file route | JWT |
 | `GET` | `/api/tasks/:taskId/attachments` | List attachments for a task | MEMBER |
+| `POST` | `/api/tasks/:taskId/attachments/upload` | Upload a file and save metadata | MEMBER |
 | `POST` | `/api/tasks/:taskId/attachments` | Save attachment metadata | MEMBER |
+| `GET` | `/api/tasks/:taskId/attachments/:id/download` | Download or redirect to an attachment object | MEMBER |
 | `DELETE` | `/api/tasks/:taskId/attachments/:id` | Remove an attachment | MEMBER |
 
 ### Labels Endpoints
@@ -1086,7 +1087,7 @@ The production container includes a health check endpoint (`GET /api`) and expos
 - **pnpm** (latest)
 - **PostgreSQL** 16 (or use Docker)
 - **Resend** API key (for email features)
-- **UploadThing** token (for file uploads)
+- Local disk storage or S3-compatible OSS credentials (for file uploads)
 
 ### Installation
 
@@ -1119,7 +1120,21 @@ cp .env.example .env
 | `JWT_REFRESH_EXPIRES_IN` | No | Refresh token TTL (default: `7d`) |
 | `THROTTLE_TTL` | No | Rate limit window in seconds (default: `60`) |
 | `THROTTLE_LIMIT` | No | Max requests per window (default: `10`) |
-| `UPLOADTHING_TOKEN` | Yes | UploadThing API token |
+| `STORAGE_DRIVER` | No | `local` or `oss` (default: `local`) |
+| `STORAGE_LOCAL_ROOT` | No | Local upload directory (default: `storage/uploads`) |
+| `STORAGE_PUBLIC_BASE_URL` | No | Optional public base URL for local/static serving |
+| `STORAGE_OSS_ENDPOINT` | Required for OSS | S3-compatible endpoint |
+| `STORAGE_OSS_REGION` | No | OSS region (default: `auto`) |
+| `STORAGE_OSS_BUCKET` | Required for OSS | OSS bucket name |
+| `STORAGE_OSS_ACCESS_KEY_ID` | Required for OSS | OSS access key ID |
+| `STORAGE_OSS_ACCESS_KEY_SECRET` | Required for OSS | OSS access key secret |
+| `STORAGE_OSS_FORCE_PATH_STYLE` | No | Use path-style URLs for MinIO/S3-compatible providers |
+| `STORAGE_OSS_PUBLIC_BASE_URL` | No | Optional public/CDN base URL |
+| `STORAGE_OSS_SIGNED_URL_TTL_SECONDS` | No | Signed download URL TTL |
+| `ATTACHMENT_MAX_IMAGE_SIZE_MB` | No | Image upload limit (default: `8`) |
+| `ATTACHMENT_MAX_PDF_SIZE_MB` | No | PDF upload limit (default: `16`) |
+| `ATTACHMENT_MAX_BLOB_SIZE_MB` | No | Other allowed file upload limit (default: `32`) |
+| `ATTACHMENT_MAX_FILES_PER_REQUEST` | No | Reserved batch upload limit (default: `5`) |
 | `RESEND_API_KEY` | Yes¹ | Resend email service API key |
 | `RESEND_FROM_EMAIL` | No | Sender email address |
 | `RESEND_FROM_NAME` | No | Sender display name (default: `Beacon`) |
@@ -1183,7 +1198,7 @@ docker run -p 3000:3000 \
   -e JWT_SECRET="your-secret" \
   -e JWT_REFRESH_SECRET="your-refresh-secret" \
   -e RESEND_API_KEY="your-resend-key" \
-  -e UPLOADTHING_TOKEN="your-uploadthing-token" \
+  -e STORAGE_DRIVER="local" \
   Beacon
 ```
 

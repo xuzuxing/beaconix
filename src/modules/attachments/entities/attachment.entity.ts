@@ -13,11 +13,27 @@ export class AttachmentEntity {
     @ApiProperty({ example: 1048576 })
     size: number;
 
-    @ApiProperty({ example: 'https://utfs.io/f/abc123.pdf' })
+    @ApiProperty({
+        example: '/api/tasks/task_xxx/attachments/att_xxx/download',
+    })
     url: string;
 
-    @ApiPropertyOptional({ example: 'abc123' })
+    @ApiPropertyOptional({
+        example: 'organizations/org_xxx/tasks/task_xxx/2026/10/file.pdf',
+    })
     fileKey: string | null;
+
+    @ApiProperty({
+        enum: ['LOCAL', 'OSS', 'EXTERNAL'],
+        example: 'LOCAL',
+    })
+    storageProvider: string;
+
+    @ApiPropertyOptional({ example: 'beacon-attachments' })
+    bucket: string | null;
+
+    @ApiPropertyOptional({ example: 'sha256 hex digest' })
+    checksum: string | null;
 
     @ApiProperty({
         enum: ['UPLOAD', 'GOOGLE_DRIVE', 'DROPBOX', 'URL'],

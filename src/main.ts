@@ -11,12 +11,10 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import helmet from 'helmet';
 import { join } from 'node:path';
-import { createRouteHandler } from 'uploadthing/express';
 import { AppModule } from './app.module';
 import { AppConfig } from './config';
 import { GlobalExceptionFilter } from './common/filters';
 import { TransformInterceptor } from './common/interceptors';
-import { uploadRouter } from './modules/attachments/upload.router';
 
 async function bootstrap() {
     // `rawBody` is required to verify WeChat Pay V3 signatures, which cover the
@@ -27,7 +25,6 @@ async function bootstrap() {
     const configService = app.get(ConfigService);
     const appConfig = configService.get<AppConfig>('app')!;
     const logger = new Logger('Bootstrap');
-    const expressApp = app.getHttpAdapter().getInstance();
 
     // Global prefix
     app.setGlobalPrefix('api');
@@ -77,12 +74,6 @@ async function bootstrap() {
                 },
             },
         }),
-    );
-
-    // UploadThing route handler (before Swagger, after global prefix)
-    expressApp.use(
-        '/api/uploadthing',
-        createRouteHandler({ router: uploadRouter }),
     );
 
     // Swagger

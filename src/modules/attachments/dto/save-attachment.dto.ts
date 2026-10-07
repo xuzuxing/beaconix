@@ -25,14 +25,16 @@ export class SaveAttachmentDto {
     @IsInt()
     size: number;
 
-    @ApiProperty({ example: 'https://utfs.io/f/abc123.pdf' })
+    @ApiProperty({
+        example: '/api/tasks/task_xxx/attachments/att_xxx/download',
+    })
     @IsNotEmpty()
     @IsUrl()
     url: string;
 
     @ApiPropertyOptional({
         example: 'abc123',
-        description: 'UploadThing file key for CDN deletion',
+        description: 'Storage object key for deletion/download',
     })
     @IsOptional()
     @IsString()
@@ -46,4 +48,24 @@ export class SaveAttachmentDto {
     @IsOptional()
     @IsEnum(['UPLOAD', 'GOOGLE_DRIVE', 'DROPBOX', 'URL'])
     source?: string;
+
+    @ApiPropertyOptional({
+        enum: ['LOCAL', 'OSS', 'EXTERNAL'],
+        description: 'Storage provider for the object key',
+    })
+    @IsOptional()
+    @IsEnum(['LOCAL', 'OSS', 'EXTERNAL'])
+    storageProvider?: string;
+
+    @ApiPropertyOptional({ example: 'beacon-attachments' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(512)
+    bucket?: string;
+
+    @ApiPropertyOptional({ example: 'sha256:...' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(256)
+    checksum?: string;
 }

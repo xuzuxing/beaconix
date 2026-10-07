@@ -51,7 +51,7 @@ Each feature is a standard Nest module (`*.module.ts` / `*.controller.ts` / `*.s
 
 - **`cron`** (`@nestjs/schedule`): scheduled jobs for invitation expiry, task due-soon/overdue alerts, and token cleanup (`src/modules/cron/jobs/`).
 - **`email`**: transactional email via Resend.
-- **`attachments`**: file upload via UploadThing — the route handler is mounted directly on the Express instance in `main.ts` at `/api/uploadthing`, **outside** the Nest router.
+- **`attachments`**: first-party attachment upload via Nest controllers. Files upload through `POST /api/tasks/:taskId/attachments/upload` and are stored by the local/OSS `StorageService`; metadata remains in the `Attachment` table.
 - **`notifications`**: in-app + real-time via Server-Sent Events (SSE).
 - **`organizations`**: tenant CRUD, plus the onboarding bootstrap. `OrganizationsService.provisionForUser` creates a starter organization (user as `OWNER`, plus the matching `Membership`) and its first project. It is idempotent (skips users who already belong to any org) and is called from `AuthService.verifyEmail` inside the same transaction that flips `emailVerified`, so a verified user always ends up with a usable organization.
 

@@ -90,6 +90,12 @@ enum AttachmentSource {
   URL
 }
 
+enum AttachmentStorageProvider {
+  LOCAL
+  OSS
+  EXTERNAL
+}
+
 enum CommentType {
   TEXT
   SYSTEM
@@ -501,7 +507,10 @@ model Attachment {
   mimeType     String
   size         Int // bytes
   url          String
-  fileKey      String? // UploadThing file key — used for CDN deletion
+  fileKey      String? // Storage object key — used for object deletion
+  storageProvider AttachmentStorageProvider @default(LOCAL)
+  bucket       String?
+  checksum     String?
   source       AttachmentSource @default(UPLOAD)
   taskId       String
   uploadedById String?

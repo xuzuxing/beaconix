@@ -6,10 +6,15 @@ import {
     Body,
     Param,
     Req,
+    Res,
+    StreamableFile,
     HttpCode,
     HttpStatus,
     UseGuards,
+    UploadedFile,
+    UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
     ApiTags,
     ApiBearerAuth,
@@ -23,10 +28,12 @@ import {
     ApiNotFoundResponse,
     ApiNoContentResponse,
 } from '@nestjs/swagger';
+import 'multer';
+import type { Response } from 'express';
 import { AttachmentsService } from './attachments.service';
-import { SaveAttachmentDto } from './dto';
+import { SaveAttachmentDto, UploadAttachmentDto } from './dto';
 import { AttachmentEntity } from './entities';
-import { CurrentUser, AuditLog } from '../../common/decorators';
+import { CurrentUser, AuditLog, SkipTransform } from '../../common/decorators';
 import { OrgMemberGuard } from '../../common/guards';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
@@ -48,11 +55,40 @@ export class AttachmentsController {
         return this.attachmentsService.findAll(taskId);
     }
 
+    @Post('upload')
+    @UseGuards(OrgMemberGuard)
+    @UseInterceptors(
+        FileInterceptor('file', {
+            limits: { fileSize: 32 * 1024 * 1024, files: 1 },
+        }),
+    )
+    @AuditLog({ entity: 'Attachment' })
+    @ApiOperation({ summary: 'Upload a file and save attachment metadata' })
+    @ApiParam({ name: 'taskId', description: 'Task UUID' })
+    @ApiBody({
+        description: 'Multipart form with a file field named "file"',
+        type: UploadAttachmentDto,
+    })
+    @ApiCreatedResponse({
+        type: AttachmentEntity,
+        description: 'Attachment uploaded and saved',
+    })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({ description: 'Not a member of the organization' })
+    @ApiNotFoundResponse({ description: 'Task not found' })
+    async upload(
+        @Param('taskId') taskId: string,
+        @CurrentUser() user: JwtPayload,
+        @UploadedFile() file?: Express.Multer.File,
+    ) {
+        return this.attachmentsService.upload(taskId, user.sub, file);
+    }
+
     @Post()
     @UseGuards(OrgMemberGuard)
     @AuditLog({ entity: 'Attachment' })
     @ApiOperation({
-        summary: 'Save attachment metadata after UploadThing upload',
+        summary: 'Save attachment metadata after external upload',
     })
     @ApiParam({ name: 'taskId', description: 'Task UUID' })
     @ApiBody({ type: SaveAttachmentDto })
@@ -69,6 +105,37 @@ export class AttachmentsController {
         @Body() dto: SaveAttachmentDto,
     ) {
         return this.attachmentsService.save(taskId, user.sub, dto);
+    }
+
+    @Get(':id/download')
+    @UseGuards(OrgMemberGuard)
+    @SkipTransform()
+    @ApiOperation({ summary: 'Download an attachment' })
+    @ApiParam({ name: 'taskId', description: 'Task UUID' })
+    @ApiParam({ name: 'id', description: 'Attachment UUID' })
+    @ApiOkResponse({ description: 'Attachment stream or redirect' })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({ description: 'Not a member of the organization' })
+    @ApiNotFoundResponse({ description: 'Attachment not found' })
+    async download(
+        @Param('taskId') taskId: string,
+        @Param('id') attachmentId: string,
+        @Res({ passthrough: true }) res: Response,
+    ): Promise<StreamableFile | void> {
+        const { attachment, download } =
+            await this.attachmentsService.getDownload(taskId, attachmentId);
+
+        if (download.type === 'redirect') {
+            res.redirect(download.url);
+            return;
+        }
+
+        res.setHeader('content-type', attachment.mimeType);
+        res.setHeader(
+            'content-disposition',
+            `attachment; filename="${encodeURIComponent(attachment.filename)}"`,
+        );
+        return new StreamableFile(download.stream);
     }
 
     @Delete(':id')

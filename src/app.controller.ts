@@ -169,6 +169,17 @@ export class AppController {
         };
     }
 
+    @Get('upload-test')
+    @Public()
+    @Render('upload-test')
+    uploadTestPage() {
+        return {
+            title: 'Beacon Upload Test',
+            apiBase: '/api',
+            renderedAt: new Date().toISOString(),
+        };
+    }
+
     @Head()
     @Public()
     @HttpCode(HttpStatus.OK)
