@@ -111,15 +111,31 @@ export class PaymentService {
         }
 
         await this.prisma.$transaction(async (tx) => {
-            await tx.payment.update({
-                where: { id: payment.id },
+            // Normalise an empty `transaction_id` to NULL: the column is
+            // `@unique`, and an empty string is still unique-indexed, so a
+            // second empty callback would collide (P2002) and 500 the request.
+            const transactionId = callback.transaction_id?.trim() || null;
+
+            // Re-check and update conditionally inside the transaction: WeChat
+            // may deliver the same callback concurrently, and the unique
+            // `transactionId` would otherwise throw P2002 on the second update.
+            const updated = await tx.payment.updateMany({
+                where: {
+                    id: payment.id,
+                    status: { not: PaymentStatus.SUCCESS },
+                },
                 data: {
                     status: PaymentStatus.SUCCESS,
-                    transactionId: callback.transaction_id,
+                    transactionId,
                     paidAt: new Date(),
                     rawCallback: callback as Prisma.InputJsonValue,
                 },
             });
+
+            // A concurrent callback already settled this payment — nothing to do.
+            if (updated.count === 0) {
+                return;
+            }
 
             await tx.order.update({
                 where: { id: payment.orderId },

@@ -98,7 +98,9 @@ describe('PaymentService', () => {
             });
 
             const tx = {
-                payment: { update: jest.fn() },
+                payment: {
+                    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+                },
                 order: { update: jest.fn() },
                 subscription: {
                     findFirst: jest.fn().mockResolvedValue(null),
@@ -114,8 +116,12 @@ describe('PaymentService', () => {
             );
 
             expect(result).toEqual({ code: 'SUCCESS' });
-            expect(tx.payment.update).toHaveBeenCalledWith(
+            expect(tx.payment.updateMany).toHaveBeenCalledWith(
                 expect.objectContaining({
+                    where: expect.objectContaining({
+                        id: 'payment-1',
+                        status: { not: 'SUCCESS' },
+                    }),
                     data: expect.objectContaining({
                         status: 'SUCCESS',
                         transactionId: 'wx-tx-1',
@@ -159,6 +165,88 @@ describe('PaymentService', () => {
 
             expect(result).toEqual({ code: 'SUCCESS' });
             expect(prisma.$transaction).not.toHaveBeenCalled();
+        });
+
+        it('skips order/subscription work when a concurrent callback settled the payment', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: 'BWABC123',
+                transaction_id: 'wx-tx-1',
+                trade_state: 'SUCCESS',
+            });
+            prisma.payment.findFirst.mockResolvedValue({
+                id: 'payment-1',
+                orderId: 'order-1',
+                status: 'PENDING',
+                order,
+            });
+
+            const tx = {
+                payment: {
+                    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+                },
+                order: { update: jest.fn() },
+                subscription: {
+                    findFirst: jest.fn(),
+                    create: jest.fn(),
+                    update: jest.fn(),
+                },
+            };
+            prisma.$transaction.mockImplementation((fn) => fn(tx));
+
+            const result = await service.handleWechatCallback(
+                '{}',
+                'signature',
+            );
+
+            expect(result).toEqual({ code: 'SUCCESS' });
+            expect(tx.payment.updateMany).toHaveBeenCalled();
+            expect(tx.order.update).not.toHaveBeenCalled();
+            expect(tx.subscription.findFirst).not.toHaveBeenCalled();
+            expect(tx.subscription.create).not.toHaveBeenCalled();
+        });
+
+        it('normalises an empty transaction_id to null', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: 'BWABC123',
+                transaction_id: '',
+                trade_state: 'SUCCESS',
+            });
+            prisma.payment.findFirst.mockResolvedValue({
+                id: 'payment-1',
+                orderId: 'order-1',
+                status: 'PENDING',
+                order,
+            });
+
+            const tx = {
+                payment: {
+                    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+                },
+                order: { update: jest.fn() },
+                subscription: {
+                    findFirst: jest.fn().mockResolvedValue(null),
+                    create: jest.fn(),
+                    update: jest.fn(),
+                },
+            };
+            prisma.$transaction.mockImplementation((fn) => fn(tx));
+
+            const result = await service.handleWechatCallback(
+                '{}',
+                'signature',
+            );
+
+            expect(result).toEqual({ code: 'SUCCESS' });
+            expect(tx.payment.updateMany).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        status: 'SUCCESS',
+                        transactionId: null,
+                    }),
+                }),
+            );
         });
     });
 });
