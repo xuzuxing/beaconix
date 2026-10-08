@@ -10,6 +10,8 @@ export interface PutObjectInput {
     organizationId: string;
     taskId: string;
     uploadedById?: string;
+    directory?: string;
+    publicUpload?: boolean;
 }
 
 export interface PutObjectResult {

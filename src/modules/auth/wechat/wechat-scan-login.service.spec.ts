@@ -10,6 +10,8 @@ import {
     type WechatScanLoginTicket,
 } from './wechat-scan-login.service';
 
+const requestMeta = () => ({ ipAddress: null, userAgent: null });
+
 function createService() {
     const prisma = {
         user: { findUnique: jest.fn() },
@@ -36,9 +38,10 @@ function createService() {
     };
     const wechatAuthService = {
         miniProgramLogin: jest.fn(),
+        resolveMiniProgramUser: jest.fn(),
     };
     const authService = {
-        issueTokensForUser: jest.fn(),
+        issueTokensOrChallenge: jest.fn(),
     };
 
     const service = new WechatScanLoginService(
@@ -122,31 +125,40 @@ describe('WechatScanLoginService', () => {
             redis.getJson.mockResolvedValue(null);
 
             await expect(
-                service.scanLogin({ ticket: 'a'.repeat(32), code: 'code' }),
+                service.scanLogin(
+                    { ticket: 'a'.repeat(32), code: 'code' },
+                    requestMeta(),
+                ),
             ).rejects.toThrow(BadRequestException);
         });
 
         it('marks the ticket confirmed after a successful code2session login', async () => {
-            const { service, redis, wechatAuthService } = createService();
+            const { service, redis, wechatAuthService, authService } =
+                createService();
             const pending: WechatScanLoginTicket = {
                 status: 'PENDING',
                 createdAt: new Date().toISOString(),
                 expiresAt: new Date(Date.now() + 60_000).toISOString(),
             };
             redis.getJson.mockResolvedValue(pending);
-            wechatAuthService.miniProgramLogin.mockResolvedValue({
-                accessToken: 'at',
-                refreshToken: 'rt',
+            wechatAuthService.resolveMiniProgramUser.mockResolvedValue({
                 user: { id: 'user-1' },
                 isNewUser: true,
             });
-
-            const result = await service.scanLogin({
-                ticket: 'a'.repeat(32),
-                code: 'code',
+            authService.issueTokensOrChallenge.mockResolvedValue({
+                accessToken: 'at',
+                refreshToken: 'rt',
+                user: { id: 'user-1' },
             });
 
-            expect(wechatAuthService.miniProgramLogin).toHaveBeenCalledWith({
+            const result = await service.scanLogin(
+                { ticket: 'a'.repeat(32), code: 'code' },
+                requestMeta(),
+            );
+
+            expect(
+                wechatAuthService.resolveMiniProgramUser,
+            ).toHaveBeenCalledWith({
                 code: 'code',
                 nickname: undefined,
                 avatarUrl: undefined,
@@ -160,7 +172,7 @@ describe('WechatScanLoginService', () => {
                 }),
                 expect.any(Number),
             );
-            expect(result.accessToken).toBe('at');
+            expect(result).toMatchObject({ accessToken: 'at' });
         });
     });
 
@@ -170,7 +182,7 @@ describe('WechatScanLoginService', () => {
             redis.getJson.mockResolvedValue(null);
 
             await expect(
-                service.pollStatus({ ticket: 'a'.repeat(32) }),
+                service.pollStatus({ ticket: 'a'.repeat(32) }, requestMeta()),
             ).resolves.toEqual({ status: 'EXPIRED' });
         });
 
@@ -192,20 +204,21 @@ describe('WechatScanLoginService', () => {
                 isActive: true,
                 deletedAt: null,
             });
-            authService.issueTokensForUser.mockResolvedValue({
+            authService.issueTokensOrChallenge.mockResolvedValue({
                 accessToken: 'web-at',
                 refreshToken: 'web-rt',
                 user: { id: 'user-1' },
             });
 
-            const result = await service.pollStatus({
-                ticket: 'a'.repeat(32),
-            });
+            const result = await service.pollStatus(
+                { ticket: 'a'.repeat(32) },
+                requestMeta(),
+            );
 
             expect(redis.consumeJson).toHaveBeenCalledWith(
                 expect.stringContaining('wechat:scanlogin:'),
             );
-            expect(authService.issueTokensForUser).toHaveBeenCalled();
+            expect(authService.issueTokensOrChallenge).toHaveBeenCalled();
             expect(result).toMatchObject({
                 status: 'CONFIRMED',
                 accessToken: 'web-at',

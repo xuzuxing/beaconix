@@ -7,6 +7,11 @@ export interface SettingDefinition {
     valueType: SettingValueType;
     description: string;
     isSecret?: boolean;
+    min?: number;
+    max?: number;
+    integer?: boolean;
+    allowedValues?: readonly string[];
+    url?: boolean;
 }
 
 export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
@@ -16,6 +21,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         value: 'local',
         valueType: SettingValueType.STRING,
         description: 'Active attachment storage driver: local or oss.',
+        allowedValues: ['local', 'oss'],
     },
     {
         key: 'storage.publicBaseUrl',
@@ -24,6 +30,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         valueType: SettingValueType.STRING,
         description:
             'Optional public base URL for local attachment objects. Empty keeps API streaming downloads.',
+        url: true,
     },
     {
         key: 'storage.oss.publicBaseUrl',
@@ -32,6 +39,7 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         valueType: SettingValueType.STRING,
         description:
             'Optional public/CDN base URL for OSS objects. Empty uses signed download URLs.',
+        url: true,
     },
     {
         key: 'storage.oss.signedUrlTtlSeconds',
@@ -39,6 +47,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         value: 300,
         valueType: SettingValueType.NUMBER,
         description: 'TTL in seconds for generated OSS signed download URLs.',
+        min: 30,
+        max: 86400,
+        integer: true,
     },
     {
         key: 'attachments.maxImageSizeMb',
@@ -46,6 +57,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         value: 8,
         valueType: SettingValueType.NUMBER,
         description: 'Maximum image upload size in MB.',
+        min: 1,
+        max: 500,
+        integer: true,
     },
     {
         key: 'attachments.maxPdfSizeMb',
@@ -53,6 +67,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         value: 16,
         valueType: SettingValueType.NUMBER,
         description: 'Maximum PDF upload size in MB.',
+        min: 1,
+        max: 500,
+        integer: true,
     },
     {
         key: 'attachments.maxBlobSizeMb',
@@ -60,6 +77,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         value: 32,
         valueType: SettingValueType.NUMBER,
         description: 'Maximum upload size in MB for other allowed file types.',
+        min: 1,
+        max: 500,
+        integer: true,
     },
     {
         key: 'attachments.maxFilesPerRequest',
@@ -67,6 +87,9 @@ export const SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         value: 5,
         valueType: SettingValueType.NUMBER,
         description: 'Reserved batch upload file count limit.',
+        min: 1,
+        max: 20,
+        integer: true,
     },
 ] as const;
 

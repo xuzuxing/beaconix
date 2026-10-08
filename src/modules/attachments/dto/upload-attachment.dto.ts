@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional } from 'class-validator';
+import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UploadAttachmentDto {
     @ApiPropertyOptional({
@@ -11,4 +11,14 @@ export class UploadAttachmentDto {
     @IsOptional()
     @IsEnum(['UPLOAD'])
     source?: 'UPLOAD';
+
+    @ApiPropertyOptional({
+        example: 'avatars',
+        description:
+            'Optional directory for general uploads. Empty defaults to users/<currentUserId>.',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(160)
+    directory?: string;
 }

@@ -37,6 +37,8 @@ import {
     ResetPasswordDto,
 } from './dto';
 import { UserEntity } from './entities';
+import { TwoFactorService } from './two-factor/two-factor.service';
+import type { RequestMeta } from '../../common/interfaces';
 
 @Injectable()
 export class AuthService {
@@ -49,6 +51,7 @@ export class AuthService {
         private readonly configService: ConfigService,
         private readonly emailService: EmailService,
         private readonly organizationsService: OrganizationsService,
+        private readonly twoFactorService: TwoFactorService,
     ) {
         this.jwtConfig = this.configService.get<JwtConfig>('jwt')!;
     }
@@ -88,7 +91,7 @@ export class AuthService {
         };
     }
 
-    async login(dto: LoginDto) {
+    async login(dto: LoginDto, meta: RequestMeta) {
         const user = await this.prisma.user.findUnique({
             where: { email: dto.email },
         });
@@ -112,26 +115,9 @@ export class AuthService {
             throw new UnauthorizedException('Invalid credentials');
         }
 
-        const tokens = await this.generateTokens(
-            user.id,
-            user.email,
-            user.globalRole,
-        );
-        await this.storeRefreshToken(user.id, tokens.refreshToken);
-
-        // Update lastSeenAt
-        await this.prisma.user.update({
-            where: { id: user.id },
-            data: { lastSeenAt: new Date() },
-        });
-
         this.logger.log(`User logged in: ${this.maskEmail(user.email)}`);
 
-        return {
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            user: new UserEntity(user),
-        };
+        return this.issueTokensOrChallenge(user, meta);
     }
 
     async refresh(dto: RefreshTokenDto) {
@@ -386,6 +372,19 @@ export class AuthService {
             refreshToken: tokens.refreshToken,
             user: new UserEntity(user),
         };
+    }
+
+    /**
+     * Single gate for every token-issuing path. When the account has 2FA
+     * enabled, a short-lived challenge is returned instead of tokens so the
+     * second factor must be passed (see `TwoFactorService.verifyLogin`).
+     */
+    async issueTokensOrChallenge(user: UserModel, meta: RequestMeta) {
+        if (user.twoFactorEnabled) {
+            return this.twoFactorService.createLoginChallenge(user.id, meta);
+        }
+
+        return this.issueTokensForUser(user);
     }
 
     // ─── Private Helpers ───────────────────────────────────────────────

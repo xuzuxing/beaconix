@@ -9,5 +9,6 @@ export * from './redis.config';
 export * from './scheduler.config';
 export * from './storage.config';
 export * from './throttler.config';
+export * from './two-factor.config';
 export * from './wechat.config';
 export { ConfigModule, ConfigService } from '@nestjs/config';

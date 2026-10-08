@@ -433,6 +433,24 @@
                     />
                 </label>
 
+                <div class="row">
+                    <label>
+                        2FA Code
+                        <input
+                            id="twoFactorCode"
+                            inputmode="numeric"
+                            placeholder="123456 or recovery code"
+                        />
+                    </label>
+                    <label>
+                        2FA Challenge ID
+                        <input
+                            id="twoFactorChallengeId"
+                            placeholder="auto-filled after login"
+                        />
+                    </label>
+                </div>
+
                 <div class="actions auth-actions">
                     <button data-action="register" class="secondary">
                         Register
@@ -444,6 +462,7 @@
                         Resend OTP
                     </button>
                     <button data-action="login">Login</button>
+                    <button data-action="verifyTwoFactor">Verify 2FA</button>
                     <button data-action="refresh" class="secondary">Refresh</button>
                     <button data-action="me" class="secondary">Me</button>
                     <button data-action="forgotPassword" class="secondary">
@@ -734,6 +753,63 @@
                         </div>
                     </div>
                 </section>
+
+                <section class="stack">
+                    <div class="group">
+                        <div>
+                            <h2>Two-Factor Authentication</h2>
+                            <div class="meta">/auth/2fa</div>
+                        </div>
+
+                        <label>
+                            2FA Setup Token
+                            <input
+                                id="twoFactorSetupToken"
+                                placeholder="auto-filled after Setup"
+                            />
+                        </label>
+
+                        <div id="twoFactorQrWrap" hidden>
+                            <div class="meta">
+                                Scan with your authenticator app, then enter a
+                                code and click Enable.
+                            </div>
+                            <img
+                                id="twoFactorQr"
+                                alt="2FA QR code"
+                                width="180"
+                                height="180"
+                                style="border: 1px solid var(--line); border-radius: 8px; background: #fff; margin-top: 6px;"
+                            />
+                        </div>
+
+                        <div class="hint">
+                            <strong>Enroll</strong>: 2FA Setup (needs Password) →
+                            scan the QR → enter a code in <strong>2FA Code</strong>
+                            → 2FA Enable. <strong>Login</strong>: if login returns
+                            <code>twoFactorRequired</code>, the challenge ID is
+                            auto-filled — enter a code and click
+                            <strong>Verify 2FA</strong>.
+                        </div>
+
+                        <div class="actions wide-actions">
+                            <button data-action="twoFactorStatus" class="secondary">
+                                2FA Status
+                            </button>
+                            <button data-action="twoFactorSetup">2FA Setup</button>
+                            <button data-action="twoFactorEnable">2FA Enable</button>
+                            <button data-action="verifyTwoFactor">
+                                Verify 2FA Login
+                            </button>
+                            <button data-action="twoFactorRecoveryCodes" class="secondary">
+                                Regenerate Recovery Codes
+                            </button>
+                            <button data-action="twoFactorDisable" class="danger">
+                                2FA Disable
+                            </button>
+                        </div>
+                    </div>
+                </section>
             </div>
 
             <section class="stack full">
@@ -771,6 +847,9 @@
                 "password",
                 "otpCode",
                 "newPassword",
+                "twoFactorCode",
+                "twoFactorChallengeId",
+                "twoFactorSetupToken",
                 "token",
                 "refreshToken",
                 "orgId",
@@ -981,6 +1060,16 @@
                 if (item.monitorId && !$("monitorId").value) {
                     $("monitorId").value = item.monitorId;
                 }
+                if (item.challengeId) {
+                    $("twoFactorChallengeId").value = item.challengeId;
+                }
+                if (item.setupToken) {
+                    $("twoFactorSetupToken").value = item.setupToken;
+                }
+                if (item.qrCodeDataUrl) {
+                    $("twoFactorQr").src = item.qrCodeDataUrl;
+                    $("twoFactorQrWrap").hidden = false;
+                }
                 if (item.id) {
                     if (isProjectEntity(item)) {
                         $("projectId").value = item.id;
@@ -1104,8 +1193,8 @@
                             email: requireValue(email(), "Email"),
                         }),
                     }),
-                login: () =>
-                    request("/auth/login", {
+                login: async () => {
+                    const result = await request("/auth/login", {
                         method: "POST",
                         body: JSON.stringify({
                             email: requireValue(email(), "Email"),
@@ -1114,7 +1203,19 @@
                                 "Password",
                             ),
                         }),
-                    }),
+                    });
+
+                    // 2FA account: no tokens are returned — surface the challenge
+                    // so the user can enter a code and finish with Verify 2FA.
+                    const payload = responsePayload(result.body);
+                    if (result.ok && payload && payload.twoFactorRequired) {
+                        setStatus("2FA code required", "warn");
+                        outputEl.textContent +=
+                            '\n\n[2FA] A verification code is required. Enter the authenticator code (or a recovery code) in "2FA Code" and click "Verify 2FA".';
+                    }
+
+                    return result;
+                },
                 refresh: () =>
                     request("/auth/refresh", {
                         method: "POST",
@@ -1162,6 +1263,74 @@
                     }
                 },
                 me: () => request("/auth/me", { method: "GET" }),
+                verifyTwoFactor: () =>
+                    request("/auth/2fa/verify-login", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            challengeId: requireValue(
+                                $("twoFactorChallengeId").value.trim(),
+                                "2FA Challenge ID (log in first)",
+                            ),
+                            code: requireValue(
+                                $("twoFactorCode").value.trim(),
+                                "2FA Code",
+                            ),
+                        }),
+                    }),
+                twoFactorStatus: () =>
+                    request("/auth/2fa/status", { method: "GET" }),
+                twoFactorSetup: () =>
+                    request("/auth/2fa/setup", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            currentPassword: requireValue(
+                                $("password").value,
+                                "Password",
+                            ),
+                        }),
+                    }),
+                twoFactorEnable: () =>
+                    request("/auth/2fa/enable", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            setupToken: requireValue(
+                                $("twoFactorSetupToken").value.trim(),
+                                "2FA Setup Token (run Setup first)",
+                            ),
+                            code: requireValue(
+                                $("twoFactorCode").value.trim(),
+                                "2FA Code",
+                            ),
+                        }),
+                    }),
+                twoFactorRecoveryCodes: () =>
+                    request("/auth/2fa/recovery-codes", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            currentPassword: requireValue(
+                                $("password").value,
+                                "Password",
+                            ),
+                            code: requireValue(
+                                $("twoFactorCode").value.trim(),
+                                "2FA Code",
+                            ),
+                        }),
+                    }),
+                twoFactorDisable: () =>
+                    request("/auth/2fa/disable", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            currentPassword: requireValue(
+                                $("password").value,
+                                "Password",
+                            ),
+                            code: requireValue(
+                                $("twoFactorCode").value.trim(),
+                                "2FA Code",
+                            ),
+                        }),
+                    }),
                 listOrganizations: () =>
                     request("/organizations", { method: "GET" }),
                 createOrganization: () =>

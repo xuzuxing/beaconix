@@ -10,7 +10,7 @@ import {
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { CurrentUser } from '../../common/decorators';
+import { AuditLog, CurrentUser } from '../../common/decorators';
 import { SuperAdminGuard } from '../../common/guards';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { UpdateSettingDto } from './dto';
@@ -48,6 +48,7 @@ export class SettingsController {
     }
 
     @Patch(':key')
+    @AuditLog({ entity: 'Setting', idParam: 'key', idField: 'key' })
     @ApiOperation({ summary: 'Update one platform runtime setting' })
     @ApiParam({ name: 'key', example: 'storage.driver' })
     @ApiBody({ type: UpdateSettingDto })

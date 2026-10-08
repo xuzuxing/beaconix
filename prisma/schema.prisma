@@ -81,6 +81,10 @@ enum AuditAction {
   LEAVE
   ASSIGN
   UNASSIGN
+  ENABLE_2FA
+  DISABLE_2FA
+  REGENERATE_RECOVERY_CODES
+  USE_RECOVERY_CODE
 }
 
 enum AttachmentSource {
@@ -126,6 +130,11 @@ model User {
   emailVerified Boolean    @default(false)
   lastSeenAt    DateTime?
 
+  // Two-factor authentication (TOTP). `twoFactorEnabled` is the fast path the
+  // login flow checks; the secret itself lives in TwoFactorSecret.
+  twoFactorEnabled   Boolean   @default(false)
+  twoFactorEnabledAt DateTime?
+
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
@@ -150,6 +159,9 @@ model User {
   orders               Order[]
   apiKeys              ApiKey[]              @relation("ApiKeyCreator")
   personalAccessTokens PersonalAccessToken[]
+  twoFactorSecret        TwoFactorSecret?
+  twoFactorRecoveryCodes TwoFactorRecoveryCode[]
+  twoFactorChallenges    TwoFactorChallenge[]
 
   @@index([createdAt])
   @@index([isActive])
@@ -215,6 +227,59 @@ model RefreshToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("refresh_tokens")
+}
+
+// TWO FACTOR AUTHENTICATION (user-level TOTP second factor)
+
+// The encrypted TOTP shared secret for a user that has 2FA enabled.
+model TwoFactorSecret {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  secretEnc String // AES-256-GCM ciphertext, format: v1:<iv>:<tag>:<ciphertext>
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("two_factor_secrets")
+}
+
+// One-shot recovery codes. Only the bcrypt hash is stored; a code is consumed
+// by setting usedAt so it can never be replayed.
+model TwoFactorRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String // bcrypt hash of the plaintext recovery code
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@map("two_factor_recovery_codes")
+}
+
+// Short-lived opaque challenge. Used for both the login second step
+// (purpose=LOGIN) and the setup handshake (purpose=SETUP, which additionally
+// carries the pending secret in secretEnc).
+model TwoFactorChallenge {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique // sha256 of the raw challenge / setup token
+  purpose    String    @default("LOGIN")
+  secretEnc  String? // encrypted pending secret, only for purpose=SETUP
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+  @@map("two_factor_challenges")
 }
 
 // ORGANIZATION

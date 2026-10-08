@@ -39,8 +39,9 @@ import {
     UserEntity,
     MessageResponseEntity,
 } from './entities';
-import { Public, CurrentUser } from '../../common/decorators';
+import { Public, CurrentUser, RequestMeta } from '../../common/decorators';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
+import type { RequestMeta as RequestMetaShape } from '../../common/interfaces/request-meta.interface';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -166,8 +167,8 @@ export class AuthController {
     @ApiForbiddenResponse({
         description: 'Account is deactivated or email not verified',
     })
-    async login(@Body() dto: LoginDto) {
-        return this.authService.login(dto);
+    async login(@Body() dto: LoginDto, @RequestMeta() meta: RequestMetaShape) {
+        return this.authService.login(dto, meta);
     }
 
     @Post('refresh')

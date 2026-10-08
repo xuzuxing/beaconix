@@ -172,6 +172,21 @@ export class EmailService {
                     payload as EmailPayloadMap[EmailTemplate.MONITOR_RECOVER],
                 );
                 break;
+            case EmailTemplate.TWO_FACTOR_ENABLED:
+                result = this.buildTwoFactorEnabledEmail(
+                    payload as EmailPayloadMap[EmailTemplate.TWO_FACTOR_ENABLED],
+                );
+                break;
+            case EmailTemplate.TWO_FACTOR_DISABLED:
+                result = this.buildTwoFactorDisabledEmail(
+                    payload as EmailPayloadMap[EmailTemplate.TWO_FACTOR_DISABLED],
+                );
+                break;
+            case EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED:
+                result = this.buildRecoveryCodeUsedEmail(
+                    payload as EmailPayloadMap[EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED],
+                );
+                break;
             default:
                 throw new Error(`Unknown email template: ${String(template)}`);
         }
@@ -365,6 +380,61 @@ export class EmailService {
                     <tr><td style="padding:6px 0; color:#6b7280;">Latency</td><td style="padding:6px 0;">${latency}</td></tr>
                     <tr><td style="padding:6px 0; color:#6b7280;">Checked at</td><td style="padding:6px 0;">${checkedAt}</td></tr>
                 </table>
+            `,
+        };
+    }
+
+    private buildTwoFactorEnabledEmail(
+        payload: EmailPayloadMap[EmailTemplate.TWO_FACTOR_ENABLED],
+    ) {
+        const name = escapeHtml(payload.name);
+        const changedAt = escapeHtml(payload.changedAt);
+        return {
+            subject: 'Two-factor authentication enabled',
+            html: `
+                <h2>Two-factor authentication enabled</h2>
+                <p>Hi ${name},</p>
+                <p>Two-factor authentication was just <strong>enabled</strong> on your Beacon account.</p>
+                <p style="color:#6b7280; font-size:14px;">Time: ${changedAt}</p>
+                <p style="color:#dc2626; font-size:14px;">If this wasn't you, disable 2FA immediately and reset your password.</p>
+            `,
+        };
+    }
+
+    private buildTwoFactorDisabledEmail(
+        payload: EmailPayloadMap[EmailTemplate.TWO_FACTOR_DISABLED],
+    ) {
+        const name = escapeHtml(payload.name);
+        const changedAt = escapeHtml(payload.changedAt);
+        return {
+            subject: 'Two-factor authentication disabled',
+            html: `
+                <h2>Two-factor authentication disabled</h2>
+                <p>Hi ${name},</p>
+                <p>Two-factor authentication was just <strong>disabled</strong> on your Beacon account.</p>
+                <p style="color:#6b7280; font-size:14px;">Time: ${changedAt}</p>
+                <p style="color:#dc2626; font-size:14px;">If this wasn't you, re-enable 2FA and reset your password immediately.</p>
+            `,
+        };
+    }
+
+    private buildRecoveryCodeUsedEmail(
+        payload: EmailPayloadMap[EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED],
+    ) {
+        const name = escapeHtml(payload.name);
+        const usedAt = escapeHtml(payload.usedAt);
+        const ipAddress = escapeHtml(payload.ipAddress);
+        return {
+            subject: 'A two-factor recovery code was used',
+            html: `
+                <h2>Recovery code used</h2>
+                <p>Hi ${name},</p>
+                <p>One of your two-factor recovery codes was just used to sign in. Please confirm this was you.</p>
+                <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                    <tr><td style="padding:6px 0; color:#6b7280;">Time</td><td style="padding:6px 0;">${usedAt}</td></tr>
+                    <tr><td style="padding:6px 0; color:#6b7280;">IP address</td><td style="padding:6px 0;">${ipAddress}</td></tr>
+                </table>
+                <p style="color:#dc2626; font-size:14px;">If this wasn't you, reset your password and regenerate your recovery codes immediately.</p>
             `,
         };
     }

@@ -19,7 +19,8 @@ import {
     ApiServiceUnavailableResponse,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Public } from '../../../common/decorators';
+import { Public, RequestMeta } from '../../../common/decorators';
+import type { RequestMeta as RequestMetaShape } from '../../../common/interfaces';
 import { WechatAuthService } from './wechat-auth.service';
 import { WechatScanLoginService } from './wechat-scan-login.service';
 import {
@@ -65,8 +66,11 @@ export class WechatAuthController {
     @ApiServiceUnavailableResponse({
         description: 'WeChat website login is not configured',
     })
-    webLogin(@Body() dto: WechatWebLoginDto) {
-        return this.wechatAuthService.webLogin(dto);
+    webLogin(
+        @Body() dto: WechatWebLoginDto,
+        @RequestMeta() meta: RequestMetaShape,
+    ) {
+        return this.wechatAuthService.webLogin(dto, meta);
     }
 
     @Get('web/authorize-url')
@@ -110,8 +114,11 @@ export class WechatAuthController {
     @ApiServiceUnavailableResponse({
         description: 'WeChat mini program login is not configured',
     })
-    miniProgramLogin(@Body() dto: WechatMiniProgramLoginDto) {
-        return this.wechatAuthService.miniProgramLogin(dto);
+    miniProgramLogin(
+        @Body() dto: WechatMiniProgramLoginDto,
+        @RequestMeta() meta: RequestMetaShape,
+    ) {
+        return this.wechatAuthService.miniProgramLogin(dto, meta);
     }
 
     @Post('miniprogram/qrcode')
@@ -157,8 +164,11 @@ export class WechatAuthController {
     @ApiServiceUnavailableResponse({
         description: 'WeChat mini program is not configured',
     })
-    scanLogin(@Body() dto: WechatScanLoginDto) {
-        return this.wechatScanLoginService.scanLogin(dto);
+    scanLogin(
+        @Body() dto: WechatScanLoginDto,
+        @RequestMeta() meta: RequestMetaShape,
+    ) {
+        return this.wechatScanLoginService.scanLogin(dto, meta);
     }
 
     @Get('miniprogram/qrcode/status')
@@ -176,7 +186,10 @@ export class WechatAuthController {
     @ApiBadRequestResponse({ description: 'Invalid ticket' })
     @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
     @ApiServiceUnavailableResponse({ description: 'Redis is unavailable' })
-    qrCodeStatus(@Query() dto: QueryWechatScanLoginStatusDto) {
-        return this.wechatScanLoginService.pollStatus(dto);
+    qrCodeStatus(
+        @Query() dto: QueryWechatScanLoginStatusDto,
+        @RequestMeta() meta: RequestMetaShape,
+    ) {
+        return this.wechatScanLoginService.pollStatus(dto, meta);
     }
 }

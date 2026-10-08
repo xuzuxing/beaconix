@@ -25,6 +25,7 @@ import {
     WechatMiniProgramLoginDto,
 } from './dto';
 import { AuthService } from '../auth.service';
+import type { RequestMeta } from '../../../common/interfaces';
 
 @Injectable()
 export class WechatAuthService {
@@ -54,7 +55,7 @@ export class WechatAuthService {
      * on its redirect URL and posts it here; the server exchanges it and
      * fetches the WeChat profile (snsapi_login scope).
      */
-    async webLogin(dto: WechatWebLoginDto) {
+    async webLogin(dto: WechatWebLoginDto, meta: RequestMeta) {
         const config = this.websiteConfig;
 
         const token = await this.officialAccountClient.exchangeCodeForToken({
@@ -76,11 +77,22 @@ export class WechatAuthService {
             avatarUrl: profile.headimgurl,
         });
 
-        return this.finishLogin(user, isNewUser);
+        return this.finishLogin(user, isNewUser, meta);
     }
 
     /** Completes a mini-program `wx.login()` code2Session login. */
-    async miniProgramLogin(dto: WechatMiniProgramLoginDto) {
+    async miniProgramLogin(dto: WechatMiniProgramLoginDto, meta: RequestMeta) {
+        const { user, isNewUser } = await this.resolveMiniProgramUser(dto);
+
+        return this.finishLogin(user, isNewUser, meta);
+    }
+
+    /**
+     * Resolves (and provisions) the user behind a mini-program login without
+     * issuing tokens — used by the scan-login flow, which decides separately
+     * whether the second factor is required.
+     */
+    async resolveMiniProgramUser(dto: WechatMiniProgramLoginDto) {
         const config = this.miniprogramConfig;
 
         const session = await this.miniprogramClient.code2Session({
@@ -89,15 +101,13 @@ export class WechatAuthService {
             code: dto.code,
         });
 
-        const { user, isNewUser } = await this.findOrCreateUser({
+        return this.findOrCreateUser({
             provider: IdentityProvider.WECHAT_MINI,
             openid: session.openid,
             unionid: session.unionid,
             nickname: dto.nickname,
             avatarUrl: dto.avatarUrl,
         });
-
-        return this.finishLogin(user, isNewUser);
     }
 
     // ─── Config ───────────────────────────────────────────────────────
@@ -284,11 +294,15 @@ export class WechatAuthService {
         });
     }
 
-    private async finishLogin(user: UserModel, isNewUser: boolean) {
-        const tokens = await this.authService.issueTokensForUser(user);
+    private async finishLogin(
+        user: UserModel,
+        isNewUser: boolean,
+        meta: RequestMeta,
+    ) {
+        const auth = await this.authService.issueTokensOrChallenge(user, meta);
 
         return {
-            ...tokens,
+            ...auth,
             isNewUser,
         };
     }

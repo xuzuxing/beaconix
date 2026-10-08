@@ -17,6 +17,7 @@ import {
 } from '../../../config';
 import { AuthService } from '../auth.service';
 import { WechatAuthService } from './wechat-auth.service';
+import type { RequestMeta } from '../../../common/interfaces';
 import {
     CreateWechatScanLoginDto,
     QueryWechatScanLoginStatusDto,
@@ -97,7 +98,7 @@ export class WechatScanLoginService {
      * the normal code2session login, then marks the ticket confirmed so the
      * waiting web client can pick the session up.
      */
-    async scanLogin(dto: WechatScanLoginDto) {
+    async scanLogin(dto: WechatScanLoginDto, meta: RequestMeta) {
         const key = this.ticketKey(dto.ticket);
         const current = await this.redis.getJson<WechatScanLoginTicket>(key);
 
@@ -118,19 +119,20 @@ export class WechatScanLoginService {
             );
         }
 
-        const auth = await this.wechatAuthService.miniProgramLogin({
-            code: dto.code,
-            nickname: dto.nickname,
-            avatarUrl: dto.avatarUrl,
-        });
+        const { user, isNewUser } =
+            await this.wechatAuthService.resolveMiniProgramUser({
+                code: dto.code,
+                nickname: dto.nickname,
+                avatarUrl: dto.avatarUrl,
+            });
 
         await this.redis.setJson<WechatScanLoginTicket>(
             key,
             {
                 ...current,
                 status: 'CONFIRMED',
-                userId: auth.user.id,
-                isNewUser: auth.isNewUser,
+                userId: user.id,
+                isNewUser,
             },
             this.remainingTtl(current.expiresAt),
         );
@@ -139,11 +141,15 @@ export class WechatScanLoginService {
             `Mini-program scan login confirmed for ticket ${dto.ticket}`,
         );
 
-        return auth;
+        // The mini program receives its own login result; when 2FA is on this
+        // is a challenge rather than tokens.
+        const auth = await this.authService.issueTokensOrChallenge(user, meta);
+
+        return { ...auth, isNewUser };
     }
 
     /** Web long-poll endpoint: waits until the ticket leaves PENDING/SCANNED. */
-    async pollStatus(dto: QueryWechatScanLoginStatusDto) {
+    async pollStatus(dto: QueryWechatScanLoginStatusDto, meta: RequestMeta) {
         const config = this.scanLoginConfig;
         const timeoutMs = Math.min(
             Math.max(dto.timeoutMs ?? config.pollTimeoutMs, 1000),
@@ -161,7 +167,7 @@ export class WechatScanLoginService {
             }
 
             if (current.status === 'CONFIRMED') {
-                return this.consumeConfirmedTicket(key);
+                return this.consumeConfirmedTicket(key, meta);
             }
 
             if (Date.now() >= deadline) {
@@ -172,7 +178,7 @@ export class WechatScanLoginService {
         }
     }
 
-    private async consumeConfirmedTicket(key: string) {
+    private async consumeConfirmedTicket(key: string, meta: RequestMeta) {
         const consumed =
             await this.redis.consumeJson<WechatScanLoginTicket>(key);
 
@@ -188,11 +194,11 @@ export class WechatScanLoginService {
             return { status: 'EXPIRED' as const };
         }
 
-        const tokens = await this.authService.issueTokensForUser(user);
+        const auth = await this.authService.issueTokensOrChallenge(user, meta);
 
         return {
             status: 'CONFIRMED' as const,
-            ...tokens,
+            ...auth,
             isNewUser: consumed.isNewUser ?? false,
         };
     }

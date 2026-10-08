@@ -683,11 +683,14 @@ All endpoints are prefixed with `/api`. Protected endpoints require a `Bearer` t
 | Method | Endpoint | Description | Min Role |
 |---|---|---|---|
 | `POST` | `/api/attachments/upload` | Upload a file without creating task attachment metadata | Authenticated |
+| `GET` | `/api/attachments/object?key=...` | Preview or download a general uploaded object | Authenticated |
 | `GET` | `/api/tasks/:taskId/attachments` | List attachments for a task | MEMBER |
 | `POST` | `/api/tasks/:taskId/attachments/upload` | Upload a file and save metadata | MEMBER |
 | `POST` | `/api/tasks/:taskId/attachments` | Save attachment metadata | MEMBER |
 | `GET` | `/api/tasks/:taskId/attachments/:id/download` | Download or redirect to an attachment object | MEMBER |
 | `DELETE` | `/api/tasks/:taskId/attachments/:id` | Remove an attachment | MEMBER |
+
+General uploads accept multipart fields `file` and optional `directory`. Empty `directory` stores objects under `users/<userId>/yyyy/mm/`; a provided directory is sanitized and stored under `<directory>/yyyy/mm/`, relative to `STORAGE_LOCAL_ROOT` (default `storage/uploads`). The object preview endpoint refuses protected `organizations/` keys; task attachments must still use the task attachment download API.
 
 ### Labels Endpoints
 

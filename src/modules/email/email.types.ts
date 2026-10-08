@@ -9,6 +9,9 @@ export enum EmailTemplate {
     PASSWORD_RESET_OTP = 'password-reset-otp',
     MONITOR_DOWN = 'monitor-down',
     MONITOR_RECOVER = 'monitor-recover',
+    TWO_FACTOR_ENABLED = 'two-factor-enabled',
+    TWO_FACTOR_DISABLED = 'two-factor-disabled',
+    TWO_FACTOR_RECOVERY_CODE_USED = 'two-factor-recovery-code-used',
 }
 
 export interface EmailPayloadMap {
@@ -64,6 +67,27 @@ export interface EmailPayloadMap {
     };
     [EmailTemplate.MONITOR_DOWN]: MonitorEmailPayload;
     [EmailTemplate.MONITOR_RECOVER]: MonitorEmailPayload;
+    [EmailTemplate.TWO_FACTOR_ENABLED]: TwoFactorSecurityEmailPayload;
+    [EmailTemplate.TWO_FACTOR_DISABLED]: TwoFactorSecurityEmailPayload;
+    [EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED]: RecoveryCodeUsedEmailPayload;
+}
+
+/** Payload for the 2FA enabled / disabled security notifications. */
+export interface TwoFactorSecurityEmailPayload {
+    to: string;
+    name: string;
+    /** ISO timestamp of when the change happened. */
+    changedAt: string;
+}
+
+/** Payload for the "a recovery code was just used" security alert. */
+export interface RecoveryCodeUsedEmailPayload {
+    to: string;
+    name: string;
+    /** ISO timestamp of when the recovery code was consumed. */
+    usedAt: string;
+    /** Caller IP, or a placeholder when unknown. */
+    ipAddress: string;
 }
 
 /** Shared payload for the monitoring alert / recovery emails. */

@@ -11,6 +11,10 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { SaveAttachmentDto } from './dto';
 import { AttachmentEntity, PublicUploadEntity } from './entities';
 import { StorageService } from './storage';
+import {
+    isPublicUploadKey,
+    normalizeUserUploadDirectory,
+} from './storage/filename.util';
 import { SettingsService } from '../settings';
 
 const uploaderSelect = { id: true, name: true, email: true } as const;
@@ -125,12 +129,17 @@ export class AttachmentsService {
         return new AttachmentEntity(updated);
     }
 
-    async uploadPublic(file: Express.Multer.File | undefined, userId: string) {
+    async uploadPublic(
+        file: Express.Multer.File | undefined,
+        userId: string,
+        directory?: string,
+    ) {
         if (!file) {
             throw new BadRequestException('File is required');
         }
 
         await this.validateFile(file);
+        const uploadDirectory = normalizeUserUploadDirectory(userId, directory);
 
         const stored = await this.storage.putObject({
             buffer: file.buffer,
@@ -140,6 +149,8 @@ export class AttachmentsService {
             organizationId: 'public',
             taskId: 'public',
             uploadedById: userId,
+            directory: uploadDirectory,
+            publicUpload: true,
         });
 
         return new PublicUploadEntity({
@@ -147,12 +158,36 @@ export class AttachmentsService {
             mimeType: file.mimetype || 'application/octet-stream',
             size: file.size,
             storageProvider: stored.provider,
+            directory: uploadDirectory,
             bucket: stored.bucket,
             fileKey: stored.key,
             url: stored.url,
             checksum: stored.checksum,
             uploadedById: userId,
         });
+    }
+
+    async getPublicObjectDownload(
+        key: string,
+        provider?: 'LOCAL' | 'OSS',
+        bucket?: string,
+    ) {
+        if (!isPublicUploadKey(key)) {
+            throw new ForbiddenException('Object key is not accessible');
+        }
+
+        const storageProvider =
+            provider ?? (await this.storage.activeProviderName());
+
+        return {
+            filename: this.filenameFromKey(key),
+            mimeType: this.mimeTypeFromKey(key),
+            download: await this.storage.getDownload(
+                storageProvider,
+                key,
+                bucket,
+            ),
+        };
     }
 
     async getDownload(taskId: string, attachmentId: string) {
@@ -273,5 +308,29 @@ export class AttachmentsService {
                 `File exceeds ${settings.maxBlobSizeMb}MB`,
             );
         }
+    }
+
+    private filenameFromKey(key: string): string {
+        const filename = key.split('/').pop() || 'attachment';
+        try {
+            return decodeURIComponent(filename);
+        } catch {
+            return filename;
+        }
+    }
+
+    private mimeTypeFromKey(key: string): string {
+        const lowerKey = key.toLowerCase();
+        if (lowerKey.endsWith('.png')) return 'image/png';
+        if (lowerKey.endsWith('.jpg') || lowerKey.endsWith('.jpeg')) {
+            return 'image/jpeg';
+        }
+        if (lowerKey.endsWith('.gif')) return 'image/gif';
+        if (lowerKey.endsWith('.webp')) return 'image/webp';
+        if (lowerKey.endsWith('.svg')) return 'image/svg+xml';
+        if (lowerKey.endsWith('.pdf')) return 'application/pdf';
+        if (lowerKey.endsWith('.txt')) return 'text/plain; charset=utf-8';
+        if (lowerKey.endsWith('.csv')) return 'text/csv; charset=utf-8';
+        return 'application/octet-stream';
     }
 }

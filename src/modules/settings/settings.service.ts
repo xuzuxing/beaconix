@@ -21,8 +21,18 @@ export interface AttachmentRuntimeSettings {
     maxFilesPerRequest: number;
 }
 
+interface CacheEntry {
+    value: unknown;
+    expiresAt: number;
+}
+
+const CACHE_TTL_MS = 30_000;
+const SECRET_MASK = '********';
+
 @Injectable()
 export class SettingsService {
+    private readonly valueCache = new Map<string, CacheEntry>();
+
     constructor(private readonly prisma: PrismaService) {}
 
     async findAll(): Promise<SettingEntity[]> {
@@ -34,13 +44,13 @@ export class SettingsService {
             const row = rowMap.get(definition.key);
             if (row) {
                 rowMap.delete(definition.key);
-                return new SettingEntity({ ...row, isDefault: false });
+                return this.entityFromRow(row, false);
             }
 
             return this.entityFromDefinition(definition);
         });
-        const custom = [...rowMap.values()].map(
-            (row) => new SettingEntity({ ...row, isDefault: false }),
+        const custom = [...rowMap.values()].map((row) =>
+            this.entityFromRow(row, false),
         );
 
         return [...defaults, ...custom].sort((a, b) =>
@@ -51,7 +61,7 @@ export class SettingsService {
     async findOne(key: string): Promise<SettingEntity> {
         const row = await this.prisma.setting.findUnique({ where: { key } });
         if (row) {
-            return new SettingEntity({ ...row, isDefault: false });
+            return this.entityFromRow(row, false);
         }
 
         const definition = SETTING_DEFINITION_MAP.get(key);
@@ -68,33 +78,47 @@ export class SettingsService {
         updatedById?: string,
     ): Promise<SettingEntity> {
         const definition = SETTING_DEFINITION_MAP.get(key);
+        if (!definition) {
+            throw new NotFoundException('Setting not found');
+        }
+        const existing = await this.prisma.setting.findUnique({
+            where: { key },
+        });
         const valueType =
-            dto.valueType ?? definition?.valueType ?? this.inferType(dto.value);
+            dto.valueType ?? existing?.valueType ?? definition.valueType;
         const value = this.normalizeValue(dto.value, valueType);
-        this.validateKnownSetting(key, value);
+        this.validateSetting(definition, value, valueType);
 
         const row = await this.prisma.setting.upsert({
             where: { key },
             create: {
                 key,
-                name: dto.name ?? definition?.name ?? key,
+                name: dto.name ?? definition.name,
                 value,
                 valueType,
-                description: dto.description ?? definition?.description,
-                isSecret: dto.isSecret ?? definition?.isSecret ?? false,
+                description: dto.description ?? definition.description,
+                isSecret: dto.isSecret ?? definition.isSecret ?? false,
                 updatedById,
             },
             update: {
-                name: dto.name ?? definition?.name ?? key,
+                name: dto.name ?? existing?.name ?? definition.name,
                 value,
                 valueType,
-                description: dto.description ?? definition?.description,
-                isSecret: dto.isSecret ?? definition?.isSecret ?? false,
+                description:
+                    dto.description ??
+                    existing?.description ??
+                    definition.description,
+                isSecret:
+                    dto.isSecret ??
+                    existing?.isSecret ??
+                    definition.isSecret ??
+                    false,
                 updatedById,
             },
         });
 
-        return new SettingEntity({ ...row, isDefault: false });
+        this.valueCache.delete(key);
+        return this.entityFromRow(row, false);
     }
 
     async getString(key: string, fallback: string): Promise<string> {
@@ -117,7 +141,7 @@ export class SettingsService {
             typeof value === 'number'
                 ? value
                 : typeof value === 'string'
-                  ? Number.parseFloat(value)
+                  ? this.parseStrictNumber(value)
                   : Number.NaN;
         return Number.isFinite(numberValue) ? numberValue : fallback;
     }
@@ -158,10 +182,42 @@ export class SettingsService {
     }
 
     private async getValue(key: string): Promise<unknown> {
-        const row = await this.prisma.setting.findUnique({ where: { key } });
-        if (row) return row.value;
+        const cached = this.valueCache.get(key);
+        if (cached && cached.expiresAt > Date.now()) {
+            return cached.value;
+        }
 
-        return SETTING_DEFINITION_MAP.get(key)?.value;
+        const row = await this.prisma.setting.findUnique({ where: { key } });
+        const value = row?.value ?? SETTING_DEFINITION_MAP.get(key)?.value;
+        if (value !== undefined) {
+            this.valueCache.set(key, {
+                value,
+                expiresAt: Date.now() + CACHE_TTL_MS,
+            });
+        }
+
+        return value;
+    }
+
+    private entityFromRow(
+        row: {
+            key: string;
+            name: string;
+            value: unknown;
+            valueType: SettingValueType;
+            description: string | null;
+            isSecret: boolean;
+            updatedById: string | null;
+            createdAt: Date;
+            updatedAt: Date;
+        },
+        isDefault: boolean,
+    ): SettingEntity {
+        return new SettingEntity({
+            ...row,
+            value: row.isSecret ? SECRET_MASK : row.value,
+            isDefault,
+        });
     }
 
     private entityFromDefinition(definition: SettingDefinition): SettingEntity {
@@ -177,19 +233,6 @@ export class SettingsService {
             createdAt: null,
             updatedAt: null,
         });
-    }
-
-    private inferType(value: unknown): SettingValueType {
-        switch (typeof value) {
-            case 'string':
-                return SettingValueType.STRING;
-            case 'number':
-                return SettingValueType.NUMBER;
-            case 'boolean':
-                return SettingValueType.BOOLEAN;
-            default:
-                return SettingValueType.JSON;
-        }
     }
 
     private normalizeValue(
@@ -215,7 +258,7 @@ export class SettingsService {
                 typeof value === 'number'
                     ? value
                     : typeof value === 'string'
-                      ? Number.parseFloat(value)
+                      ? this.parseStrictNumber(value)
                       : Number.NaN;
             if (!Number.isFinite(numberValue)) {
                 throw new BadRequestException('value must be a number');
@@ -235,14 +278,65 @@ export class SettingsService {
         return value as Prisma.InputJsonValue;
     }
 
-    private validateKnownSetting(
-        key: string,
+    private parseStrictNumber(value: string): number {
+        const normalized = value.trim();
+        if (!/^-?\d+(\.\d+)?$/.test(normalized)) {
+            return Number.NaN;
+        }
+        return Number(normalized);
+    }
+
+    private validateSetting(
+        definition: SettingDefinition,
         value: Prisma.InputJsonValue,
+        valueType: SettingValueType,
     ): void {
-        if (key === 'storage.driver' && value !== 'local' && value !== 'oss') {
+        if (definition.valueType !== valueType) {
             throw new BadRequestException(
-                'storage.driver must be local or oss',
+                `${definition.key} must use ${definition.valueType} value type`,
             );
+        }
+
+        if (
+            definition.allowedValues &&
+            (typeof value !== 'string' ||
+                !definition.allowedValues.includes(value))
+        ) {
+            throw new BadRequestException(
+                `${definition.key} must be one of: ${definition.allowedValues.join(', ')}`,
+            );
+        }
+
+        if (definition.url && typeof value === 'string' && value) {
+            try {
+                const url = new URL(value);
+                if (!['http:', 'https:'].includes(url.protocol)) {
+                    throw new Error('Unsupported protocol');
+                }
+            } catch {
+                throw new BadRequestException(
+                    `${definition.key} must be a valid HTTP(S) URL`,
+                );
+            }
+        }
+
+        if (definition.valueType === SettingValueType.NUMBER) {
+            const numericValue = typeof value === 'number' ? value : Number.NaN;
+            if (definition.integer && !Number.isInteger(numericValue)) {
+                throw new BadRequestException(
+                    `${definition.key} must be an integer`,
+                );
+            }
+            if (definition.min !== undefined && numericValue < definition.min) {
+                throw new BadRequestException(
+                    `${definition.key} must be >= ${definition.min}`,
+                );
+            }
+            if (definition.max !== undefined && numericValue > definition.max) {
+                throw new BadRequestException(
+                    `${definition.key} must be <= ${definition.max}`,
+                );
+            }
         }
     }
 }

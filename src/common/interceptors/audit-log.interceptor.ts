@@ -73,7 +73,11 @@ export class AuditLogInterceptor implements NestInterceptor {
 
         const beforePromise =
             needsBefore && entityId
-                ? this.fetchBefore(options.entity, entityId)
+                ? this.fetchBefore(
+                      options.entity,
+                      entityId,
+                      options.idField ?? 'id',
+                  )
                 : Promise.resolve(undefined);
 
         const ipAddress = this.extractIp(request);
@@ -96,12 +100,15 @@ export class AuditLogInterceptor implements NestInterceptor {
                             tap({
                                 next: (responseData) => {
                                     // Extract "after" from response data
-                                    const after =
-                                        this.extractAfter(responseData);
+                                    const after = this.extractAfter(
+                                        responseData,
+                                        options.idField ?? 'id',
+                                    );
                                     const resolvedEntityId =
                                         entityId ??
                                         this.extractIdFromResponse(
                                             responseData,
+                                            options.idField ?? 'id',
                                         );
 
                                     if (resolvedEntityId) {
@@ -155,6 +162,12 @@ export class AuditLogInterceptor implements NestInterceptor {
         'key',
         'keyHash',
         'secret',
+        // 2FA material that must never reach the audit log
+        'secretEnc',
+        'codeHash',
+        'setupToken',
+        'challengeId',
+        'recoveryCodes',
     ]);
 
     private stripSensitiveFields(data: any): any {
@@ -163,17 +176,24 @@ export class AuditLogInterceptor implements NestInterceptor {
         for (const key of AuditLogInterceptor.SENSITIVE_FIELDS) {
             if (key in cleaned) cleaned[key] = '[REDACTED]';
         }
+        if (cleaned.isSecret && 'value' in cleaned) {
+            cleaned.value = '[REDACTED]';
+        }
         return cleaned;
     }
 
-    private async fetchBefore(entity: string, entityId: string): Promise<any> {
+    private async fetchBefore(
+        entity: string,
+        entityId: string,
+        idField: string,
+    ): Promise<any> {
         try {
             const modelName = entity.charAt(0).toLowerCase() + entity.slice(1);
             const delegate = (this.prisma as any)[modelName];
             if (!delegate?.findUnique) return undefined;
 
             const record = await delegate.findUnique({
-                where: { id: entityId },
+                where: { [idField]: entityId },
             });
             return record ? this.stripSensitiveFields(record) : undefined;
         } catch {
@@ -181,20 +201,24 @@ export class AuditLogInterceptor implements NestInterceptor {
         }
     }
 
-    private extractAfter(responseData: any): any {
+    private extractAfter(responseData: any, idField: string): any {
         if (!responseData) return undefined;
         // If response is wrapped by TransformInterceptor: { data, meta }
         // At this point the response is still raw (before TransformInterceptor wraps it)
-        if (responseData?.id) return this.stripSensitiveFields(responseData);
-        if (responseData?.data?.id)
+        if (responseData?.[idField])
+            return this.stripSensitiveFields(responseData);
+        if (responseData?.data?.[idField])
             return this.stripSensitiveFields(responseData.data);
         return undefined;
     }
 
-    private extractIdFromResponse(responseData: any): string | null {
+    private extractIdFromResponse(
+        responseData: any,
+        idField: string,
+    ): string | null {
         if (!responseData) return null;
-        if (responseData?.id) return responseData.id;
-        if (responseData?.data?.id) return responseData.data.id;
+        if (responseData?.[idField]) return responseData[idField];
+        if (responseData?.data?.[idField]) return responseData.data[idField];
         return null;
     }
 

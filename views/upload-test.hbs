@@ -130,6 +130,22 @@
                 grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 10px;
             }
+            .result-grid {
+                display: grid;
+                gap: 8px;
+                padding: 10px;
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                background: #f8fafc;
+                font-size: 13px;
+            }
+            .result-grid div {
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+            .result-grid strong {
+                color: var(--muted);
+            }
             button {
                 min-height: 38px;
                 border: 1px solid transparent;
@@ -214,6 +230,13 @@
                     ></textarea>
                 </label>
                 <label>
+                    Upload Directory
+                    <input
+                        id='directory'
+                        placeholder='Optional, e.g. openchoreo or imports/raw'
+                    />
+                </label>
+                <label>
                     File
                     <input id='file' type='file' />
                 </label>
@@ -221,9 +244,17 @@
                     <button data-action='upload'>Upload</button>
                     <button data-action='open' class='secondary'>Open URL</button>
                 </div>
+                <div class='result-grid'>
+                    <div><strong>Last URL:</strong>
+                        <span id='lastUrl'>-</span></div>
+                    <div><strong>Last File Key:</strong>
+                        <span id='lastFileKey'>-</span></div>
+                </div>
                 <div class='hint'>
-                    上传接口：`POST /api/attachments/upload`，字段名为
-                    `file`，需要 Bearer token。
+                    通用上传接口：`POST /api/attachments/upload`，字段名为
+                    `file`，可选字段 `directory`。例如填 `openchoreo` 会写入
+                    `storage/uploads/openchoreo/yyyy/mm/...`。需要 Bearer
+                    token，不绑定 task，不写入 Attachment metadata。
                 </div>
             </section>
 
@@ -235,32 +266,54 @@
 
         <script>
             const $ = (id) => document.getElementById(id); const output =
-            $("output"); const apiBase = () => $("apiBase").value.replace(/\/$/,
-            ""); const token = () => $("token").value.trim(); let lastUploadUrl
-            = ""; function headers(json = false) { const result = {}; if (json)
-            result["content-type"] = "application/json"; if (token())
-            result.authorization = "Bearer " + token(); return result; } async
-            function readResponse(response) { const text = await
-            response.text(); try { return text ? JSON.parse(text) : null; }
-            catch { return text; } } async function request(method, path,
-            options = {}) { const response = await fetch(apiBase() + path, {
-            method, headers: { ...headers(options.json), ...(options.headers ||
-            {}) }, body: options.body, }); const body = await
-            readResponse(response); output.textContent = `${method}
-            ${path}\n\n${JSON.stringify({ status: response.status, ok:
-            response.ok, body }, null, 2)}`; return { response, body }; }
-            document.addEventListener("click", async (event) => { const button =
-            event.target.closest("[data-action]"); if (!button) return; try {
-            const action = button.dataset.action; if (action === "upload") {
-            const file = $("file").files[0]; if (!file) throw new Error("File is
-            required"); const form = new FormData(); form.append("file", file);
-            const result = await request("POST", "/attachments/upload", { body:
-            form }); const attachment = result.body && result.body.data ?
-            result.body.data : result.body; lastUploadUrl = attachment &&
-            attachment.url ? attachment.url : ""; } else if (action === "open")
-            { if (!lastUploadUrl) throw new Error("No public URL returned by the
-            last upload"); window.open(lastUploadUrl, "_blank"); } } catch
-            (error) { output.textContent = error.stack || error.message; } });
+            $('output'); const lastUrl = $('lastUrl'); const lastFileKey =
+            $('lastFileKey'); const apiBase = () =>
+            $('apiBase').value.replace(/\/$/, ''); const token = () =>
+            $('token').value.trim(); const directory = () =>
+            $('directory').value.trim(); let lastUploadUrl = ''; let
+            lastUploadKey = ''; let lastUploadProvider = ''; let
+            lastUploadBucket = ''; function requireToken() { if (!token()) {
+            throw new Error('Access Token is required'); } } function
+            headers(json = false) { const result = {}; if (json)
+            result['content-type'] = 'application/json'; result.authorization =
+            'Bearer ' + token(); return result; } async function
+            readResponse(response) { const text = await response.text(); try {
+            return text ? JSON.parse(text) : null; } catch { return text; } }
+            async function request(method, path, options = {}) { requireToken();
+            const response = await fetch(apiBase() + path, { method, headers: {
+            ...headers(options.json), ...(options.headers || {}), }, body:
+            options.body, }); const body = await readResponse(response);
+            output.textContent = `${method} ${path}\n\n${JSON.stringify( {
+            status: response.status, ok: response.ok, body }, null, 2, )}`;
+            return { response, body }; } document.addEventListener('click',
+            async (event) => { const button =
+            event.target.closest('[data-action]'); if (!button) return; try {
+            const action = button.dataset.action; if (action === 'upload') {
+            const file = $('file').files[0]; if (!file) throw new Error('File is
+            required'); const form = new FormData(); form.append('file', file);
+            if (directory()) { form.append('directory', directory()); } const
+            result = await request( 'POST', '/attachments/upload', { body: form
+            }, ); const upload = result.body && result.body.data ?
+            result.body.data : result.body; lastUploadUrl = upload && upload.url
+            ? upload.url : ''; lastUploadKey = upload && upload.fileKey ?
+            upload.fileKey : ''; lastUploadProvider = upload &&
+            upload.storageProvider ? upload.storageProvider : '';
+            lastUploadBucket = upload && upload.bucket ? upload.bucket : '';
+            lastUrl.textContent = lastUploadUrl || '-'; lastFileKey.textContent
+            = lastUploadKey || '-'; } else if (action === 'open') { if
+            (lastUploadUrl) { window.open(lastUploadUrl, '_blank'); return; } if
+            (!lastUploadKey) { throw new Error( 'No previewable object key
+            returned by the last upload', ); } const params = new
+            URLSearchParams({ key: lastUploadKey, }); if (lastUploadProvider) {
+            params.set('provider', lastUploadProvider); } if (lastUploadBucket)
+            { params.set('bucket', lastUploadBucket); } const response = await
+            fetch( `${apiBase()}/attachments/object?${params.toString()}`, {
+            headers: headers() }, ); if (!response.ok) { const body = await
+            readResponse(response); throw new Error( JSON.stringify( { status:
+            response.status, body, }, null, 2, ), ); } const blobUrl =
+            URL.createObjectURL( await response.blob(), ); window.open(blobUrl,
+            '_blank'); } } catch (error) { output.textContent = error.stack ||
+            error.message; } });
         </script>
     </body>
 </html>

@@ -9,6 +9,8 @@ export interface AuditLogOptions {
     action?: string;
     /** Param name holding the entity ID — defaults to 'id' */
     idParam?: string;
+    /** Prisma unique field for before snapshots — defaults to 'id' */
+    idField?: string;
 }
 
 /**

@@ -61,9 +61,11 @@
     "nestjs-cls": "^7.0.1",
     "nestjs-pino": "^5.3.1",
     "node-cache": "^5.1.2",
+    "otplib": "^13.5.0",
     "pg": "^8.22.0",
     "pino": "^10.4.0",
     "pino-pretty": "^13.2.0",
+    "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "resend": "^6.17.1",
     "rxjs": "^7.8.2"
@@ -79,6 +81,7 @@
     "@types/jest": "^30.0.0",
     "@types/multer": "^2.3.0",
     "@types/node": "^26.1.1",
+    "@types/qrcode": "^1.5.6",
     "@types/supertest": "^7.2.0",
     "dotenv": "^17.4.2",
     "eslint": "^10.7.0",
@@ -108,10 +111,22 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.ts$": "ts-jest",
+      "^.+\\.js$": [
+        "ts-jest",
+        {
+          "tsconfig": {
+            "allowJs": true,
+            "module": "CommonJS",
+            "moduleResolution": "Node",
+            "esModuleInterop": true,
+            "verbatimModuleSyntax": false
+          }
+        }
+      ]
     },
     "transformIgnorePatterns": [
-      "node_modules/(?!.*(@nestjs[\\\\/]bullmq|@nestjs[\\\\/]bull-shared|bullmq))"
+      "node_modules/(?!.*(@nestjs[\\\\/]bullmq|@nestjs[\\\\/]bull-shared|bullmq|otplib|@otplib[\\\\/]|@scure[\\\\/]|@noble[\\\\/]))"
     ],
     "moduleNameMapper": {
       "^(\\.{1,2}/.*)\\.js$": "$1"

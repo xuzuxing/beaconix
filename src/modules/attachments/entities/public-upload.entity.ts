@@ -16,17 +16,19 @@ export class PublicUploadEntity {
     })
     storageProvider: string;
 
+    @ApiProperty({ example: 'openchoreo' })
+    directory: string;
+
     @ApiPropertyOptional({ example: 'beacon-attachments' })
     bucket?: string;
 
     @ApiProperty({
-        example: 'organizations/public/tasks/public/2026/10/file.pdf',
+        example: 'openchoreo/2026/10/file.pdf',
     })
     fileKey: string;
 
     @ApiProperty({
-        example:
-            'https://cdn.example.com/organizations/public/tasks/public/2026/10/file.pdf',
+        example: 'https://cdn.example.com/openchoreo/2026/10/file.pdf',
     })
     url: string;
 

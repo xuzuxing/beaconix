@@ -12,7 +12,7 @@ import {
     PutObjectInput,
     PutObjectResult,
 } from './storage.types';
-import { buildObjectKey } from './filename.util';
+import { buildObjectKey, buildPublicObjectKey } from './filename.util';
 
 @Injectable()
 export class LocalStorageProvider implements AttachmentStorageProvider {
@@ -27,12 +27,20 @@ export class LocalStorageProvider implements AttachmentStorageProvider {
     }
 
     async putObject(input: PutObjectInput): Promise<PutObjectResult> {
-        const key = buildObjectKey({
-            organizationId: input.organizationId,
-            taskId: input.taskId,
-            objectId: randomUUID(),
-            filename: input.filename,
-        });
+        const objectId = randomUUID();
+        const key = input.publicUpload
+            ? buildPublicObjectKey({
+                  userId: input.uploadedById ?? 'unknown',
+                  directory: input.directory,
+                  objectId,
+                  filename: input.filename,
+              })
+            : buildObjectKey({
+                  organizationId: input.organizationId,
+                  taskId: input.taskId,
+                  objectId,
+                  filename: input.filename,
+              });
         const target = this.resolveKey(key);
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, input.buffer);

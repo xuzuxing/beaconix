@@ -28,19 +28,32 @@ export class GlobalExceptionFilter implements ExceptionFilter {
                 ? exception.getStatus()
                 : (wechatError?.status ?? HttpStatus.INTERNAL_SERVER_ERROR);
 
-        const message =
+        const rawResponse =
             exception instanceof HttpException
                 ? exception.getResponse()
                 : (wechatError?.message ?? 'Internal server error');
 
+        const responseBody =
+            typeof rawResponse === 'object' && rawResponse !== null
+                ? (rawResponse as Record<string, unknown>)
+                : undefined;
+
+        // Business exceptions (see BusinessException) opt in to a stable
+        // machine-readable `code` next to the message.
+        const code =
+            typeof responseBody?.code === 'string'
+                ? responseBody.code
+                : undefined;
+
         const errorResponse = {
             statusCode: status,
+            ...(code ? { code } : {}),
             timestamp: new Date().toISOString(),
             method: request.method,
             message:
-                typeof message === 'string'
-                    ? message
-                    : (message as Record<string, unknown>).message || message,
+                typeof rawResponse === 'string'
+                    ? rawResponse
+                    : (responseBody?.message ?? rawResponse),
         };
 
         if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
