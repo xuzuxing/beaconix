@@ -97,7 +97,7 @@ async function bootstrap() {
         .build();
 
     const document = SwaggerModule.createDocument(app, swaggerConfig, {
-        ignoreGlobalPrefix: true,
+        ignoreGlobalPrefix: false,
     });
     app.use(
         '/reference',

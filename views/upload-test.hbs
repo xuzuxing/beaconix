@@ -1,9 +1,8 @@
-<!doctype html>
-<html lang="zh-CN">
+<html lang='zh-CN'>
     <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{{ title }}</title>
+        <meta charset='utf-8' />
+        <meta name='viewport' content='width=device-width, initial-scale=1' />
+        <title>{{title}}</title>
         <style>
             :root {
                 color-scheme: light;
@@ -18,191 +17,250 @@
                 --bad: #b42318;
                 --code: #0f172a;
             }
-            * { box-sizing: border-box; }
+            * {
+                box-sizing: border-box;
+            }
             body {
                 margin: 0;
                 background: var(--bg);
                 color: var(--ink);
-                font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                font-family:
+                    Inter,
+                    ui-sans-serif,
+                    system-ui,
+                    -apple-system,
+                    BlinkMacSystemFont,
+                    'Segoe UI',
+                    sans-serif;
             }
-            header { border-bottom: 1px solid var(--line); background: var(--panel); }
-            .shell { width: min(1180px, calc(100vw - 32px)); margin: 0 auto; }
+            header {
+                border-bottom: 1px solid var(--line);
+                background: var(--panel);
+            }
+            .shell {
+                width: min(1180px, calc(100vw - 32px));
+                margin: 0 auto;
+            }
             .topbar {
-                display: flex; align-items: center; justify-content: space-between;
-                gap: 16px; min-height: 68px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+                min-height: 68px;
             }
-            nav { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; }
-            nav a { color: var(--brand); text-decoration: none; }
-            h1, h2 { margin: 0; }
-            h1 { font-size: 22px; }
-            h2 { font-size: 15px; }
-            .subtitle, .hint { color: var(--muted); font-size: 13px; line-height: 1.5; }
+            nav {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                font-size: 13px;
+            }
+            nav a {
+                color: var(--brand);
+                text-decoration: none;
+            }
+            h1,
+            h2 {
+                margin: 0;
+            }
+            h1 {
+                font-size: 22px;
+            }
+            h2 {
+                font-size: 15px;
+            }
+            .subtitle,
+            .hint {
+                color: var(--muted);
+                font-size: 13px;
+                line-height: 1.5;
+            }
             main {
-                display: grid; grid-template-columns: 360px 1fr; gap: 18px;
-                align-items: start; padding: 22px 0 40px;
+                display: grid;
+                grid-template-columns: 360px 1fr;
+                gap: 18px;
+                align-items: start;
+                padding: 22px 0 40px;
             }
-            section { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 16px; }
-            .stack { display: grid; gap: 12px; }
-            .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-            label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
-            input, select, textarea {
-                width: 100%; border: 1px solid var(--line); border-radius: 6px;
-                padding: 10px 11px; font: inherit; font-size: 14px; background: #fff; color: var(--ink);
+            section {
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: var(--panel);
+                padding: 16px;
             }
-            textarea { min-height: 120px; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; }
-            input:focus, select:focus, textarea:focus { border-color: var(--brand); outline: 3px solid #dbeafe; }
-            .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+            .stack {
+                display: grid;
+                gap: 12px;
+            }
+            .row {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 12px;
+            }
+            label {
+                display: grid;
+                gap: 6px;
+                font-size: 13px;
+                font-weight: 650;
+            }
+            input,
+            select,
+            textarea {
+                width: 100%;
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                padding: 10px 11px;
+                font: inherit;
+                font-size: 14px;
+                background: #fff;
+                color: var(--ink);
+            }
+            textarea {
+                min-height: 120px;
+                resize: vertical;
+                font-family: ui-monospace, Menlo, Consolas, monospace;
+            }
+            input:focus,
+            select:focus,
+            textarea:focus {
+                border-color: var(--brand);
+                outline: 3px solid #dbeafe;
+            }
+            .actions {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 10px;
+            }
             button {
-                min-height: 38px; border: 1px solid transparent; border-radius: 6px;
-                padding: 9px 12px; color: #fff; background: var(--brand); cursor: pointer;
-                font: inherit; font-size: 14px; font-weight: 700;
+                min-height: 38px;
+                border: 1px solid transparent;
+                border-radius: 6px;
+                padding: 9px 12px;
+                color: #fff;
+                background: var(--brand);
+                cursor: pointer;
+                font: inherit;
+                font-size: 14px;
+                font-weight: 700;
             }
-            button.secondary { border-color: var(--line-strong); color: var(--ink); background: #fff; }
-            button.danger { background: var(--bad); }
-            button:hover { background: var(--brand-dark); }
-            button.secondary:hover { background: #eef4ff; }
+            button.secondary {
+                border-color: var(--line-strong);
+                color: var(--ink);
+                background: #fff;
+            }
+            button.danger {
+                background: var(--bad);
+            }
+            button:hover {
+                background: var(--brand-dark);
+            }
+            button.secondary:hover {
+                background: #eef4ff;
+            }
             pre {
-                min-height: 520px; max-height: 760px; overflow: auto; margin: 0;
-                border-radius: 8px; padding: 16px; background: var(--code); color: #d9e7ff;
-                font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+                min-height: 520px;
+                max-height: 760px;
+                overflow: auto;
+                margin: 0;
+                border-radius: 8px;
+                padding: 16px;
+                background: var(--code);
+                color: #d9e7ff;
+                font-size: 13px;
+                line-height: 1.55;
+                white-space: pre-wrap;
+                word-break: break-word;
             }
             @media (max-width: 960px) {
-                main, .row { grid-template-columns: 1fr; }
-                .topbar { align-items: flex-start; flex-direction: column; padding: 16px 0; }
+                main,
+                .row {
+                    grid-template-columns: 1fr;
+                }
+                .topbar {
+                    align-items: flex-start;
+                    flex-direction: column;
+                    padding: 16px 0;
+                }
             }
         </style>
     </head>
     <body>
         <header>
-            <div class="shell topbar">
+            <div class='shell topbar'>
                 <div>
-                    <h1>{{ title }}</h1>
-                    <div class="subtitle">Rendered at {{ renderedAt }}</div>
+                    <h1>{{title}}</h1>
+                    <div class='subtitle'>Rendered at {{renderedAt}}</div>
                 </div>
                 <nav>
-                    <a href="/api/monitor-test">Monitor</a>
-                    <a href="/api/monitoring-test">Monitoring</a>
-                    <a href="/api/billing-test">Billing</a>
-                    <a href="/api/upload-test">Upload</a>
+                    <a href='/api/monitor-test'>Monitor</a>
+                    <a href='/api/monitoring-test'>Monitoring</a>
+                    <a href='/api/billing-test'>Billing</a>
+                    <a href='/api/upload-test'>Upload</a>
                 </nav>
             </div>
         </header>
 
-        <main class="shell">
-            <section class="stack">
+        <main class='shell'>
+            <section class='stack'>
                 <h2>Context</h2>
                 <label>
                     API Base
-                    <input id="apiBase" value="{{ apiBase }}" />
+                    <input id='apiBase' value='{{apiBase}}' />
                 </label>
                 <label>
                     Access Token
-                    <textarea id="token" placeholder="JWT access token"></textarea>
-                </label>
-                <label>
-                    Task ID
-                    <input id="taskId" placeholder="task uuid" />
-                </label>
-                <label>
-                    Attachment ID
-                    <input id="attachmentId" placeholder="attachment uuid" />
+                    <textarea
+                        id='token'
+                        placeholder='JWT access token'
+                    ></textarea>
                 </label>
                 <label>
                     File
-                    <input id="file" type="file" />
+                    <input id='file' type='file' />
                 </label>
-                <div class="actions">
-                    <button data-action="upload">Upload</button>
-                    <button data-action="list" class="secondary">List</button>
-                    <button data-action="download" class="secondary">Open Download</button>
-                    <button data-action="delete" class="danger">Delete</button>
+                <div class='actions'>
+                    <button data-action='upload'>Upload</button>
+                    <button data-action='open' class='secondary'>Open URL</button>
                 </div>
-                <div class="hint">
-                    上传接口：`POST /api/tasks/:taskId/attachments/upload`，字段名为 `file`。
+                <div class='hint'>
+                    上传接口：`POST /api/attachments/upload`，字段名为
+                    `file`，需要 Bearer token。
                 </div>
             </section>
 
-            <section class="stack">
+            <section class='stack'>
                 <h2>Response</h2>
-                <pre id="output">No request sent yet.</pre>
+                <pre id='output'>No request sent yet.</pre>
             </section>
         </main>
 
         <script>
-            const $ = (id) => document.getElementById(id);
-            const output = $("output");
-            const apiBase = () => $("apiBase").value.replace(/\/$/, "");
-            const token = () => $("token").value.trim();
-            const taskId = () => $("taskId").value.trim();
-            const attachmentId = () => $("attachmentId").value.trim();
-
-            function requireValue(value, label) {
-                if (!value) throw new Error(label + " is required");
-                return value;
-            }
-
-            function headers(json = false) {
-                const result = {};
-                if (json) result["content-type"] = "application/json";
-                if (token()) result.authorization = "Bearer " + token();
-                return result;
-            }
-
-            async function readResponse(response) {
-                const text = await response.text();
-                try {
-                    return text ? JSON.parse(text) : null;
-                } catch {
-                    return text;
-                }
-            }
-
-            async function request(method, path, options = {}) {
-                const response = await fetch(apiBase() + path, {
-                    method,
-                    headers: { ...headers(options.json), ...(options.headers || {}) },
-                    body: options.body,
-                });
-                const body = await readResponse(response);
-                output.textContent = `${method} ${path}\n\n${JSON.stringify({ status: response.status, ok: response.ok, body }, null, 2)}`;
-                return { response, body };
-            }
-
-            document.addEventListener("click", async (event) => {
-                const button = event.target.closest("[data-action]");
-                if (!button) return;
-
-                try {
-                    const action = button.dataset.action;
-                    if (action === "upload") {
-                        const file = $("file").files[0];
-                        if (!file) throw new Error("File is required");
-                        const form = new FormData();
-                        form.append("file", file);
-                        const result = await request(
-                            "POST",
-                            `/tasks/${requireValue(taskId(), "Task ID")}/attachments/upload`,
-                            { body: form },
-                        );
-                        const attachment = result.body && result.body.data ? result.body.data : result.body;
-                        if (attachment && attachment.id) $("attachmentId").value = attachment.id;
-                    } else if (action === "list") {
-                        await request("GET", `/tasks/${requireValue(taskId(), "Task ID")}/attachments`);
-                    } else if (action === "download") {
-                        window.open(
-                            `${apiBase()}/tasks/${requireValue(taskId(), "Task ID")}/attachments/${requireValue(attachmentId(), "Attachment ID")}/download`,
-                            "_blank",
-                        );
-                    } else if (action === "delete") {
-                        await request(
-                            "DELETE",
-                            `/tasks/${requireValue(taskId(), "Task ID")}/attachments/${requireValue(attachmentId(), "Attachment ID")}`,
-                        );
-                    }
-                } catch (error) {
-                    output.textContent = error.stack || error.message;
-                }
-            });
+            const $ = (id) => document.getElementById(id); const output =
+            $("output"); const apiBase = () => $("apiBase").value.replace(/\/$/,
+            ""); const token = () => $("token").value.trim(); let lastUploadUrl
+            = ""; function headers(json = false) { const result = {}; if (json)
+            result["content-type"] = "application/json"; if (token())
+            result.authorization = "Bearer " + token(); return result; } async
+            function readResponse(response) { const text = await
+            response.text(); try { return text ? JSON.parse(text) : null; }
+            catch { return text; } } async function request(method, path,
+            options = {}) { const response = await fetch(apiBase() + path, {
+            method, headers: { ...headers(options.json), ...(options.headers ||
+            {}) }, body: options.body, }); const body = await
+            readResponse(response); output.textContent = `${method}
+            ${path}\n\n${JSON.stringify({ status: response.status, ok:
+            response.ok, body }, null, 2)}`; return { response, body }; }
+            document.addEventListener("click", async (event) => { const button =
+            event.target.closest("[data-action]"); if (!button) return; try {
+            const action = button.dataset.action; if (action === "upload") {
+            const file = $("file").files[0]; if (!file) throw new Error("File is
+            required"); const form = new FormData(); form.append("file", file);
+            const result = await request("POST", "/attachments/upload", { body:
+            form }); const attachment = result.body && result.body.data ?
+            result.body.data : result.body; lastUploadUrl = attachment &&
+            attachment.url ? attachment.url : ""; } else if (action === "open")
+            { if (!lastUploadUrl) throw new Error("No public URL returned by the
+            last upload"); window.open(lastUploadUrl, "_blank"); } } catch
+            (error) { output.textContent = error.stack || error.message; } });
         </script>
     </body>
 </html>

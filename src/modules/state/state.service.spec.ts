@@ -130,6 +130,8 @@ describe('StateService', () => {
                     latency: 30,
                     error: 'Unexpected status 500 (expected 200)',
                     statusCode: 500,
+                    ruleMatched: true,
+                    ruleGroupIds: [],
                     source: 'LOCAL',
                     checkedAt: expect.any(Date),
                 },

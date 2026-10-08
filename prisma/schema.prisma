@@ -659,13 +659,6 @@ enum MonitorStatus {
   PAUSED
 }
 
-// 规则命中后的动作
-enum RuleAction {
-  ALERT // 触发通知
-  MARK_DOWN // 标记 monitor 为 DOWN
-  SILENCE // 静默，不通知
-}
-
 enum ProbeScope {
   SYSTEM
   TENANT
@@ -856,13 +849,12 @@ model RuleGroup {
 
 // monitor 与规则组的绑定
 model MonitorRuleBinding {
-  id          String     @id @default(cuid())
+  id          String  @id @default(cuid())
   monitorId   String
   ruleGroupId String
-  action      RuleAction @default(ALERT)
   // 同一个 monitor 绑定多个规则组时的优先级，数字越大越先求值
-  priority    Int        @default(0)
-  enabled     Boolean    @default(true)
+  priority    Int     @default(0)
+  enabled     Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -982,6 +974,10 @@ model CheckLog {
   error          String?
   // 实际 HTTP 状态码（服务器有响应时），供规则与历史使用
   statusCode     Int?
+  // 规则校验结论：本轮规则树是否命中（命中=异常）；无绑定规则组时回退为 !success
+  ruleMatched    Boolean     @default(false)
+  // 命中的规则组 ID，便于追溯「为什么触发」
+  ruleGroupIds   String[]    @default([])
   source         CheckSource @default(LOCAL)
   checkedAt      DateTime    @default(now())
 

@@ -26,6 +26,14 @@ export interface CheckOutcome {
     rescuedByProbe?: boolean;
     /** Actual HTTP status code, persisted on the CheckLog row. */
     statusCode?: number | null;
+    /**
+     * Rule-tree verdict for this check: matched means "abnormal". When absent,
+     * falls back to `!success` so monitors without bound rules still behave as
+     * before (a reachability failure counts as abnormal).
+     */
+    ruleMatched?: boolean;
+    /** IDs of the rule groups that matched in this check. */
+    ruleGroupIds?: string[];
 }
 
 export interface DerivedState {
@@ -114,6 +122,8 @@ export class StateService {
         const source = outcome.source ?? CheckSource.LOCAL;
         const localSuccess = outcome.localSuccess ?? outcome.success;
         const rescuedByProbe = outcome.rescuedByProbe ?? false;
+        const ruleMatched = outcome.ruleMatched ?? !outcome.success;
+        const ruleGroupIds = outcome.ruleGroupIds ?? [];
 
         const stateValues = {
             status: derived.status,
@@ -145,6 +155,8 @@ export class StateService {
                     latency: outcome.latency,
                     error,
                     statusCode: outcome.statusCode ?? null,
+                    ruleMatched,
+                    ruleGroupIds,
                     source,
                     checkedAt,
                 },

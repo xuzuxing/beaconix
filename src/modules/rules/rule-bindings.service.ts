@@ -4,7 +4,6 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
-import { RuleAction } from '../../generated/prisma/enums';
 
 @Injectable()
 export class RuleBindingsService {
@@ -13,7 +12,6 @@ export class RuleBindingsService {
     async bind(input: {
         monitorId: string;
         ruleGroupId: string;
-        action?: RuleAction;
         priority?: number;
     }) {
         const monitor = await this.prisma.monitor.findFirst({
@@ -48,14 +46,12 @@ export class RuleBindingsService {
                 },
             },
             update: {
-                action: input.action ?? RuleAction.ALERT,
                 priority: input.priority ?? 0,
                 enabled: true,
             },
             create: {
                 monitorId: input.monitorId,
                 ruleGroupId: input.ruleGroupId,
-                action: input.action ?? RuleAction.ALERT,
                 priority: input.priority ?? 0,
             },
         });

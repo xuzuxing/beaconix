@@ -15,11 +15,7 @@ describe('AppController test pages', () => {
     });
 
     it('ships the rules-test template with the expected hooks', () => {
-        const templatePath = join(
-            process.cwd(),
-            'views',
-            'rules-test.hbs',
-        );
+        const templatePath = join(process.cwd(), 'views', 'rules-test.hbs');
 
         expect(existsSync(templatePath)).toBe(true);
 

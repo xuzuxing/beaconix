@@ -88,9 +88,6 @@ function createService() {
         notifyAvailabilityRecovery: jest
             .fn()
             .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
-        notifyRuleAlert: jest
-            .fn()
-            .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
     };
     const httpChecker = { check: jest.fn().mockResolvedValue(checkResult) };
     const tcpChecker = { check: jest.fn().mockResolvedValue(checkResult) };
@@ -170,6 +167,8 @@ describe('CheckerService', () => {
                 localSuccess: true,
                 rescuedByProbe: false,
                 statusCode: null,
+                ruleMatched: false,
+                ruleGroupIds: [],
             });
             expect(notifierService.notifyTransition).toHaveBeenCalledTimes(1);
             expect(prisma.probeExecution.create).toHaveBeenCalledWith({
@@ -190,6 +189,7 @@ describe('CheckerService', () => {
                         previousStatus: 'UNKNOWN',
                         status: 'UP',
                         changed: true,
+                        ruleGroupIds: [],
                         notified: {
                             skipped: false,
                             sent: 1,
@@ -338,6 +338,8 @@ describe('CheckerService', () => {
                 localSuccess: false,
                 rescuedByProbe: true,
                 statusCode: null,
+                ruleMatched: false,
+                ruleGroupIds: [],
             });
         });
 
@@ -540,6 +542,8 @@ describe('CheckerService', () => {
                 localSuccess: false,
                 rescuedByProbe: true,
                 statusCode: null,
+                ruleMatched: false,
+                ruleGroupIds: [],
             });
             expect(result?.monitorId).toBe('monitor-1');
         });
@@ -801,10 +805,10 @@ describe('CheckerService', () => {
                 }),
             );
             prisma.checkLog.findMany.mockResolvedValue([
-                { success: true },
-                { success: false },
-                { success: false },
-                { success: false },
+                { ruleMatched: true },
+                { ruleMatched: true },
+                { ruleMatched: true },
+                { ruleMatched: false },
             ]);
 
             await service.checkMonitorForProject('project-1', 'monitor-1');
@@ -813,7 +817,7 @@ describe('CheckerService', () => {
                 where: { monitorId: 'monitor-1' },
                 orderBy: { checkedAt: 'desc' },
                 take: 10,
-                select: { success: true },
+                select: { ruleMatched: true },
             });
             expect(
                 notifierService.notifyAvailabilityAlert,
@@ -825,6 +829,7 @@ describe('CheckerService', () => {
                     threshold: 90,
                     window: 10,
                     sampleSize: 4,
+                    consecutiveFailures: 3,
                 },
             );
             expect(prisma.monitorState.update).toHaveBeenCalledWith({
@@ -848,8 +853,9 @@ describe('CheckerService', () => {
                 }),
             );
             prisma.checkLog.findMany.mockResolvedValue([
-                { success: false },
-                { success: false },
+                { ruleMatched: true },
+                { ruleMatched: true },
+                { ruleMatched: true },
             ]);
 
             await service.checkMonitorForProject('project-1', 'monitor-1');
@@ -872,7 +878,7 @@ describe('CheckerService', () => {
                 }),
             );
             prisma.checkLog.findMany.mockResolvedValue(
-                Array.from({ length: 10 }, () => ({ success: true })),
+                Array.from({ length: 10 }, () => ({ ruleMatched: false })),
             );
 
             await service.checkMonitorForProject('project-1', 'monitor-1');
@@ -902,8 +908,8 @@ describe('CheckerService', () => {
                 }),
             );
             prisma.checkLog.findMany.mockResolvedValue([
-                { success: false },
-                { success: true },
+                { ruleMatched: true },
+                { ruleMatched: false },
             ]);
 
             await service.checkMonitorForProject('project-1', 'monitor-1');
@@ -925,10 +931,10 @@ describe('CheckerService', () => {
                     availabilityAlertActive: false,
                 }),
             );
-            // 10 checks, 9 successful => 90%, not below the 90% threshold.
+            // 10 checks, 9 healthy => 90%, not below the 90% threshold.
             prisma.checkLog.findMany.mockResolvedValue([
-                ...Array.from({ length: 9 }, () => ({ success: true })),
-                { success: false },
+                ...Array.from({ length: 9 }, () => ({ ruleMatched: false })),
+                { ruleMatched: true },
             ]);
 
             await service.checkMonitorForProject('project-1', 'monitor-1');
@@ -959,12 +965,11 @@ describe('CheckerService', () => {
         });
     });
 
-    describe('rule groups (advanced mode)', () => {
+    describe('node anomaly condition rules', () => {
         const binding = {
             id: 'binding-1',
             monitorId: 'monitor-1',
             ruleGroupId: 'rg-1',
-            action: 'ALERT',
             priority: 0,
             enabled: true,
             ruleGroup: {
@@ -996,15 +1001,9 @@ describe('CheckerService', () => {
             changed: false,
         };
 
-        it('notifies when a bound rule matches', async () => {
-            const {
-                service,
-                prisma,
-                stateService,
-                ruleEvaluator,
-                ruleGroups,
-                notifierService,
-            } = createService();
+        it('records the rule verdict onto the check log when a bound rule matches', async () => {
+            const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
+                createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
             stateService.record.mockResolvedValue({
                 monitor: monitorRow,
@@ -1028,22 +1027,18 @@ describe('CheckerService', () => {
                     statusCode: undefined,
                 },
             );
-            expect(notifierService.notifyRuleAlert).toHaveBeenCalledWith(
-                monitorRow,
-                expect.objectContaining({ status: 'UP' }),
-                { id: 'rg-1', name: 'High latency' },
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({
+                    ruleMatched: true,
+                    ruleGroupIds: ['rg-1'],
+                }),
             );
         });
 
-        it('does not notify when no rule matches', async () => {
-            const {
-                service,
-                prisma,
-                stateService,
-                ruleEvaluator,
-                ruleGroups,
-                notifierService,
-            } = createService();
+        it('records ruleMatched=false when no rule matches', async () => {
+            const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
+                createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
             stateService.record.mockResolvedValue({
                 monitor: monitorRow,
@@ -1055,10 +1050,16 @@ describe('CheckerService', () => {
 
             await service.checkMonitorForProject('project-1', 'monitor-1');
 
-            expect(notifierService.notifyRuleAlert).not.toHaveBeenCalled();
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({
+                    ruleMatched: false,
+                    ruleGroupIds: [],
+                }),
+            );
         });
 
-        it('skips evaluation when the monitor has no bound rule group', async () => {
+        it('falls back to !success when the monitor has no bound rule group', async () => {
             const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
                 createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
@@ -1072,67 +1073,13 @@ describe('CheckerService', () => {
             await service.checkMonitorForProject('project-1', 'monitor-1');
 
             expect(ruleEvaluator.evaluate).not.toHaveBeenCalled();
-        });
-
-        it('forces the monitor DOWN when a MARK_DOWN rule matches', async () => {
-            const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue({
-                monitor: monitorRow,
-                state: stateRow,
-                transition: noChangeTransition,
-            });
-            ruleGroups.findBindingsForMonitor.mockResolvedValue([
-                { ...binding, action: 'MARK_DOWN' },
-            ]);
-            ruleEvaluator.evaluate.mockReturnValue(true);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1');
-
-            expect(prisma.monitorState.update).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1' },
-                data: { status: 'DOWN' },
-            });
-        });
-
-        it('suppresses the transition notification when a SILENCE rule matches', async () => {
-            const {
-                service,
-                prisma,
-                stateService,
-                ruleEvaluator,
-                ruleGroups,
-                notifierService,
-            } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue({
-                monitor: monitorRow,
-                state: stateRow,
-                transition: {
-                    previousStatus: 'UP',
-                    previousFailCount: 0,
-                    status: 'DOWN',
-                    failCount: 3,
-                    changed: true,
-                },
-            });
-            ruleGroups.findBindingsForMonitor.mockResolvedValue([
-                { ...binding, action: 'SILENCE' },
-            ]);
-            ruleEvaluator.evaluate.mockReturnValue(true);
-
-            const result = await service.checkMonitorForProject(
-                'project-1',
+            expect(stateService.record).toHaveBeenCalledWith(
                 'monitor-1',
+                expect.objectContaining({
+                    ruleMatched: false,
+                    ruleGroupIds: [],
+                }),
             );
-
-            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
-            expect(result.notified).toEqual({
-                skipped: true,
-                sent: 0,
-                failed: 0,
-            });
         });
 
         it('passes the actual HTTP status code into the rule context', async () => {

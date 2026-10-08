@@ -5,9 +5,7 @@ import {
     CheckSource,
     ExecutionStatus,
     ExecutionTrigger,
-    MonitorStatus,
     MonitorType,
-    RuleAction,
 } from '../../generated/prisma/enums';
 import type {
     MonitorModel,
@@ -89,12 +87,10 @@ interface EvaluatedResult {
     rescuedByProbe: boolean;
 }
 
-/** Actions a matched rule group requests for the current check round. */
-interface RuleEffects {
-    /** A SILENCE rule matched: suppress this round's notifications. */
-    silenced: boolean;
-    /** A MARK_DOWN rule matched: force the monitor status to DOWN. */
-    markDown: boolean;
+/** Rule-tree verdict for one check round: matched = abnormal. */
+interface RuleOutcome {
+    ruleMatched: boolean;
+    ruleGroupIds: string[];
 }
 
 @Injectable()
@@ -202,8 +198,7 @@ export class CheckerService {
                 latency: localLog.latency,
                 error: localLog.error,
                 checkedAt: report.checkedAt ?? new Date(),
-                statusCode:
-                    report.statusCode ?? localLog.statusCode ?? null,
+                statusCode: report.statusCode ?? localLog.statusCode ?? null,
             },
             ExecutionTrigger.CALLBACK,
         );
@@ -344,6 +339,10 @@ export class CheckerService {
             localResult,
         );
 
+        // Rule tree only produces a verdict (matched = abnormal); it is stored
+        // on the CheckLog row below, then the availability alert consumes it.
+        const ruleOutcome = await this.evaluateRuleTree(monitor, result);
+
         const { state, transition } = await this.stateService.record(
             monitor.id,
             {
@@ -356,33 +355,24 @@ export class CheckerService {
                 localSuccess: localResult.success,
                 rescuedByProbe,
                 statusCode: result.statusCode ?? null,
+                ruleMatched: ruleOutcome.ruleMatched,
+                ruleGroupIds: ruleOutcome.ruleGroupIds,
             },
         );
 
-        // Availability (simple mode) and rule-tree (advanced mode) alerting both
-        // ride on the same aggregated verdict and run before the transition
-        // notification, but are independent of it.
+        // Alert condition: aggregate the stored rule verdicts into an
+        // availability percentage and consecutive-failure count, then alert
+        // when both cross their thresholds. Runs before the transition
+        // notification.
         await this.evaluateAvailabilityAlert(monitor, state);
-        const ruleEffects = await this.evaluateRuleGroups(
-            monitor,
-            state,
-            result,
-        );
 
-        // MARK_DOWN forces the monitor DOWN (the state machine recovers it on
-        // the next successful check). SILENCE suppresses this round's alert.
-        if (ruleEffects.markDown) {
-            await this.markDownByRule(monitor.id);
-        }
-
-        const notified = ruleEffects.silenced
-            ? { skipped: true, sent: 0, failed: 0 }
-            : await this.notifyIfChanged(monitor, state, transition);
+        const notified = await this.notifyIfChanged(monitor, state, transition);
 
         await this.writeExecution(monitor, result, trigger, {
             previousStatus: transition.previousStatus,
             status: transition.status,
             changed: transition.changed,
+            ruleGroupIds: ruleOutcome.ruleGroupIds,
             notified: {
                 skipped: notified.skipped,
                 sent: notified.sent,
@@ -596,23 +586,34 @@ export class CheckerService {
             where: { monitorId: monitor.id },
             orderBy: { checkedAt: 'desc' },
             take: window,
-            select: { success: true },
+            select: { ruleMatched: true },
         });
 
         if (recent.length === 0) return;
 
-        const successes = recent.filter((log) => log.success).length;
+        // Availability = share of checks the rule tree judged healthy (not
+        // matched). Consecutive failures = trailing run of matched (abnormal)
+        // checks, counted from the newest backwards.
+        const healthy = recent.filter((log) => !log.ruleMatched).length;
         const availabilityPercent =
-            Math.round((successes / recent.length) * 10000) / 100;
+            Math.round((healthy / recent.length) * 10000) / 100;
+
+        let consecutiveFailures = 0;
+        for (const log of recent) {
+            if (!log.ruleMatched) break;
+            consecutiveFailures += 1;
+        }
+
         const alert = {
             availabilityPercent,
             threshold,
             window,
             sampleSize: recent.length,
+            consecutiveFailures,
         };
 
         const belowThreshold = availabilityPercent < threshold;
-        const failuresReached = state.failCount >= monitor.failureThreshold;
+        const failuresReached = consecutiveFailures >= monitor.failureThreshold;
 
         try {
             if (belowThreshold && failuresReached) {
@@ -668,78 +669,45 @@ export class CheckerService {
     }
 
     /**
-     * Evaluates the monitor's bound rule groups (advanced mode) against the
-     * aggregated verdict. Matched ALERT bindings enqueue a rule notification.
-     * Never throws: a failed evaluation only logs, the check outcome stands.
+     * Evaluates the monitor's bound rule groups against the aggregated verdict
+     * and returns the round's verdict: `ruleMatched` (any group matched) plus
+     * the IDs of the groups that did. Monitors without any bound rule group
+     * fall back to `!success`, so reachability failures still count as abnormal.
+     * Never throws: a failed evaluation only logs and falls back.
      */
-    private async evaluateRuleGroups(
+    private async evaluateRuleTree(
         monitor: MonitorModel,
-        state: MonitorStateModel,
         result: CheckResult,
-    ): Promise<RuleEffects> {
-        const effects: RuleEffects = { silenced: false, markDown: false };
-
-        let bindings;
+    ): Promise<RuleOutcome> {
         try {
-            bindings = await this.ruleGroups.findBindingsForMonitor(monitor.id);
-        } catch (error) {
-            this.logger.warn(
-                `Failed to load rule bindings for monitor ${monitor.id}: ${(error as Error).message}`,
+            const bindings = await this.ruleGroups.findBindingsForMonitor(
+                monitor.id,
             );
-            return effects;
-        }
 
-        if (bindings.length === 0) return effects;
+            if (bindings.length === 0) {
+                return { ruleMatched: !result.success, ruleGroupIds: [] };
+            }
 
-        const ctx = this.buildRuleContext(result);
+            const ctx = this.buildRuleContext(result);
+            const ruleGroupIds: string[] = [];
 
-        for (const binding of bindings) {
-            try {
+            for (const binding of bindings) {
                 const matched = this.ruleEvaluator.evaluate(
-                    binding.ruleGroup.tree as RuleNode,
+                    binding.ruleGroup.tree as unknown as RuleNode,
                     ctx,
                 );
-                if (!matched) continue;
-
-                switch (binding.action) {
-                    case RuleAction.ALERT:
-                        await this.notifierService.notifyRuleAlert(
-                            monitor,
-                            state,
-                            {
-                                id: binding.ruleGroup.id,
-                                name: binding.ruleGroup.name,
-                            },
-                        );
-                        break;
-                    case RuleAction.SILENCE:
-                        effects.silenced = true;
-                        break;
-                    case RuleAction.MARK_DOWN:
-                        effects.markDown = true;
-                        break;
-                }
-            } catch (error) {
-                this.logger.warn(
-                    `Rule evaluation failed for monitor ${monitor.id}: ${(error as Error).message}`,
-                );
+                if (matched) ruleGroupIds.push(binding.ruleGroupId);
             }
-        }
 
-        return effects;
-    }
-
-    /** Forces a monitor DOWN because a MARK_DOWN rule matched. */
-    private async markDownByRule(monitorId: string): Promise<void> {
-        try {
-            await this.prisma.monitorState.update({
-                where: { monitorId },
-                data: { status: MonitorStatus.DOWN },
-            });
+            return {
+                ruleMatched: ruleGroupIds.length > 0,
+                ruleGroupIds,
+            };
         } catch (error) {
             this.logger.warn(
-                `Failed to mark monitor ${monitorId} DOWN by rule: ${(error as Error).message}`,
+                `Rule evaluation failed for monitor ${monitor.id}: ${(error as Error).message}`,
             );
+            return { ruleMatched: !result.success, ruleGroupIds: [] };
         }
     }
 }
