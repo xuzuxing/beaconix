@@ -38,7 +38,7 @@ export class MonitorsController {
     @Get()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List all monitors in the project' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiOkResponse({
         type: [MonitorEntity],
         description: 'List of monitors',
@@ -54,7 +54,7 @@ export class MonitorsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Monitor' })
     @ApiOperation({ summary: 'Create a new monitor' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiBody({ type: CreateMonitorDto })
     @ApiCreatedResponse({
         type: MonitorEntity,
@@ -73,8 +73,8 @@ export class MonitorsController {
     @Get(':id')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Get monitor by ID' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Monitor CUID' })
     @ApiOkResponse({
         type: MonitorEntity,
         description: 'Monitor details',
@@ -94,8 +94,8 @@ export class MonitorsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Monitor' })
     @ApiOperation({ summary: 'Update monitor' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Monitor CUID' })
     @ApiBody({ type: UpdateMonitorDto })
     @ApiOkResponse({
         type: MonitorEntity,
@@ -122,8 +122,8 @@ export class MonitorsController {
     @ApiOperation({
         summary: 'Pause monitor (stops scheduling checks)',
     })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Monitor CUID' })
     @ApiOkResponse({
         type: MonitorEntity,
         description: 'Monitor paused',
@@ -145,8 +145,8 @@ export class MonitorsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Monitor', action: 'UPDATE' })
     @ApiOperation({ summary: 'Resume a paused monitor' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Monitor CUID' })
     @ApiOkResponse({
         type: MonitorEntity,
         description: 'Monitor resumed',
@@ -168,8 +168,8 @@ export class MonitorsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Monitor', action: 'DELETE' })
     @ApiOperation({ summary: 'Soft delete monitor' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Monitor CUID' })
     @ApiOkResponse({
         type: MonitorEntity,
         description: 'Monitor soft-deleted',
@@ -190,8 +190,8 @@ export class MonitorsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Monitor', action: 'RESTORE' })
     @ApiOperation({ summary: 'Restore a soft-deleted monitor' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Monitor CUID' })
     @ApiOkResponse({
         type: MonitorEntity,
         description: 'Monitor restored',
@@ -214,8 +214,8 @@ export class MonitorsController {
     @ApiOperation({
         summary: 'Send a test availability alert to the bound channels',
     })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Monitor CUID' })
     @ApiOkResponse({ description: 'Test alert delivery result' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })

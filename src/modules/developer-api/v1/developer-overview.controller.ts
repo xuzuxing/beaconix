@@ -27,7 +27,7 @@ export class DeveloperOverviewController {
     @UseGuards(DeveloperAuthGuard)
     @RequireScopes('monitoring:read')
     @ApiOperation({ summary: 'Monitoring overview for the organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({ type: MonitoringOverviewEntity })
     @ApiUnauthorizedResponse({ description: 'Missing or invalid API key' })
     @ApiForbiddenResponse({ description: 'Missing scope' })

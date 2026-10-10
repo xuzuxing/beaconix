@@ -65,7 +65,7 @@ export class PersonalAccessTokensController {
     @HttpCode(HttpStatus.OK)
     @AuditLog({ entity: 'PersonalAccessToken', action: 'UPDATE' })
     @ApiOperation({ summary: 'Revoke a personal access token' })
-    @ApiParam({ name: 'id', description: 'Token UUID' })
+    @ApiParam({ name: 'id', description: 'Token CUID' })
     @ApiOkResponse({ type: PersonalAccessTokenEntity })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiNotFoundResponse({ description: 'Token not found' })

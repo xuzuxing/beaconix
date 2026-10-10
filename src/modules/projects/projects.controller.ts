@@ -40,7 +40,7 @@ export class ProjectsController {
     @Get()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List all projects in the organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
         type: [ProjectEntity],
         description: 'List of projects',
@@ -56,7 +56,7 @@ export class ProjectsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Project' })
     @ApiOperation({ summary: 'Create a new project' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiBody({ type: CreateProjectDto })
     @ApiCreatedResponse({
         type: ProjectEntity,
@@ -79,8 +79,8 @@ export class ProjectsController {
     @Get(':id')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Get project by ID' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Project UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Project CUID' })
     @ApiOkResponse({
         type: ProjectEntity,
         description: 'Project details',
@@ -97,8 +97,8 @@ export class ProjectsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Project' })
     @ApiOperation({ summary: 'Update project' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Project UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Project CUID' })
     @ApiBody({ type: UpdateProjectDto })
     @ApiOkResponse({
         type: ProjectEntity,
@@ -122,8 +122,8 @@ export class ProjectsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Project', action: 'ARCHIVE' })
     @ApiOperation({ summary: 'Archive project (makes it read-only)' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Project UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Project CUID' })
     @ApiOkResponse({
         type: ProjectEntity,
         description: 'Project archived',
@@ -142,8 +142,8 @@ export class ProjectsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Project', action: 'DELETE' })
     @ApiOperation({ summary: 'Soft delete project' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Project UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Project CUID' })
     @ApiOkResponse({
         type: ProjectEntity,
         description: 'Project soft-deleted',
@@ -161,8 +161,8 @@ export class ProjectsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Project', action: 'RESTORE' })
     @ApiOperation({ summary: 'Restore a soft-deleted project' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Project UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Project CUID' })
     @ApiOkResponse({
         type: ProjectEntity,
         description: 'Project restored',

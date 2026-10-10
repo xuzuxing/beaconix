@@ -26,7 +26,7 @@ export class PlanController {
     @Get(':id')
     @Public()
     @ApiOperation({ summary: 'Get a billing plan by ID' })
-    @ApiParam({ name: 'id', description: 'Plan UUID' })
+    @ApiParam({ name: 'id', description: 'Plan CUID' })
     @ApiOkResponse({ type: PlanEntity, description: 'Plan details' })
     @ApiNotFoundResponse({ description: 'Plan not found' })
     async findOne(@Param('id') id: string): Promise<PlanEntity> {

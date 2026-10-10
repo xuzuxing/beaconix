@@ -39,7 +39,7 @@ export class AdminTenantsController {
 
     @Get(':id')
     @ApiOperation({ summary: 'Get one tenant by ID' })
-    @ApiParam({ name: 'id', description: 'Organization UUID' })
+    @ApiParam({ name: 'id', description: 'Organization CUID' })
     @ApiOkResponse({ type: AdminTenantEntity, description: 'Tenant details' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })
@@ -55,7 +55,7 @@ export class AdminTenantsController {
         description:
             'Soft-deletes the tenant when active, restores it when deleted.',
     })
-    @ApiParam({ name: 'id', description: 'Organization UUID' })
+    @ApiParam({ name: 'id', description: 'Organization CUID' })
     @ApiOkResponse({ type: AdminTenantEntity, description: 'Tenant updated' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })

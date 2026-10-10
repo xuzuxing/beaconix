@@ -52,7 +52,7 @@ export class PaymentController {
     @Post('orders/:id/pay')
     @HttpCode(HttpStatus.OK)
     @ApiOperation({ summary: 'Create a WeChat payment for an order' })
-    @ApiParam({ name: 'id', description: 'Order UUID' })
+    @ApiParam({ name: 'id', description: 'Order CUID' })
     @ApiBody({ type: CreatePaymentDto })
     @ApiOkResponse({
         description: 'WeChat JSAPI parameters for wx.requestPayment',

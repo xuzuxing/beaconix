@@ -20,7 +20,7 @@ export class QuotaController {
     @Get()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Current plan usage summary' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
         description:
             'Effective plan, per-resource usage, feature switches and min interval',

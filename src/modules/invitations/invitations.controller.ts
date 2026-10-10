@@ -43,7 +43,7 @@ export class InvitationsController {
     @AuditLog({ entity: 'Invitation', action: 'INVITE' })
     @ApiBearerAuth('access-token')
     @ApiOperation({ summary: 'Send an invitation to join the organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiBody({ type: CreateInvitationDto })
     @ApiCreatedResponse({
         type: InvitationEntity,
@@ -70,7 +70,7 @@ export class InvitationsController {
     @Roles('ADMIN')
     @ApiBearerAuth('access-token')
     @ApiOperation({ summary: 'List all invitations for an organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
         type: [InvitationEntity],
         description: 'List of invitations',
@@ -88,8 +88,8 @@ export class InvitationsController {
     @AuditLog({ entity: 'Invitation', action: 'DELETE' })
     @ApiBearerAuth('access-token')
     @ApiOperation({ summary: 'Revoke a pending invitation' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Invitation UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Invitation CUID' })
     @ApiOkResponse({
         type: InvitationEntity,
         description: 'Invitation revoked',
@@ -111,7 +111,7 @@ export class InvitationsController {
         description:
             'Used by the invitee to view invitation details before accepting/declining.',
     })
-    @ApiParam({ name: 'token', description: 'Invitation token (UUID)' })
+    @ApiParam({ name: 'token', description: 'Invitation token (CUID)' })
     @ApiOkResponse({
         type: InvitationEntity,
         description: 'Invitation details',
@@ -129,7 +129,7 @@ export class InvitationsController {
         description:
             'Authenticated user accepts the invitation and becomes an org member.',
     })
-    @ApiParam({ name: 'token', description: 'Invitation token (UUID)' })
+    @ApiParam({ name: 'token', description: 'Invitation token (CUID)' })
     @ApiOkResponse({
         type: InvitationEntity,
         description: 'Invitation accepted — membership created',
@@ -150,7 +150,7 @@ export class InvitationsController {
     @Post('invitations/:token/decline')
     @ApiBearerAuth('access-token')
     @ApiOperation({ summary: 'Decline an invitation' })
-    @ApiParam({ name: 'token', description: 'Invitation token (UUID)' })
+    @ApiParam({ name: 'token', description: 'Invitation token (CUID)' })
     @ApiOkResponse({
         type: InvitationEntity,
         description: 'Invitation declined',

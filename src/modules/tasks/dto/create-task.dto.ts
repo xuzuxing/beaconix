@@ -8,8 +8,8 @@ import {
     IsInt,
     Min,
     IsDateString,
-    IsUUID,
 } from 'class-validator';
+import { IsCuid } from '../../../common/decorators/is-cuid.decorator';
 
 export class CreateTaskDto {
     @ApiProperty({ example: 'Implement login page', description: 'Task title' })
@@ -56,26 +56,26 @@ export class CreateTaskDto {
     dueDate?: string;
 
     @ApiPropertyOptional({
-        example: 'uuid-sprint',
-        description: 'Sprint UUID — omit to add to backlog',
+        example: 'cmgu92m5x0000p8l4h8z6s3k1',
+        description: 'Sprint CUID; omit to add to backlog',
     })
     @IsOptional()
-    @IsUUID()
+    @IsCuid()
     sprintId?: string;
 
     @ApiPropertyOptional({
-        example: 'uuid-parent-task',
-        description: 'Parent task UUID for subtask hierarchy',
+        example: 'cmgu92m5x0001p8l4h8z6s3k2',
+        description: 'Parent task CUID for subtask hierarchy',
     })
     @IsOptional()
-    @IsUUID()
+    @IsCuid()
     parentTaskId?: string;
 
     @ApiPropertyOptional({
-        example: 'uuid-assignee',
-        description: 'User UUID to assign',
+        example: 'cmgu92m5x0002p8l4h8z6s3k3',
+        description: 'User CUID to assign',
     })
     @IsOptional()
-    @IsUUID()
+    @IsCuid()
     assignedToId?: string;
 }

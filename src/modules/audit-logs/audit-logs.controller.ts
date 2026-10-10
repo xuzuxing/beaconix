@@ -31,7 +31,7 @@ export class AuditLogsController {
         description:
             'Returns a paginated, filterable list of immutable audit log entries. ADMIN+ only.',
     })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
         description: 'Paginated audit log entries',
         schema: {

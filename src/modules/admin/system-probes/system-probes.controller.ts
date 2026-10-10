@@ -63,7 +63,7 @@ export class SystemProbesController {
     @ApiOperation({
         summary: 'Create a validation challenge for a system probe',
     })
-    @ApiParam({ name: 'id', description: 'Probe UUID' })
+    @ApiParam({ name: 'id', description: 'Probe CUID' })
     @ApiOkResponse({
         description: '{ validationId, expiresAt, status }',
     })
@@ -95,7 +95,7 @@ export class SystemProbesController {
 
     @Get(':id')
     @ApiOperation({ summary: 'Get a system probe' })
-    @ApiParam({ name: 'id', description: 'Probe UUID' })
+    @ApiParam({ name: 'id', description: 'Probe CUID' })
     @ApiOkResponse({ type: ProbeEntity, description: 'System probe details' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })
@@ -107,7 +107,7 @@ export class SystemProbesController {
     @Patch(':id')
     @AuditLog({ entity: 'Probe' })
     @ApiOperation({ summary: 'Update a system probe' })
-    @ApiParam({ name: 'id', description: 'Probe UUID' })
+    @ApiParam({ name: 'id', description: 'Probe CUID' })
     @ApiBody({ type: UpdateSystemProbeDto })
     @ApiOkResponse({ type: ProbeEntity, description: 'System probe updated' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
@@ -120,7 +120,7 @@ export class SystemProbesController {
     @Patch(':id/toggle')
     @AuditLog({ entity: 'Probe', action: 'UPDATE' })
     @ApiOperation({ summary: 'Enable or disable a system probe' })
-    @ApiParam({ name: 'id', description: 'Probe UUID' })
+    @ApiParam({ name: 'id', description: 'Probe CUID' })
     @ApiBody({ type: ToggleSystemProbeDto })
     @ApiOkResponse({ type: ProbeEntity, description: 'System probe toggled' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
@@ -134,7 +134,7 @@ export class SystemProbesController {
     @HttpCode(HttpStatus.OK)
     @AuditLog({ entity: 'Probe', action: 'DELETE' })
     @ApiOperation({ summary: 'Delete a system probe' })
-    @ApiParam({ name: 'id', description: 'Probe UUID' })
+    @ApiParam({ name: 'id', description: 'Probe CUID' })
     @ApiOkResponse({ description: 'System probe deleted' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })

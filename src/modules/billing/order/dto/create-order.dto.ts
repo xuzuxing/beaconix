@@ -1,9 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsCuid } from '../../../../common/decorators/is-cuid.decorator';
 
 export class CreateOrderDto {
-    @ApiProperty({ example: 'uuid-plan', description: 'Plan UUID' })
-    @IsUUID()
+    @ApiProperty({
+        example: 'cmgu92m5x0004p8l4h8z6s3k5',
+        description: 'Plan CUID',
+    })
+    @IsCuid()
     planId: string;
 
     @ApiPropertyOptional({

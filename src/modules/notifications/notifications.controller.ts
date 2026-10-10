@@ -114,7 +114,7 @@ export class NotificationsController {
 
     @Patch(':id/read')
     @ApiOperation({ summary: 'Mark a single notification as read' })
-    @ApiParam({ name: 'id', description: 'Notification UUID' })
+    @ApiParam({ name: 'id', description: 'Notification CUID' })
     @ApiOkResponse({
         description: 'Notification marked as read',
         type: NotificationEntity,
@@ -127,7 +127,7 @@ export class NotificationsController {
     @Delete(':id')
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({ summary: 'Delete a notification' })
-    @ApiParam({ name: 'id', description: 'Notification UUID' })
+    @ApiParam({ name: 'id', description: 'Notification CUID' })
     @ApiNoContentResponse({ description: 'Notification deleted' })
     @ApiNotFoundResponse({ description: 'Notification not found' })
     remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {

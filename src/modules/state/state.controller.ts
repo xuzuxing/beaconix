@@ -24,8 +24,8 @@ export class StateController {
     @ApiOperation({
         summary: 'Get the current state of a monitor (with a 24h summary)',
     })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'monitorId', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'monitorId', description: 'Monitor CUID' })
     @ApiOkResponse({
         type: MonitorStateEntity,
         description: 'Monitor state',

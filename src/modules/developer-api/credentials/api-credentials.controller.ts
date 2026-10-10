@@ -42,7 +42,7 @@ export class ApiCredentialsController {
     @ApiOperation({
         summary: 'Create an organization API key (returns the secret once)',
     })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiBody({ type: CreateApiKeyDto })
     @ApiCreatedResponse({
         type: ApiKeyEntity,
@@ -63,7 +63,7 @@ export class ApiCredentialsController {
     @ApiOperation({
         summary: 'List organization API keys (secrets are masked)',
     })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({ type: [ApiKeyEntity], description: 'API keys' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member' })
@@ -77,8 +77,8 @@ export class ApiCredentialsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'ApiKey', action: 'UPDATE' })
     @ApiOperation({ summary: 'Revoke an organization API key' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'API key UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'API key CUID' })
     @ApiOkResponse({ type: ApiKeyEntity, description: 'Revoked API key' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })

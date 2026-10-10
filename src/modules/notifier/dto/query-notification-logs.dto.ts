@@ -14,8 +14,8 @@ export class QueryNotificationLogsDto {
     status?: NotificationStatus;
 
     @ApiPropertyOptional({
-        description: 'Filter by monitor UUID',
-        example: 'uuid-monitor',
+        description: 'Filter by monitor CUID',
+        example: 'cmgu92m5x0005p8l4h8z6s3k6',
     })
     @IsOptional()
     @IsString()

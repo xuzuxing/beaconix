@@ -73,7 +73,7 @@ export class OrganizationsController {
     @Get(':id')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Get organization by ID' })
-    @ApiParam({ name: 'id', description: 'Organization UUID' })
+    @ApiParam({ name: 'id', description: 'Organization CUID' })
     @ApiOkResponse({
         type: OrganizationEntity,
         description: 'Organization details',
@@ -90,7 +90,7 @@ export class OrganizationsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Organization' })
     @ApiOperation({ summary: 'Update organization' })
-    @ApiParam({ name: 'id', description: 'Organization UUID' })
+    @ApiParam({ name: 'id', description: 'Organization CUID' })
     @ApiBody({ type: UpdateOrganizationDto })
     @ApiOkResponse({
         type: OrganizationEntity,
@@ -110,7 +110,7 @@ export class OrganizationsController {
     @Roles('OWNER')
     @AuditLog({ entity: 'Organization', action: 'DELETE' })
     @ApiOperation({ summary: 'Soft delete organization (owner only)' })
-    @ApiParam({ name: 'id', description: 'Organization UUID' })
+    @ApiParam({ name: 'id', description: 'Organization CUID' })
     @ApiOkResponse({
         type: OrganizationEntity,
         description: 'Organization soft-deleted',
@@ -127,7 +127,7 @@ export class OrganizationsController {
     @Roles('OWNER')
     @AuditLog({ entity: 'Organization', action: 'UPDATE' })
     @ApiOperation({ summary: 'Transfer organization ownership' })
-    @ApiParam({ name: 'id', description: 'Organization UUID' })
+    @ApiParam({ name: 'id', description: 'Organization CUID' })
     @ApiBody({ type: TransferOwnershipDto })
     @ApiOkResponse({
         type: OrganizationEntity,

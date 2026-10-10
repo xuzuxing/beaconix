@@ -6,14 +6,21 @@ import { MonitoringDashboardController } from './monitoring-dashboard.controller
 import { MonitoringEtagInterceptor } from './monitoring-etag.interceptor';
 import { AdminModule } from '../admin/admin.module';
 import { CacheModule } from '../../infra/cache/cache.module';
+import { MonitorInsightsController } from './monitor-insights.controller';
+import { MonitorInsightsService } from './monitor-insights.service';
 
 @Module({
     imports: [AdminModule, CacheModule],
-    controllers: [MonitoringController, MonitoringDashboardController],
+    controllers: [
+        MonitoringController,
+        MonitoringDashboardController,
+        MonitorInsightsController,
+    ],
     providers: [
         MonitoringService,
         MonitoringDashboardService,
         MonitoringEtagInterceptor,
+        MonitorInsightsService,
     ],
     exports: [MonitoringService],
 })

@@ -38,7 +38,7 @@ export class MembershipsController {
     @Get()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List organization members' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
         type: [MembershipEntity],
         description: 'List of members',
@@ -54,8 +54,8 @@ export class MembershipsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Membership', idParam: 'userId' })
     @ApiOperation({ summary: "Change a member's role" })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'userId', description: 'Target user UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'userId', description: 'Target user CUID' })
     @ApiBody({ type: UpdateMemberRoleDto })
     @ApiOkResponse({
         type: MembershipEntity,
@@ -85,8 +85,8 @@ export class MembershipsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Membership', idParam: 'userId', action: 'DELETE' })
     @ApiOperation({ summary: 'Remove a member from the organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'userId', description: 'Target user UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'userId', description: 'Target user CUID' })
     @ApiNoContentResponse({ description: 'Member removed' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
@@ -104,7 +104,7 @@ export class MembershipsController {
     @UseGuards(OrgMemberGuard)
     @AuditLog({ entity: 'Membership', action: 'LEAVE' })
     @ApiOperation({ summary: 'Leave the organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiNoContentResponse({ description: 'Left the organization' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({

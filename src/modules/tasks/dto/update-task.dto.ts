@@ -8,8 +8,8 @@ import {
     IsInt,
     Min,
     IsDateString,
-    IsUUID,
 } from 'class-validator';
+import { IsCuid } from '../../../common/decorators/is-cuid.decorator';
 
 export class UpdateTaskDto {
     @ApiPropertyOptional({ example: 'Updated task title' })
@@ -56,10 +56,10 @@ export class UpdateTaskDto {
     dueDate?: string;
 
     @ApiPropertyOptional({
-        example: 'uuid-parent-task',
+        example: 'cmgu92m5x0001p8l4h8z6s3k2',
         description: 'Update parent task for subtask hierarchy (null to unset)',
     })
     @IsOptional()
-    @IsUUID()
+    @IsCuid()
     parentTaskId?: string;
 }

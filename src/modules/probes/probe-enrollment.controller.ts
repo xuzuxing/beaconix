@@ -142,7 +142,7 @@ export class ProbeEnrollmentController {
     @ApiOperation({
         summary: 'Mint a one-time install command for a new probe',
     })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiBody({ type: CreateEnrollTokenDto })
     @ApiOkResponse({
         description: '{ token, expiresAt, command, apiUrl }',

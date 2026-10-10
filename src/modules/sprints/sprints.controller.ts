@@ -39,7 +39,7 @@ export class SprintsController {
     @Get()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List all sprints in a project' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiOkResponse({
         type: [SprintEntity],
         description: 'List of sprints ordered by display order',
@@ -56,7 +56,7 @@ export class SprintsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Sprint' })
     @ApiOperation({ summary: 'Create a new sprint' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiBody({ type: CreateSprintDto })
     @ApiCreatedResponse({
         type: SprintEntity,
@@ -78,8 +78,8 @@ export class SprintsController {
     @Get(':id')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Get sprint by ID' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Sprint UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Sprint CUID' })
     @ApiOkResponse({
         type: SprintEntity,
         description: 'Sprint details',
@@ -99,8 +99,8 @@ export class SprintsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'Sprint' })
     @ApiOperation({ summary: 'Update sprint details' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Sprint UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Sprint CUID' })
     @ApiBody({ type: UpdateSprintDto })
     @ApiOkResponse({
         type: SprintEntity,
@@ -128,8 +128,8 @@ export class SprintsController {
         description:
             'Only one sprint can be ACTIVE per project at a time. Sets startDate to now if not already set.',
     })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Sprint UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Sprint CUID' })
     @ApiOkResponse({
         type: SprintEntity,
         description: 'Sprint started',
@@ -158,8 +158,8 @@ export class SprintsController {
         description:
             'Incomplete tasks (status != DONE) are moved back to the backlog. Sets endDate to now if not already set.',
     })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Sprint UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Sprint CUID' })
     @ApiOkResponse({
         type: SprintEntity,
         description: 'Sprint completed',
@@ -187,8 +187,8 @@ export class SprintsController {
         description:
             'Cannot delete an active sprint. Tasks in the sprint are moved back to the backlog.',
     })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'id', description: 'Sprint UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Sprint CUID' })
     @ApiNoContentResponse({ description: 'Sprint deleted' })
     @ApiBadRequestResponse({ description: 'Cannot delete an active sprint' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })

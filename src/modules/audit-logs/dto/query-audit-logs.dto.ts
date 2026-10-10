@@ -1,7 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
     IsOptional,
-    IsUUID,
     IsEnum,
     IsString,
     IsDateString,
@@ -11,21 +10,22 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AuditAction } from '../../../generated/prisma/enums';
+import { IsCuid } from '../../../common/decorators/is-cuid.decorator';
 
 export class QueryAuditLogsDto {
     @ApiPropertyOptional({ description: 'Filter by actor (user) ID' })
     @IsOptional()
-    @IsUUID()
+    @IsCuid()
     actorId?: string;
 
     @ApiPropertyOptional({ description: 'Filter by organization ID' })
     @IsOptional()
-    @IsUUID()
+    @IsCuid()
     organizationId?: string;
 
     @ApiPropertyOptional({ description: 'Filter by project ID' })
     @IsOptional()
-    @IsUUID()
+    @IsCuid()
     projectId?: string;
 
     @ApiPropertyOptional({
@@ -45,7 +45,7 @@ export class QueryAuditLogsDto {
 
     @ApiPropertyOptional({ description: 'Filter by entity ID' })
     @IsOptional()
-    @IsUUID()
+    @IsCuid()
     entityId?: string;
 
     @ApiPropertyOptional({

@@ -46,7 +46,7 @@ export class AttachmentsController {
     @Get()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List attachments for a task' })
-    @ApiParam({ name: 'taskId', description: 'Task UUID' })
+    @ApiParam({ name: 'taskId', description: 'Task CUID' })
     @ApiOkResponse({ type: [AttachmentEntity], description: 'Attachment list' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member of the organization' })
@@ -64,7 +64,7 @@ export class AttachmentsController {
     )
     @AuditLog({ entity: 'Attachment' })
     @ApiOperation({ summary: 'Upload a file and save attachment metadata' })
-    @ApiParam({ name: 'taskId', description: 'Task UUID' })
+    @ApiParam({ name: 'taskId', description: 'Task CUID' })
     @ApiBody({
         description: 'Multipart form with a file field named "file"',
         type: UploadAttachmentDto,
@@ -90,7 +90,7 @@ export class AttachmentsController {
     @ApiOperation({
         summary: 'Save attachment metadata after external upload',
     })
-    @ApiParam({ name: 'taskId', description: 'Task UUID' })
+    @ApiParam({ name: 'taskId', description: 'Task CUID' })
     @ApiBody({ type: SaveAttachmentDto })
     @ApiCreatedResponse({
         type: AttachmentEntity,
@@ -111,8 +111,8 @@ export class AttachmentsController {
     @UseGuards(OrgMemberGuard)
     @SkipTransform()
     @ApiOperation({ summary: 'Download an attachment' })
-    @ApiParam({ name: 'taskId', description: 'Task UUID' })
-    @ApiParam({ name: 'id', description: 'Attachment UUID' })
+    @ApiParam({ name: 'taskId', description: 'Task CUID' })
+    @ApiParam({ name: 'id', description: 'Attachment CUID' })
     @ApiOkResponse({ description: 'Attachment stream or redirect' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member of the organization' })
@@ -143,8 +143,8 @@ export class AttachmentsController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @AuditLog({ entity: 'Attachment', action: 'DELETE' })
     @ApiOperation({ summary: 'Remove an attachment (uploader or ADMIN+)' })
-    @ApiParam({ name: 'taskId', description: 'Task UUID' })
-    @ApiParam({ name: 'id', description: 'Attachment UUID' })
+    @ApiParam({ name: 'taskId', description: 'Task CUID' })
+    @ApiParam({ name: 'id', description: 'Attachment CUID' })
     @ApiNoContentResponse({ description: 'Attachment removed from DB and CDN' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not uploader or admin' })

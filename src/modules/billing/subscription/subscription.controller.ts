@@ -21,7 +21,7 @@ export class SubscriptionController {
     @Get()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Get the subscription stack of an organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
         type: SubscriptionStackEntity,
         description: 'Effective plan plus the active subscription stack',

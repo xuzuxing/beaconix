@@ -39,8 +39,8 @@ export class CheckerController {
     @ApiOperation({
         summary: 'Run a check for a monitor right now',
     })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'monitorId', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'monitorId', description: 'Monitor CUID' })
     @ApiOkResponse({ description: 'The check outcome and the derived status' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({
@@ -57,8 +57,8 @@ export class CheckerController {
     @Get(':monitorId/checks')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List the check history of a monitor' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
-    @ApiParam({ name: 'monitorId', description: 'Monitor UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'monitorId', description: 'Monitor CUID' })
     @ApiQuery({ type: QueryCheckLogsDto })
     @ApiOkResponse({
         type: [CheckLogEntity],

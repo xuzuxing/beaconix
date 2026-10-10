@@ -41,7 +41,7 @@ export class CreateStatusPageDto {
 
     @ApiPropertyOptional({
         type: [String],
-        example: ['monitor-uuid-1'],
+        example: ['cmgu92m5x0005p8l4h8z6s3k6'],
         description:
             'Monitors shown on the public page. They must belong to this organization.',
     })

@@ -21,7 +21,7 @@ export class MonitoringController {
     @Get('organizations/:orgId/monitoring/overview')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Monitoring overview for an organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
         type: MonitoringOverviewEntity,
         description: 'Overview across every monitor in the organization',
@@ -35,7 +35,7 @@ export class MonitoringController {
     @Get('projects/:projectId/monitoring/overview')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Monitoring overview for a project' })
-    @ApiParam({ name: 'projectId', description: 'Project UUID' })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiOkResponse({
         type: MonitoringOverviewEntity,
         description: 'Overview across the monitors of the project',

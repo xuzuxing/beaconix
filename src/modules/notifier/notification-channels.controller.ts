@@ -48,7 +48,7 @@ export class NotificationChannelsController {
     @Get()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List notification channels of the organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
         type: [NotificationChannelEntity],
         description: 'List of notification channels',
@@ -64,7 +64,7 @@ export class NotificationChannelsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'NotificationChannel' })
     @ApiOperation({ summary: 'Create a notification channel' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiBody({ type: CreateNotificationChannelDto })
     @ApiCreatedResponse({
         type: NotificationChannelEntity,
@@ -85,8 +85,8 @@ export class NotificationChannelsController {
     @Get(':id')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Get a notification channel by ID' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Channel UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Channel CUID' })
     @ApiOkResponse({
         type: NotificationChannelEntity,
         description: 'Channel details',
@@ -103,8 +103,8 @@ export class NotificationChannelsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'NotificationChannel' })
     @ApiOperation({ summary: 'Update a notification channel' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Channel UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Channel CUID' })
     @ApiBody({ type: UpdateNotificationChannelDto })
     @ApiOkResponse({
         type: NotificationChannelEntity,
@@ -128,8 +128,8 @@ export class NotificationChannelsController {
     @Roles('ADMIN')
     @AuditLog({ entity: 'NotificationChannel', action: 'DELETE' })
     @ApiOperation({ summary: 'Delete a notification channel' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Channel UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Channel CUID' })
     @ApiOkResponse({ description: 'Channel deleted' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
@@ -144,8 +144,8 @@ export class NotificationChannelsController {
     @UseGuards(RolesGuard)
     @Roles('ADMIN')
     @ApiOperation({ summary: 'Send a test message through the channel' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Channel UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Channel CUID' })
     @ApiOkResponse({
         description: '{ delivered: boolean, error: string | null }',
     })
@@ -159,8 +159,8 @@ export class NotificationChannelsController {
     @Get(':id/logs')
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List delivery attempts of a channel' })
-    @ApiParam({ name: 'orgId', description: 'Organization UUID' })
-    @ApiParam({ name: 'id', description: 'Channel UUID' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiParam({ name: 'id', description: 'Channel CUID' })
     @ApiQuery({ type: QueryNotificationLogsDto })
     @ApiOkResponse({ description: 'Paginated notification logs' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
