@@ -10,6 +10,7 @@ export type MonitorEvent =
     | 'AVAILABILITY_RECOVERED';
 
 export interface NotificationPayload {
+    idempotencyKey?: string;
     monitorId: string;
     monitorName: string;
     monitorType: string;

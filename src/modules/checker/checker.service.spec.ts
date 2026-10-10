@@ -95,7 +95,10 @@ function createService() {
         getAssignedProbes: jest.fn().mockResolvedValue([]),
     };
 
-    const ruleEvaluator = { evaluate: jest.fn().mockReturnValue(false) };
+    const ruleEvaluator = {
+        evaluate: jest.fn().mockReturnValue(false),
+        explain: jest.fn().mockReturnValue([]),
+    };
     const ruleGroups = {
         findBindingsForMonitor: jest.fn().mockResolvedValue([]),
     };
@@ -126,7 +129,7 @@ function createService() {
 
 describe('CheckerService', () => {
     describe('checkMonitorForProject', () => {
-        it('runs an HTTP check and notifies on a status change', async () => {
+        it('runs an HTTP check and leaves delivery to the transactional outbox', async () => {
             const {
                 service,
                 prisma,
@@ -170,7 +173,7 @@ describe('CheckerService', () => {
                 ruleMatched: false,
                 ruleGroupIds: [],
             });
-            expect(notifierService.notifyTransition).toHaveBeenCalledTimes(1);
+            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
             expect(prisma.probeExecution.create).toHaveBeenCalledWith({
                 data: expect.objectContaining({
                     probeId: null,
@@ -191,8 +194,8 @@ describe('CheckerService', () => {
                         changed: true,
                         ruleGroupIds: [],
                         notified: {
-                            skipped: false,
-                            sent: 1,
+                            skipped: true,
+                            sent: 0,
                             failed: 0,
                         },
                     },
@@ -317,6 +320,8 @@ describe('CheckerService', () => {
             expect(prisma.probeResult.findMany).toHaveBeenCalledWith({
                 where: {
                     target: monitorRow.target,
+                    monitorId: monitorRow.id,
+                    configRevision: undefined,
                     checkedAt: { gte: expect.any(Date) },
                     probe: {
                         organizationId: 'org-1',
@@ -337,6 +342,7 @@ describe('CheckerService', () => {
                 ssl: undefined,
                 localSuccess: false,
                 rescuedByProbe: true,
+                serviceVerdict: 'SUCCESS',
                 statusCode: null,
                 ruleMatched: false,
                 ruleGroupIds: [],
@@ -380,6 +386,8 @@ describe('CheckerService', () => {
             expect(prisma.probeResult.findMany).toHaveBeenNthCalledWith(2, {
                 where: {
                     target: monitorRow.target,
+                    monitorId: monitorRow.id,
+                    configRevision: undefined,
                     probeId: { in: ['system-probe-1'] },
                     checkedAt: { gte: expect.any(Date) },
                     probe: {
@@ -490,6 +498,74 @@ describe('CheckerService', () => {
     });
 
     describe('ingestProbeReport', () => {
+        it('does not reuse an effective rescued verdict as raw local service evidence', async () => {
+            const { service, prisma, stateService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.checkLog.findFirst
+                .mockResolvedValueOnce({
+                    success: true,
+                    localSuccess: false,
+                    serviceVerdict: 'SUCCESS',
+                    localServiceVerdict: 'FAILURE',
+                    latency: 30,
+                    error: null,
+                    checkedAt: new Date(),
+                })
+                .mockResolvedValueOnce(null);
+            prisma.probeResult.findMany.mockResolvedValue([{ success: false }]);
+            await service.ingestProbeReportForMonitor('monitor-1', {
+                target: monitorRow.target,
+                success: false,
+                latency: 20,
+                checkedAt: new Date(),
+            });
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({
+                    success: false,
+                    serviceVerdict: 'FAILURE',
+                    localServiceVerdict: 'FAILURE',
+                    sslVerdict: 'NO_EVIDENCE',
+                }),
+            );
+        });
+
+        it('uses fresh probe service success without overriding an independent SSL failure', async () => {
+            const { service, prisma, stateService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                checkSsl: true,
+            });
+            prisma.checkLog.findFirst
+                .mockResolvedValueOnce({
+                    success: false,
+                    localSuccess: false,
+                    serviceVerdict: 'NO_EVIDENCE',
+                    localServiceVerdict: 'NO_EVIDENCE',
+                    sslVerdict: 'INVALID',
+                    latency: 30,
+                    error: 'SSL invalid',
+                    checkedAt: new Date(),
+                })
+                .mockResolvedValueOnce(null);
+            prisma.probeResult.findMany.mockResolvedValue([{ success: true }]);
+            await service.ingestProbeReportForMonitor('monitor-1', {
+                target: monitorRow.target,
+                success: true,
+                latency: 20,
+                checkedAt: new Date(),
+            });
+            expect(stateService.record).toHaveBeenCalledWith(
+                'monitor-1',
+                expect.objectContaining({
+                    success: false,
+                    serviceVerdict: 'SUCCESS',
+                    localServiceVerdict: 'NO_EVIDENCE',
+                    sslVerdict: 'NO_EVIDENCE',
+                    rescuedByProbe: false,
+                }),
+            );
+        });
         it('re-evaluates the latest local outcome when a probe report arrives', async () => {
             const { service, prisma, stateService } = createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
@@ -514,22 +590,29 @@ describe('CheckerService', () => {
                 },
             ]);
 
-            const result = await service.ingestProbeReport('org-1', {
-                target: 'https://api.example.com/health',
-                success: true,
-                latency: 20,
-            });
+            const result = await service.ingestProbeReportForMonitor(
+                'monitor-1',
+                {
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    latency: 20,
+                },
+            );
 
             expect(prisma.monitor.findFirst).toHaveBeenCalledWith({
                 where: {
-                    organizationId: 'org-1',
+                    id: 'monitor-1',
                     target: 'https://api.example.com/health',
                     deletedAt: null,
                     enabled: true,
                 },
             });
             expect(prisma.checkLog.findFirst).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1', source: 'LOCAL' },
+                where: {
+                    monitorId: 'monitor-1',
+                    source: 'LOCAL',
+                    configRevision: undefined,
+                },
                 orderBy: { checkedAt: 'desc' },
             });
             expect(stateService.record).toHaveBeenCalledWith('monitor-1', {
@@ -537,10 +620,14 @@ describe('CheckerService', () => {
                 latency: 30,
                 error: null,
                 source: 'PROBE',
+                probeRoundWindowMs: 15000,
                 checkedAt: expect.any(Date),
                 ssl: undefined,
                 localSuccess: false,
                 rescuedByProbe: true,
+                serviceVerdict: 'SUCCESS',
+                localServiceVerdict: 'FAILURE',
+                sslVerdict: 'NO_EVIDENCE',
                 statusCode: null,
                 ruleMatched: false,
                 ruleGroupIds: [],
@@ -572,7 +659,7 @@ describe('CheckerService', () => {
                 },
             ]);
 
-            await service.ingestProbeReport('org-1', {
+            await service.ingestProbeReportForMonitor('monitor-1', {
                 target: 'https://api.example.com/health',
                 success: false,
                 latency: 40,
@@ -590,11 +677,14 @@ describe('CheckerService', () => {
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
             prisma.checkLog.findFirst.mockResolvedValue(null);
 
-            const result = await service.ingestProbeReport('org-1', {
-                target: 'https://api.example.com/health',
-                success: true,
-                latency: 5,
-            });
+            const result = await service.ingestProbeReportForMonitor(
+                'monitor-1',
+                {
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    latency: 5,
+                },
+            );
 
             expect(result).toBeNull();
             expect(stateService.record).not.toHaveBeenCalled();
@@ -615,12 +705,15 @@ describe('CheckerService', () => {
                 })
                 .mockResolvedValueOnce({ checkedAt: new Date() });
 
-            const result = await service.ingestProbeReport('org-1', {
-                target: 'https://api.example.com/health',
-                success: true,
-                latency: 40,
-                error: null,
-            });
+            const result = await service.ingestProbeReportForMonitor(
+                'monitor-1',
+                {
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    latency: 40,
+                    error: null,
+                },
+            );
 
             expect(result).toBeNull();
             expect(stateService.record).not.toHaveBeenCalled();
@@ -630,11 +723,14 @@ describe('CheckerService', () => {
             const { service, prisma, stateService } = createService();
             prisma.monitor.findFirst.mockResolvedValue(null);
 
-            const result = await service.ingestProbeReport('org-1', {
-                target: 'https://unknown.example.com',
-                success: true,
-                latency: 5,
-            });
+            const result = await service.ingestProbeReportForMonitor(
+                'monitor-1',
+                {
+                    target: 'https://unknown.example.com',
+                    success: true,
+                    latency: 5,
+                },
+            );
 
             expect(result).toBeNull();
             expect(stateService.record).not.toHaveBeenCalled();
@@ -793,7 +889,7 @@ describe('CheckerService', () => {
             },
         });
 
-        it('alerts once when failures reached the threshold and availability is below it', async () => {
+        it('does not create a second nontransactional availability notification', async () => {
             const { service, prisma, stateService, notifierService } =
                 createService();
             prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
@@ -813,32 +909,11 @@ describe('CheckerService', () => {
 
             await service.checkMonitorForProject('project-1', 'monitor-1');
 
-            expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1' },
-                orderBy: { checkedAt: 'desc' },
-                take: 10,
-                select: { ruleMatched: true },
-            });
+            expect(prisma.checkLog.findMany).not.toHaveBeenCalled();
             expect(
                 notifierService.notifyAvailabilityAlert,
-            ).toHaveBeenCalledWith(
-                alertMonitor,
-                expect.objectContaining({ failCount: 3 }),
-                {
-                    availabilityPercent: 25,
-                    threshold: 90,
-                    window: 10,
-                    sampleSize: 4,
-                    consecutiveFailures: 3,
-                },
-            );
-            expect(prisma.monitorState.update).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1' },
-                data: {
-                    availabilityAlertActive: true,
-                    lastAvailabilityAlertAt: expect.any(Date),
-                },
-            });
+            ).not.toHaveBeenCalled();
+            expect(stateService.record).toHaveBeenCalledTimes(1);
         });
 
         it('stays silent while already alerting', async () => {
@@ -866,7 +941,7 @@ describe('CheckerService', () => {
             expect(prisma.monitorState.update).not.toHaveBeenCalled();
         });
 
-        it('sends a recovery notice when availability climbs back', async () => {
+        it('delegates recovery to the transactional state writer', async () => {
             const { service, prisma, stateService, notifierService } =
                 createService();
             prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
@@ -885,15 +960,9 @@ describe('CheckerService', () => {
 
             expect(
                 notifierService.notifyAvailabilityRecovery,
-            ).toHaveBeenCalledWith(
-                alertMonitor,
-                expect.objectContaining({ failCount: 0 }),
-                expect.objectContaining({ availabilityPercent: 100 }),
-            );
-            expect(prisma.monitorState.update).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1' },
-                data: { availabilityAlertActive: false },
-            });
+            ).not.toHaveBeenCalled();
+            expect(prisma.monitorState.update).not.toHaveBeenCalled();
+            expect(stateService.record).toHaveBeenCalledTimes(1);
         });
 
         it('does not alert while consecutive failures are below the threshold', async () => {

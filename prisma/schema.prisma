@@ -810,6 +810,8 @@ model Monitor {
   checkSsl           Boolean     @default(false)
   sslExpiryThreshold Int         @default(30)
   enabled            Boolean     @default(true)
+  configRevision     Int         @default(1)
+  historyRevision    Int         @default(0)
 
   // 可用率告警（内嵌阈值告警）：最近 N 次检查可用率 < 阈值且连续失败达阈值时报警
   availabilityEnabled   Boolean @default(false)
@@ -860,6 +862,9 @@ model MonitorState {
   lastAvailabilityAlertAt DateTime?
   // 是否处于可用率告警状态：命中时置真并只告警一次，恢复时发恢复通知并置假
   availabilityAlertActive Boolean    @default(false)
+  connectivityFailCount Int          @default(0)
+  lastAppliedObservationAt DateTime?
+  lastAppliedObservationId String?
   updatedAt          DateTime       @updatedAt
 
   monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
@@ -1005,6 +1010,16 @@ model MonitorProbe {
 model ProbeResult {
   id        String   @id @default(cuid())
   probeId   String
+  probeRefId String?
+  monitorId String?
+  organizationId String?
+  projectId String?
+  monitorType MonitorType?
+  configRevision Int?
+  reportId String?
+  payloadHash String?
+  receivedAt DateTime @default(now())
+  appliedAt DateTime?
   target    String
   success   Boolean
   error     String?
@@ -1013,8 +1028,11 @@ model ProbeResult {
   latency   Int
   checkedAt DateTime @default(now())
 
-  probe Probe @relation(fields: [probeId], references: [id], onDelete: Cascade)
+  probe Probe? @relation(fields: [probeRefId], references: [id], onDelete: SetNull)
 
+  @@unique([probeId, reportId])
+  @@index([projectId, monitorId, checkedAt])
+  @@index([projectId, probeId, checkedAt])
   @@index([target, checkedAt])
   @@index([probeId, checkedAt])
   @@index([checkedAt])
@@ -1050,6 +1068,15 @@ model ProbeExecution {
 model CheckLog {
   id             String      @id @default(cuid())
   monitorId      String
+  monitorRefId   String?
+  organizationId String?
+  projectId      String?
+  monitorType    MonitorType?
+  observationId  String? @unique
+  configRevision Int?
+  serviceVerdict String?
+  localServiceVerdict String?
+  sslVerdict String?
   // 最终判定结论（本地结果与探针结果聚合后）
   success        Boolean
   // 本地探测的原始结果；探针回调写入时记录本地最近一次结果，本地检测时等于 success
@@ -1067,8 +1094,10 @@ model CheckLog {
   source         CheckSource @default(LOCAL)
   checkedAt      DateTime    @default(now())
 
-  monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  monitor Monitor? @relation(fields: [monitorRefId], references: [id], onDelete: SetNull)
 
+  @@index([projectId, source, checkedAt])
+  @@index([projectId, source, monitorType, checkedAt])
   @@index([monitorId, checkedAt])
   @@index([checkedAt])
   @@map("check_logs")
@@ -1100,15 +1129,99 @@ model NotificationLog {
   id        String             @id @default(cuid())
   monitorId String
   channelId String
+  channelRefId String?
+  eventId String?
+  deliveryId String?
+  phase String?
+  attempt Int?
   status    NotificationStatus
   error     String?
   sentAt    DateTime           @default(now())
 
-  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channel NotificationChannel? @relation(fields: [channelRefId], references: [id], onDelete: SetNull)
 
   @@index([monitorId, sentAt])
   @@index([channelId, sentAt])
+  @@index([eventId, sentAt])
   @@map("notification_logs")
+}
+
+model MonitoringCoverage {
+  projectId String @id
+  checksStartedAt DateTime @default(now())
+  countsStartedAt DateTime @default(now())
+  probeStartedAt DateTime @default(now())
+  alertsStartedAt DateTime @default(now())
+  version Int @default(1)
+  @@map("monitoring_coverage")
+}
+
+model MonitorHistory {
+  id String @id @default(cuid())
+  monitorId String
+  organizationId String
+  projectId String
+  enabled Boolean
+  deleted Boolean
+  status MonitorStatus
+  effectiveAt DateTime @default(now())
+  revision Int
+  cause String
+  @@unique([monitorId, revision])
+  @@index([projectId, effectiveAt])
+  @@index([monitorId, effectiveAt, revision])
+  @@map("monitor_history")
+}
+
+model AlertEvent {
+  id String @id @default(cuid())
+  monitorId String
+  organizationId String
+  projectId String
+  monitorName String
+  target String
+  kind String
+  level String
+  status String @default("ongoing")
+  suppressedReason String?
+  reason String
+  threshold Float?
+  actual Float?
+  unit String?
+  message String?
+  origin String @default("OBSERVED")
+  latestEvidence Json @default("{}")
+  lifecycleRevision Int @default(1)
+  startedAt DateTime @default(now())
+  resolvedAt DateTime?
+  durationSeconds Int?
+  firstNotifiedAt DateTime?
+  updatedAt DateTime @updatedAt
+  deliveries AlertDelivery[]
+  @@index([projectId, updatedAt, id])
+  @@index([projectId, status])
+  @@map("alert_events")
+}
+
+model AlertDelivery {
+  id String @id @default(cuid())
+  eventId String
+  eventRevision Int
+  phase String
+  channelId String
+  payload Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  leaseUntil DateTime?
+  leaseToken String?
+  deliveredAt DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  event AlertEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  @@unique([eventId, eventRevision, phase, channelId])
+  @@index([status, nextAttemptAt])
+  @@map("alert_deliveries")
 }
 
 // 状态页

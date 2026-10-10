@@ -7,6 +7,8 @@ import {
     IsISO8601,
     IsOptional,
     IsString,
+    IsBoolean,
+    ValidateNested,
     Max,
     MaxLength,
     Min,
@@ -14,6 +16,29 @@ import {
 import { Type } from 'class-transformer';
 
 export class ProbeResultItemDto {
+    @ApiPropertyOptional({
+        description: 'Assigned monitor identity; required by current agents',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(100)
+    monitorId?: string;
+
+    @ApiPropertyOptional({
+        description: 'Stable observation identity, reused on retries',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(100)
+    reportId?: string;
+
+    @ApiPropertyOptional({
+        description: 'Configuration revision supplied by heartbeat',
+    })
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    configRevision?: number;
     @ApiProperty({
         example: 'https://api.example.com/health',
         description: 'Must match the target of a monitor in the organization',
@@ -23,6 +48,7 @@ export class ProbeResultItemDto {
     target: string;
 
     @ApiProperty({ example: true })
+    @IsBoolean()
     success: boolean;
 
     @ApiProperty({ example: 128, description: 'Round-trip time in ms' })
@@ -61,6 +87,7 @@ export class ReportProbeResultsDto {
     @IsArray()
     @ArrayMinSize(1)
     @ArrayMaxSize(100)
+    @ValidateNested({ each: true })
     @Type(() => ProbeResultItemDto)
     results: ProbeResultItemDto[];
 }

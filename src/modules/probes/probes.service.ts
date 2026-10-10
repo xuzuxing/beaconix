@@ -1,5 +1,7 @@
 import {
     BadRequestException,
+    ConflictException,
+    ForbiddenException,
     Injectable,
     Logger,
     NotFoundException,
@@ -7,7 +9,7 @@ import {
     UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { ScheduledJobRegistry } from '../../infra/scheduler/scheduled-job.registry';
 import {
@@ -23,7 +25,6 @@ import {
     ProbeStatus,
 } from '../../generated/prisma/enums';
 import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
-import type { ProbeModel } from '../../generated/prisma/models';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { QuotaService } from '../../shared/quota/quota.service';
 import { CheckerService } from '../checker/checker.service';
@@ -42,9 +43,6 @@ import {
     ProbeMonitorEntity,
     ProbeResultEntity,
 } from './entities';
-
-/** How many reported targets are folded into monitor state in parallel. */
-const PROBE_REPORT_CONCURRENCY = 5;
 
 /**
  * Grace window during which a rotated secret keeps working alongside the new
@@ -69,6 +67,9 @@ const MONITOR_SELECT = {
     timeout: true,
     expectedStatus: true,
     failureThreshold: true,
+    configRevision: true,
+    organizationId: true,
+    projectId: true,
     enabled: true,
     deletedAt: true,
 } as const;
@@ -88,6 +89,7 @@ export interface ProbeHeartbeatResult {
         interval: number;
         timeout: number;
         expectedStatus: number;
+        configRevision: number;
     }>;
     serverTime: string;
 }
@@ -110,6 +112,11 @@ export class ProbesService implements OnModuleInit {
             name: SCHEDULED_JOBS.probeOfflineSweep,
             pattern: SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.probeOfflineSweep],
             handler: () => this.markStaleProbesOffline(),
+        });
+        this.registry.register({
+            name: 'probe-ingest-sweep',
+            pattern: '* * * * *',
+            handler: () => this.applyPendingResults(),
         });
     }
 
@@ -448,6 +455,7 @@ export class ProbesService implements OnModuleInit {
                 interval: monitor.interval,
                 timeout: monitor.timeout,
                 expectedStatus: monitor.expectedStatus,
+                configRevision: monitor.configRevision,
             })),
             serverTime: new Date().toISOString(),
         };
@@ -465,133 +473,278 @@ export class ProbesService implements OnModuleInit {
     async recordResults(secret: string, results: ProbeResultItemDto[]) {
         const probe = await this.requireProbeBySecret(secret);
         const receivedAt = new Date();
-
-        await this.prisma.probeResult.createMany({
-            data: results.map((result) => ({
+        const existing = await this.prisma.probeResult.findMany({
+            where: {
                 probeId: probe.id,
+                reportId: {
+                    in: results.flatMap((r) =>
+                        r.reportId ? [r.reportId] : [],
+                    ),
+                },
+            },
+        });
+        const repeated: typeof existing = [];
+        const fresh = results.filter((result) => {
+            const row = existing.find((r) => r.reportId === result.reportId);
+            if (!row) return true;
+            const canonical = {
+                monitorId: result.monitorId ?? row.monitorId,
+                configRevision: result.configRevision ?? row.configRevision,
                 target: result.target,
                 success: result.success,
                 latency: result.latency,
-                error: result.error ?? null,
                 statusCode: result.statusCode ?? null,
+                error: result.error ?? null,
                 checkedAt: result.checkedAt
-                    ? new Date(result.checkedAt)
-                    : new Date(),
-            })),
+                    ? new Date(result.checkedAt).toISOString()
+                    : null,
+            };
+            const hash = createHash('sha256')
+                .update(JSON.stringify(canonical))
+                .digest('hex');
+            if (hash !== row.payloadHash)
+                throw new ConflictException(
+                    'reportId already used for another observation',
+                );
+            repeated.push(row);
+            return false;
         });
-
-        // Reports may arrive before the first heartbeat; the assignment table has
-        // to know about this probe before the results are matched to monitors.
-        if (
-            probe.status !== ProbeStatus.ONLINE &&
+        const assignedIds =
             probe.scope === ProbeScope.SYSTEM
-        ) {
-            await this.systemProbeScheduler.rebalance();
-        }
-
-        const targets = [
-            ...new Map(
-                results.map((result) => [result.target, result] as const),
-            ).values(),
-        ];
-        const outcomes = new Array<AppliedOutcome | null>(targets.length);
-        let cursor = 0;
-
-        const workers = Array.from(
-            { length: Math.min(PROBE_REPORT_CONCURRENCY, targets.length) },
-            async () => {
-                while (cursor < targets.length) {
-                    const index = cursor;
-                    cursor += 1;
-
-                    outcomes[index] = await this.applyReportedResult(
-                        probe,
-                        targets[index],
-                        receivedAt,
+                ? await this.systemProbeScheduler.getAssignedMonitorIds(
+                      probe.id,
+                  )
+                : null;
+        const authorized = await this.prisma.monitor.findMany({
+            where: {
+                enabled: true,
+                deletedAt: null,
+                project: { deletedAt: null, organization: { deletedAt: null } },
+                ...(assignedIds
+                    ? { id: { in: assignedIds } }
+                    : {
+                          organizationId: probe.organizationId!,
+                          probes: { some: { probeId: probe.id } },
+                      }),
+            },
+        });
+        const prepared = fresh.map((result) => {
+            if (!result.checkedAt)
+                throw new BadRequestException(
+                    'Agent upgrade required: checkedAt is mandatory',
+                );
+            const checkedAt = new Date(result.checkedAt);
+            if (
+                Number.isNaN(checkedAt.getTime()) ||
+                checkedAt.getTime() > receivedAt.getTime() + 60_000 ||
+                checkedAt.getTime() < receivedAt.getTime() - 900_000
+            ) {
+                throw new BadRequestException(
+                    'Observation timestamp outside accepted window',
+                );
+            }
+            const matching = authorized.filter((m) =>
+                result.monitorId
+                    ? m.id === result.monitorId
+                    : m.target === result.target,
+            );
+            if (matching.length !== 1)
+                throw new ForbiddenException(
+                    'Monitor is not uniquely assigned to this probe',
+                );
+            const monitor = matching[0];
+            if (monitor.target !== result.target)
+                throw new BadRequestException(
+                    'Target does not match assigned monitor',
+                );
+            if (
+                result.configRevision === undefined &&
+                monitor.updatedAt > checkedAt
+            ) {
+                throw new BadRequestException(
+                    'Agent upgrade required: configuration revision is mandatory',
+                );
+            }
+            const configRevision =
+                result.configRevision ?? monitor.configRevision;
+            const canonical = {
+                monitorId: monitor.id,
+                configRevision,
+                target: result.target,
+                success: result.success,
+                latency: result.latency,
+                statusCode: result.statusCode ?? null,
+                error: result.error ?? null,
+                checkedAt: checkedAt.toISOString(),
+            };
+            const payloadHash = createHash('sha256')
+                .update(JSON.stringify(canonical))
+                .digest('hex');
+            return {
+                monitor,
+                checkedAt,
+                canonical,
+                payloadHash,
+                reportId: result.reportId || payloadHash,
+            };
+        });
+        prepared.sort((a, b) => a.monitor.id.localeCompare(b.monitor.id));
+        const rows = await this.prisma.$transaction(async (tx) => {
+            const saved: { id: string; appliedAt: Date | null }[] = [];
+            for (const item of prepared) {
+                await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${item.monitor.id} FOR UPDATE`;
+                const duplicate = await tx.probeResult.findUnique({
+                    where: {
+                        probeId_reportId: {
+                            probeId: probe.id,
+                            reportId: item.reportId,
+                        },
+                    },
+                });
+                if (duplicate) {
+                    if (duplicate.payloadHash !== item.payloadHash)
+                        throw new ConflictException(
+                            'reportId already used for another observation',
+                        );
+                    saved.push(duplicate);
+                    continue;
+                }
+                const current = await tx.monitor.findUniqueOrThrow({
+                    where: { id: item.monitor.id },
+                });
+                if (
+                    probe.scope === ProbeScope.TENANT &&
+                    !(await tx.monitorProbe.findUnique({
+                        where: {
+                            monitorId_probeId: {
+                                monitorId: current.id,
+                                probeId: probe.id,
+                            },
+                        },
+                    }))
+                )
+                    throw new ForbiddenException(
+                        'Monitor is no longer bound to this probe',
+                    );
+                if (
+                    current.configRevision !== item.canonical.configRevision ||
+                    !current.enabled ||
+                    current.deletedAt
+                ) {
+                    throw new ConflictException(
+                        'Monitor configuration changed; refresh heartbeat',
                     );
                 }
-            },
-        );
-
-        await Promise.all(workers);
-
-        await this.prisma.probe.update({
-            where: { id: probe.id },
-            data: { lastHeartbeat: new Date(), status: ProbeStatus.ONLINE },
+                saved.push(
+                    await tx.probeResult.create({
+                        data: {
+                            probeId: probe.id,
+                            probeRefId: probe.id,
+                            reportId: item.reportId,
+                            payloadHash: item.payloadHash,
+                            monitorId: item.monitor.id,
+                            projectId: item.monitor.projectId,
+                            organizationId: item.monitor.organizationId,
+                            monitorType: item.monitor.type,
+                            configRevision: item.canonical.configRevision,
+                            target: item.canonical.target,
+                            checkedAt: item.checkedAt,
+                            receivedAt,
+                            success: item.canonical.success,
+                            latency: item.canonical.latency,
+                            statusCode: item.canonical.statusCode,
+                            error: item.canonical.error,
+                        },
+                    }),
+                );
+            }
+            // Liveness and ingestion commit together so a returning probe's
+            // first fresh result is eligible during apply and crash recovery.
+            await tx.probe.update({
+                where: { id: probe.id },
+                data: { lastHeartbeat: receivedAt, status: ProbeStatus.ONLINE },
+            });
+            return saved;
         });
-
-        const applied = outcomes.filter(
-            (outcome): outcome is AppliedOutcome => outcome !== null,
-        );
-
+        const outcomes: AppliedOutcome[] = [];
+        for (const row of [...rows, ...repeated]) {
+            if (row.appliedAt) continue;
+            const outcome = await this.applyStoredResult(row.id);
+            if (outcome) outcomes.push(outcome);
+        }
         return {
             accepted: results.length,
-            applied: applied.length,
-            outcomes: applied,
+            applied: outcomes.length,
+            outcomes,
         };
     }
 
-    /**
-     * Folds a single reported target into monitor state and records the
-     * execution. Returns null when the report was stored but not applied.
-     */
-    private async applyReportedResult(
-        probe: ProbeModel,
-        result: ProbeResultItemDto,
-        receivedAt: Date,
-    ): Promise<AppliedOutcome | null> {
-        const reportedAt = result.checkedAt
-            ? new Date(result.checkedAt)
-            : receivedAt;
-
-        const report = {
-            target: result.target,
-            success: result.success,
-            latency: result.latency,
-            error: result.error ?? null,
-            checkedAt: reportedAt,
-            statusCode: result.statusCode ?? null,
-        };
-
-        const execution =
-            probe.scope === ProbeScope.SYSTEM
-                ? await this.applySystemProbeResult(probe.id, report)
-                : probe.organizationId
-                  ? await this.checkerService.ingestProbeReport(
-                        probe.organizationId,
-                        report,
-                    )
-                  : null;
-
-        await this.writeExecution({
-            probeId: probe.id,
-            monitorId: execution?.monitorId ?? null,
-            target: result.target,
-            trigger: ExecutionTrigger.CALLBACK,
-            status: result.success
-                ? ExecutionStatus.SUCCESS
-                : ExecutionStatus.FAILED,
-            success: result.success,
-            latency: result.latency,
-            error: result.error ?? null,
-            requestMeta: { checkedAt: reportedAt.toISOString() },
-            responseMeta: execution
-                ? {
-                      applied: true,
-                      status: execution.status,
-                      changed: execution.changed,
-                  }
-                : { applied: false },
+    async applyPendingResults() {
+        const rows = await this.prisma.probeResult.findMany({
+            where: { appliedAt: null, monitorId: { not: null } },
+            orderBy: { receivedAt: 'asc' },
+            take: 100,
         });
+        for (const row of rows) {
+            try {
+                await this.applyStoredResult(row.id);
+            } catch (error) {
+                this.logger.warn(
+                    `Pending probe result ${row.id}: ${(error as Error).message}`,
+                );
+            }
+        }
+    }
 
-        if (!execution) return null;
-
-        return {
-            target: result.target,
-            monitorId: execution.monitorId,
-            status: execution.status,
-            changed: execution.changed,
-        };
+    private async applyStoredResult(
+        id: string,
+    ): Promise<AppliedOutcome | null> {
+        const row = await this.prisma.probeResult.findUniqueOrThrow({
+            where: { id },
+        });
+        if (row.appliedAt || !row.monitorId) return null;
+        const monitor = await this.prisma.monitor.findUnique({
+            where: { id: row.monitorId },
+        });
+        if (
+            !monitor ||
+            monitor.deletedAt ||
+            !monitor.enabled ||
+            monitor.configRevision !== row.configRevision ||
+            Date.now() - row.checkedAt.getTime() > 900_000
+        ) {
+            await this.prisma.probeResult.update({
+                where: { id },
+                data: { appliedAt: new Date() },
+            });
+            return null;
+        }
+        const result = await this.checkerService.ingestProbeReportForMonitor(
+            row.monitorId,
+            {
+                target: row.target,
+                success: row.success,
+                latency: row.latency,
+                error: row.error,
+                statusCode: row.statusCode,
+                checkedAt: row.checkedAt,
+                configRevision: row.configRevision ?? undefined,
+                observationId: `probe:${row.probeId}:${row.reportId}`,
+                probeResultId: id,
+            },
+        );
+        await this.prisma.probeResult.update({
+            where: { id },
+            data: { appliedAt: new Date() },
+        });
+        return result
+            ? {
+                  target: row.target,
+                  monitorId: result.monitorId,
+                  status: result.status,
+                  changed: result.changed,
+              }
+            : null;
     }
 
     /**
@@ -685,39 +838,6 @@ export class ProbesService implements OnModuleInit {
             },
             select: MONITOR_SELECT,
         });
-    }
-
-    private async applySystemProbeResult(
-        probeId: string,
-        report: {
-            target: string;
-            success: boolean;
-            latency: number;
-            error: string | null;
-            checkedAt: Date;
-        },
-    ) {
-        const assignedMonitorIds =
-            await this.systemProbeScheduler.getAssignedMonitorIds(probeId);
-
-        if (assignedMonitorIds.length === 0) return null;
-
-        const monitor = await this.prisma.monitor.findFirst({
-            where: {
-                id: { in: assignedMonitorIds },
-                target: report.target,
-                enabled: true,
-                deletedAt: null,
-            },
-            select: { id: true },
-        });
-
-        if (!monitor) return null;
-
-        return this.checkerService.ingestProbeReportForMonitor(
-            monitor.id,
-            report,
-        );
     }
 
     /**
@@ -849,34 +969,35 @@ export class ProbesService implements OnModuleInit {
         });
     }
 
-    private toEntity(probe: {
-        id: string;
-        organizationId: string | null;
-        scope: string;
-        name: string;
-        provider: string;
-        region: string;
-        callbackUrl: string;
-        enabled: boolean;
-        lastHeartbeat: Date | null;
-        heartbeatIntervalSeconds: number | null;
-        status: string;
-        maxTenants: number | null;
-        priority: number;
-        createdAt: Date;
-        updatedAt: Date;
-        monitors?: Array<{
-            monitor: {
-                id: string;
-                name: string;
-                type: string;
-                target: string;
-                enabled: boolean;
-                deletedAt: Date | null;
-            };
-        }>;
-        _count?: { results: number };
-    },
+    private toEntity(
+        probe: {
+            id: string;
+            organizationId: string | null;
+            scope: string;
+            name: string;
+            provider: string;
+            region: string;
+            callbackUrl: string;
+            enabled: boolean;
+            lastHeartbeat: Date | null;
+            heartbeatIntervalSeconds: number | null;
+            status: string;
+            maxTenants: number | null;
+            priority: number;
+            createdAt: Date;
+            updatedAt: Date;
+            monitors?: Array<{
+                monitor: {
+                    id: string;
+                    name: string;
+                    type: string;
+                    target: string;
+                    enabled: boolean;
+                    deletedAt: Date | null;
+                };
+            }>;
+            _count?: { results: number };
+        },
         secretPlaintext?: string,
     ): ProbeEntity {
         const monitors = (probe.monitors ?? [])

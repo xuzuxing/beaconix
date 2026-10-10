@@ -6,6 +6,7 @@ import { NotificationChannelsController } from './notification-channels.controll
 import { NotificationChannelsService } from './notification-channels.service';
 import { NotificationsProcessor } from './notifications.processor';
 import { NotifierService } from './notifier.service';
+import { AlertOutboxService } from './alert-outbox.service';
 import {
     DingtalkSender,
     EmailSender,
@@ -20,6 +21,7 @@ import {
     providers: [
         NotificationChannelsService,
         NotifierService,
+        AlertOutboxService,
         NotificationsProcessor,
         FeishuSender,
         WecomSender,

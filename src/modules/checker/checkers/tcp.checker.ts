@@ -56,6 +56,14 @@ export class TcpChecker {
                     latency: Date.now() - startedAt,
                     error,
                     checkedAt: new Date(),
+                    serviceVerdict: success ? 'SUCCESS' : 'FAILURE',
+                    failureReason: !success
+                        ? /timed out/i.test(error ?? '')
+                            ? 'TIMEOUT'
+                            : /ECONNREFUSED/i.test(error ?? '')
+                              ? 'CONNECTION_REFUSED'
+                              : 'CHECK_FAILED'
+                        : undefined,
                 });
             };
 

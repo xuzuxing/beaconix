@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { CheckSource, MonitorStatus } from '../../generated/prisma/enums';
 import { deriveState, StateService } from './state.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
+import type { AlertEventsService } from '../alert-events/alert-events.service';
 
 const monitorRow = {
     id: 'monitor-1',
@@ -46,13 +47,24 @@ function createService() {
             create: jest.fn(),
             count: jest.fn(),
             aggregate: jest.fn(),
+            findUnique: jest.fn(),
         },
-        $transaction: jest.fn((operations: unknown[]) =>
-            Promise.all(operations),
-        ),
+        $queryRaw: jest.fn(),
+        $transaction: jest.fn(),
     };
-
-    const service = new StateService(prisma as unknown as PrismaService);
+    prisma.$transaction.mockImplementation(
+        (callback: (tx: unknown) => unknown) => callback(prisma),
+    );
+    const alerts = {
+        record: jest.fn().mockResolvedValue({
+            deliveries: 0,
+            availabilityAlertActive: false,
+        }),
+    };
+    const service = new StateService(
+        prisma as unknown as PrismaService,
+        alerts as unknown as AlertEventsService,
+    );
 
     return { service, prisma };
 }
@@ -124,6 +136,15 @@ describe('StateService', () => {
             expect(prisma.checkLog.create).toHaveBeenCalledWith({
                 data: {
                     monitorId: 'monitor-1',
+                    monitorRefId: 'monitor-1',
+                    projectId: 'project-1',
+                    organizationId: 'org-1',
+                    monitorType: 'HTTP',
+                    observationId: expect.any(String),
+                    configRevision: undefined,
+                    serviceVerdict: 'FAILURE',
+                    localServiceVerdict: 'FAILURE',
+                    sslVerdict: null,
                     success: false,
                     localSuccess: false,
                     rescuedByProbe: false,

@@ -3,7 +3,15 @@
   "rootDir": ".",
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
+  "moduleNameMapper": { "^(\\.{1,2}/.*)\\.js$": "$1" },
   "transform": {
-    "^.+\\.(t|j)s$": "ts-jest"
-  }
+    "^.+\\.ts$": ["ts-jest", { "tsconfig": { "module": "CommonJS", "moduleResolution": "Node", "verbatimModuleSyntax": false, "resolvePackageJsonExports": false, "resolvePackageJsonImports": false, "ignoreDeprecations": "6.0" } }],
+    "^.+\\.js$": ["ts-jest", { "tsconfig": {
+      "allowJs": true, "module": "CommonJS", "moduleResolution": "Node",
+      "esModuleInterop": true, "verbatimModuleSyntax": false
+    }}]
+  },
+  "transformIgnorePatterns": [
+    "node_modules/(?!.*(@nestjs[\\\\/]bullmq|@nestjs[\\\\/]bull-shared|bullmq))"
+  ]
 }

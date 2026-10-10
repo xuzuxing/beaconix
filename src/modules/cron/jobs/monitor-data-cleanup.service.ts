@@ -9,9 +9,9 @@ import {
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** How long each monitoring history table is kept. */
-const CHECK_LOG_RETENTION_DAYS = 30;
+const CHECK_LOG_RETENTION_DAYS = 90;
 const PROBE_EXECUTION_RETENTION_DAYS = 7;
-const PROBE_RESULT_RETENTION_DAYS = 2;
+const PROBE_RESULT_RETENTION_DAYS = 90;
 
 /** Rows per delete statement, and statements per table per run. */
 const DELETE_BATCH_SIZE = 5000;
@@ -87,6 +87,24 @@ export class MonitorDataCleanupService implements OnModuleInit {
                     error as Error,
                 );
             }
+        }
+        // Keep the latest pre-cutoff state for each monitor as an immutable anchor.
+        try {
+            await this.prisma.$executeRaw`
+                DELETE FROM monitor_history WHERE id IN (
+                    SELECT h.id FROM monitor_history h
+                    WHERE h."effectiveAt" < ${new Date(Date.now() - 90 * MS_PER_DAY)}
+                    AND EXISTS (SELECT 1 FROM monitor_history newer
+                        WHERE newer."monitorId" = h."monitorId"
+                        AND newer."effectiveAt" < ${new Date(Date.now() - 90 * MS_PER_DAY)}
+                        AND (newer."effectiveAt", newer.revision) > (h."effectiveAt", h.revision))
+                    LIMIT 5000
+                )`;
+        } catch (error) {
+            this.logger.error(
+                'Cleanup failed for monitor_history',
+                error as Error,
+            );
         }
 
         this.logger.log(

@@ -7,6 +7,12 @@ export interface SslCertificateInfo {
 
 /** Outcome of a single probe run (HTTP or TCP). */
 export interface CheckResult {
+    serviceVerdict?: 'SUCCESS' | 'FAILURE' | 'NO_EVIDENCE';
+    sslVerdict?: 'VALID' | 'EXPIRING' | 'EXPIRED' | 'INVALID' | 'NO_EVIDENCE';
+    failureReason?: string;
+    observationId?: string;
+    probeResultId?: string;
+    configRevision?: number;
     success: boolean;
     /** Round-trip time in milliseconds. */
     latency: number;
@@ -22,6 +28,9 @@ export interface CheckResult {
 
 /** A result reported by a remote probe. */
 export interface ProbeReport {
+    observationId?: string;
+    probeResultId?: string;
+    configRevision?: number;
     target: string;
     success: boolean;
     latency: number;

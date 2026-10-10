@@ -1,6 +1,7 @@
 'use strict';
 
 const { Socket } = require('node:net');
+const { randomUUID } = require('node:crypto');
 
 const { MAX_ERROR_MESSAGE_LENGTH, USER_AGENT } = require('./constants');
 const { describeError, truncate } = require('./util');
@@ -53,11 +54,11 @@ async function checkHttp(monitor, config) {
         await response.arrayBuffer().catch(() => undefined);
 
         if (response.status !== expectedStatus) {
-            return failure(
+            return { ...failure(
                 target,
                 latency,
                 `Unexpected status ${response.status} (expected ${expectedStatus})`,
-            );
+            ), statusCode: response.status };
         }
 
         return {
@@ -66,6 +67,7 @@ async function checkHttp(monitor, config) {
             latency: Math.max(0, Math.round(latency)),
             error: null,
             checkedAt: new Date().toISOString(),
+            statusCode: response.status,
         };
     } catch (err) {
         return failure(target, Date.now() - startedAt, describeError(err));
@@ -137,16 +139,15 @@ function checkTcp(monitor, config) {
     });
 }
 
-function checkMonitor(monitor, config) {
+async function checkMonitor(monitor, config) {
     const type = String(monitor.type ?? '').toUpperCase();
     const target = monitor.target ?? 'unknown-target';
 
-    if (type === 'HTTP') return checkHttp(monitor, config);
-    if (type === 'TCP') return checkTcp(monitor, config);
-
-    return Promise.resolve(
-        failure(target, 0, `Unsupported monitor type "${type}"`),
-    );
+    const result = type === 'HTTP' ? await checkHttp(monitor, config) :
+        type === 'TCP' ? await checkTcp(monitor, config) :
+            failure(target, 0, `Unsupported monitor type "${type}"`);
+    return { ...result, monitorId: monitor.id, reportId: randomUUID(),
+        configRevision: monitor.configRevision };
 }
 
 module.exports = { failure, checkHttp, checkTcp, checkMonitor, parseTcpTarget };

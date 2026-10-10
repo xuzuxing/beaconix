@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
 import {
     MonitorStatus,
@@ -209,6 +210,199 @@ export class NotifierService {
                 message,
             );
             throw error;
+        }
+    }
+
+    async deliverAlertDelivery(deliveryId: string): Promise<void> {
+        const leaseToken = randomUUID();
+        const row = await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM alert_deliveries WHERE id = ${deliveryId} FOR UPDATE`;
+            const delivery = await tx.alertDelivery.findUnique({
+                where: { id: deliveryId },
+                include: { event: true },
+            });
+            if (
+                !delivery ||
+                ['SUCCESS', 'SKIPPED', 'FAILED'].includes(delivery.status)
+            )
+                return null;
+            if (
+                delivery.status === 'PENDING' &&
+                delivery.nextAttemptAt > new Date()
+            )
+                return null;
+            if (
+                delivery.status === 'SENDING' &&
+                delivery.leaseUntil &&
+                delivery.leaseUntil > new Date()
+            )
+                return null;
+            const channel = await tx.notificationChannel.findFirst({
+                where: {
+                    id: delivery.channelId,
+                    organizationId: delivery.event.organizationId,
+                    enabled: true,
+                },
+            });
+            const monitor = await tx.monitor.findFirst({
+                where: {
+                    id: delivery.event.monitorId,
+                    project: {
+                        deletedAt: null,
+                        organization: { deletedAt: null },
+                    },
+                },
+            });
+            if (delivery.phase === 'RECOVERY') {
+                const opening = await tx.alertDelivery.findFirst({
+                    where: {
+                        eventId: delivery.eventId,
+                        channelId: delivery.channelId,
+                        phase: 'OPEN',
+                    },
+                });
+                if (opening?.status === 'SENDING') {
+                    await tx.alertDelivery.update({
+                        where: { id: deliveryId },
+                        data: {
+                            status: 'PENDING',
+                            leaseUntil: null,
+                            nextAttemptAt: new Date(Date.now() + 5000),
+                        },
+                    });
+                    return null;
+                }
+                const newer = await tx.alertEvent.findFirst({
+                    where: {
+                        monitorId: delivery.event.monitorId,
+                        kind: delivery.event.kind,
+                        status: 'ongoing',
+                    },
+                });
+                if (opening?.status !== 'SUCCESS' || newer) {
+                    await tx.alertDelivery.update({
+                        where: { id: deliveryId },
+                        data: {
+                            status: 'SKIPPED',
+                            leaseUntil: null,
+                            lastError:
+                                'No delivered opening or a newer incident is active',
+                        },
+                    });
+                    return null;
+                }
+            }
+            const suppressed =
+                !monitor ||
+                !!monitor.deletedAt ||
+                !monitor.enabled ||
+                (delivery.event.kind === 'SSL' && !monitor.checkSsl) ||
+                (delivery.event.kind === 'AVAILABILITY' &&
+                    !monitor.availabilityEnabled);
+            if (
+                !channel ||
+                suppressed ||
+                delivery.event.suppressedReason ||
+                (delivery.phase === 'OPEN' &&
+                    delivery.event.status !== 'ongoing')
+            ) {
+                await tx.alertDelivery.update({
+                    where: { id: deliveryId },
+                    data: {
+                        status: 'SKIPPED',
+                        leaseUntil: null,
+                        lastError: 'Channel or event no longer active',
+                    },
+                });
+                return null;
+            }
+            await tx.alertDelivery.update({
+                where: { id: deliveryId },
+                data: {
+                    status: 'SENDING',
+                    attempts: { increment: 1 },
+                    leaseToken,
+                    leaseUntil: new Date(Date.now() + 120_000),
+                },
+            });
+            return { delivery, channel };
+        });
+        if (!row) return;
+        const { delivery, channel } = row;
+        const payload = delivery.payload as unknown as NotificationPayload;
+        payload.checkedAt = new Date(payload.checkedAt);
+        payload.idempotencyKey = deliveryId;
+        const renewal = setInterval(() => {
+            void this.prisma.alertDelivery
+                .updateMany({
+                    where: { id: deliveryId, status: 'SENDING', leaseToken },
+                    data: { leaseUntil: new Date(Date.now() + 120_000) },
+                })
+                .catch((error: unknown) =>
+                    this.logger.warn(
+                        `Delivery lease renewal failed: ${String(error)}`,
+                    ),
+                );
+        }, 30_000);
+        try {
+            await this.dispatch(channel, payload);
+            await this.prisma.$transaction(async (tx) => {
+                await tx.notificationLog.create({
+                    data: {
+                        monitorId: delivery.event.monitorId,
+                        channelId: channel.id,
+                        eventId: delivery.eventId,
+                        deliveryId,
+                        phase: delivery.phase,
+                        attempt: delivery.attempts + 1,
+                        status: NotificationStatus.SUCCESS,
+                    },
+                });
+                await tx.alertDelivery.update({
+                    where: { id: deliveryId },
+                    data: {
+                        status: 'SUCCESS',
+                        deliveredAt: new Date(),
+                        leaseUntil: null,
+                        leaseToken: null,
+                    },
+                });
+                await tx.alertEvent.updateMany({
+                    where: { id: delivery.eventId, firstNotifiedAt: null },
+                    data: { firstNotifiedAt: new Date() },
+                });
+            });
+        } catch (error) {
+            await this.prisma.$transaction(async (tx) => {
+                await tx.notificationLog.create({
+                    data: {
+                        monitorId: delivery.event.monitorId,
+                        channelId: channel.id,
+                        eventId: delivery.eventId,
+                        deliveryId,
+                        phase: delivery.phase,
+                        attempt: delivery.attempts + 1,
+                        status: NotificationStatus.FAILED,
+                        error: String(error).slice(0, 500),
+                    },
+                });
+                await tx.alertDelivery.updateMany({
+                    where: { id: deliveryId, leaseToken, status: 'SENDING' },
+                    data: {
+                        status:
+                            delivery.attempts + 1 >= 3 ? 'FAILED' : 'PENDING',
+                        leaseUntil: null,
+                        leaseToken: null,
+                        lastError: String(error).slice(0, 500),
+                        nextAttemptAt: new Date(
+                            Date.now() + 5000 * 2 ** delivery.attempts,
+                        ),
+                    },
+                });
+            });
+            throw error;
+        } finally {
+            clearInterval(renewal);
         }
     }
 

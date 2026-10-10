@@ -39,6 +39,7 @@ function monitorSignature(monitor) {
         monitor.interval,
         monitor.timeout,
         monitor.expectedStatus,
+        monitor.configRevision,
     ].join('|');
 }
 
@@ -188,6 +189,11 @@ function createSchedule() {
     }
 
     async function flush(config) {
+        pending = pending.filter(result => {
+            const task = tasks.get(result.monitorId);
+            return task && task.monitor.configRevision === result.configRevision &&
+                Date.now() - new Date(result.checkedAt).getTime() <= 14 * 60 * 1000;
+        });
         if (pending.length === 0) return 0;
 
         const batch = pending;

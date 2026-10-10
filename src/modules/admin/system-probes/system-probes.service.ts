@@ -118,23 +118,24 @@ export class SystemProbesService {
         return `sys_${randomBytes(32).toString('hex')}`;
     }
 
-    private toEntity(probe: {
-        id: string;
-        organizationId: string | null;
-        scope: string;
-        name: string;
-        provider: string;
-        region: string;
-        callbackUrl: string;
-        enabled: boolean;
-        lastHeartbeat: Date | null;
-        heartbeatIntervalSeconds: number | null;
-        status: string;
-        maxTenants: number | null;
-        priority: number;
-        createdAt: Date;
-        updatedAt: Date;
-    },
+    private toEntity(
+        probe: {
+            id: string;
+            organizationId: string | null;
+            scope: string;
+            name: string;
+            provider: string;
+            region: string;
+            callbackUrl: string;
+            enabled: boolean;
+            lastHeartbeat: Date | null;
+            heartbeatIntervalSeconds: number | null;
+            status: string;
+            maxTenants: number | null;
+            priority: number;
+            createdAt: Date;
+            updatedAt: Date;
+        },
         secretPlaintext?: string,
     ): ProbeEntity {
         return new ProbeEntity({

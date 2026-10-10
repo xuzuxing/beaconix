@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+    ConflictException,
+    Injectable,
+    NotFoundException,
+} from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { CheckSource, MonitorStatus } from '../../generated/prisma/enums';
 import type {
@@ -7,9 +12,20 @@ import type {
 } from '../../generated/prisma/models';
 import { MonitorStateEntity } from './entities';
 import type { SslCertificateInfo } from '../checker/checkers';
+import { AlertEventsService } from '../alert-events/alert-events.service';
+import type { Prisma } from '../../generated/prisma/client';
 
 /** A check outcome (local run or probe report) before it is folded into state. */
 export interface CheckOutcome {
+    configRevision?: number;
+    observationId?: string;
+    probeResultId?: string;
+    serviceVerdict?: 'SUCCESS' | 'FAILURE' | 'NO_EVIDENCE';
+    localServiceVerdict?: CheckOutcome['serviceVerdict'];
+    sslVerdict?: 'VALID' | 'EXPIRING' | 'EXPIRED' | 'INVALID' | 'NO_EVIDENCE';
+    failureReason?: string;
+    ruleEvidence?: Prisma.InputJsonValue[];
+    probeRoundWindowMs?: number;
     success: boolean;
     latency: number;
     error?: string | null;
@@ -88,67 +104,158 @@ export function deriveState(
 
 @Injectable()
 export class StateService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly alerts: AlertEventsService,
+    ) {}
 
     /**
      * Persists a check outcome: appends the CheckLog entry and folds the result
      * into the monitor's companion state row, in a single transaction.
      */
     async record(monitorId: string, outcome: CheckOutcome) {
-        const monitor = await this.prisma.monitor.findFirst({
-            where: { id: monitorId, deletedAt: null },
-            include: { state: true },
-        });
+        return this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitorId} FOR UPDATE`;
+            const monitor = await tx.monitor.findFirst({
+                where: {
+                    id: monitorId,
+                    deletedAt: null,
+                    project: {
+                        deletedAt: null,
+                        organization: { deletedAt: null },
+                    },
+                },
+                include: { state: true },
+            });
 
-        if (!monitor) {
-            throw new NotFoundException('Monitor not found');
-        }
+            if (!monitor) {
+                throw new NotFoundException('Monitor not found');
+            }
+            if (
+                outcome.configRevision !== undefined &&
+                outcome.configRevision !== monitor.configRevision
+            ) {
+                throw new ConflictException(
+                    'Monitor configuration changed; discard stale observation',
+                );
+            }
 
-        const previous: DerivedState = {
-            status: monitor.state?.status ?? MonitorStatus.UNKNOWN,
-            failCount: monitor.state?.failCount ?? 0,
-        };
+            const previous: DerivedState = {
+                status: monitor.state?.status ?? MonitorStatus.UNKNOWN,
+                failCount: monitor.state?.failCount ?? 0,
+            };
 
-        const derived = deriveState(
-            previous,
-            outcome.success,
-            monitor.failureThreshold,
-        );
+            const derived = deriveState(
+                {
+                    ...previous,
+                    status:
+                        monitor.enabled &&
+                        previous.status === MonitorStatus.PAUSED
+                            ? MonitorStatus.UNKNOWN
+                            : previous.status,
+                },
+                outcome.success,
+                monitor.failureThreshold,
+            );
 
-        const checkedAt = outcome.checkedAt ?? new Date();
-        const error = outcome.success
-            ? null
-            : (outcome.error ?? 'Check failed');
-        const source = outcome.source ?? CheckSource.LOCAL;
-        const localSuccess = outcome.localSuccess ?? outcome.success;
-        const rescuedByProbe = outcome.rescuedByProbe ?? false;
-        const ruleMatched = outcome.ruleMatched ?? !outcome.success;
-        const ruleGroupIds = outcome.ruleGroupIds ?? [];
+            const checkedAt = outcome.checkedAt ?? new Date();
+            const error = outcome.success
+                ? null
+                : (outcome.error ?? 'Check failed');
+            const source = outcome.source ?? CheckSource.LOCAL;
+            const localSuccess = outcome.localSuccess ?? outcome.success;
+            const rescuedByProbe = outcome.rescuedByProbe ?? false;
+            const ruleMatched = outcome.ruleMatched ?? !outcome.success;
+            const ruleGroupIds = outcome.ruleGroupIds ?? [];
+            const observationId = outcome.observationId ?? randomUUID();
+            const duplicate = await tx.checkLog.findUnique({
+                where: { observationId },
+            });
+            const lastProbe =
+                source === CheckSource.PROBE && outcome.probeRoundWindowMs
+                    ? await tx.checkLog.findFirst({
+                          where: { monitorId, source: CheckSource.PROBE },
+                          orderBy: { checkedAt: 'desc' },
+                          select: { checkedAt: true },
+                      })
+                    : null;
+            const sameRound =
+                lastProbe &&
+                checkedAt.getTime() - lastProbe.checkedAt.getTime() <
+                    outcome.probeRoundWindowMs!;
+            const apply =
+                !duplicate &&
+                !sameRound &&
+                monitor.enabled &&
+                (!monitor.state?.lastAppliedObservationAt ||
+                    checkedAt > monitor.state.lastAppliedObservationAt);
+            if (duplicate || sameRound) {
+                if (outcome.probeResultId)
+                    await tx.probeResult.update({
+                        where: { id: outcome.probeResultId },
+                        data: { appliedAt: new Date() },
+                    });
+                return {
+                    monitor,
+                    state: monitor.state!,
+                    deliveries: 0,
+                    transition: {
+                        ...previous,
+                        previousStatus: previous.status,
+                        previousFailCount: previous.failCount,
+                        changed: false,
+                    },
+                };
+            }
+            const serviceVerdict =
+                outcome.serviceVerdict ??
+                (outcome.ssl
+                    ? 'SUCCESS'
+                    : outcome.success
+                      ? 'SUCCESS'
+                      : 'FAILURE');
+            const connectivityFailCount =
+                serviceVerdict === 'SUCCESS'
+                    ? 0
+                    : (monitor.state?.connectivityFailCount ?? 0) +
+                      (serviceVerdict === 'FAILURE' ? 1 : 0);
 
-        const stateValues = {
-            status: derived.status,
-            failCount: derived.failCount,
-            lastCheckAt: checkedAt,
-            // The schedule only moves on local checks: a chatty probe must not
-            // push the next local run out of reach.
-            lastLocalCheckAt:
-                source === CheckSource.LOCAL ? checkedAt : undefined,
-            lastError: error,
-            lastLatency: outcome.latency,
-            ...(outcome.ssl !== undefined
-                ? {
-                      sslExpiresAt: outcome.ssl?.expiresAt ?? null,
-                      sslDaysRemaining: outcome.ssl?.daysRemaining ?? null,
-                      sslIssuer: outcome.ssl?.issuer ?? null,
-                      sslSubject: outcome.ssl?.subject ?? null,
-                  }
-                : {}),
-        };
+            const stateValues = {
+                status: derived.status,
+                failCount: derived.failCount,
+                lastCheckAt: checkedAt,
+                // The schedule only moves on local checks: a chatty probe must not
+                // push the next local run out of reach.
+                lastLocalCheckAt:
+                    source === CheckSource.LOCAL ? checkedAt : undefined,
+                lastError: error,
+                lastLatency: outcome.latency,
+                connectivityFailCount,
+                lastAppliedObservationAt: checkedAt,
+                lastAppliedObservationId: observationId,
+                ...(outcome.ssl !== undefined
+                    ? {
+                          sslExpiresAt: outcome.ssl?.expiresAt ?? null,
+                          sslDaysRemaining: outcome.ssl?.daysRemaining ?? null,
+                          sslIssuer: outcome.ssl?.issuer ?? null,
+                          sslSubject: outcome.ssl?.subject ?? null,
+                      }
+                    : {}),
+            };
 
-        const [, state] = await this.prisma.$transaction([
-            this.prisma.checkLog.create({
+            await tx.checkLog.create({
                 data: {
                     monitorId,
+                    monitorRefId: monitorId,
+                    organizationId: monitor.organizationId,
+                    projectId: monitor.projectId,
+                    monitorType: monitor.type,
+                    observationId,
+                    configRevision: monitor.configRevision,
+                    serviceVerdict,
+                    localServiceVerdict:
+                        outcome.localServiceVerdict ?? serviceVerdict,
+                    sslVerdict: outcome.sslVerdict ?? null,
                     success: outcome.success,
                     localSuccess,
                     rescuedByProbe,
@@ -160,22 +267,57 @@ export class StateService {
                     source,
                     checkedAt,
                 },
-            }),
-            this.prisma.monitorState.upsert({
-                where: { monitorId },
-                create: { monitorId, ...stateValues },
-                update: stateValues,
-            }),
-        ]);
+            });
+            const alertResult = apply
+                ? await this.alerts.record(
+                      tx,
+                      monitor,
+                      monitor.state,
+                      outcome,
+                      { ...derived, connectivityFailCount },
+                  )
+                : {
+                      deliveries: 0,
+                      availabilityAlertActive:
+                          monitor.state?.availabilityAlertActive ?? false,
+                  };
+            const state = apply
+                ? await tx.monitorState.upsert({
+                      where: { monitorId },
+                      create: {
+                          monitorId,
+                          ...stateValues,
+                          availabilityAlertActive:
+                              alertResult.availabilityAlertActive,
+                      },
+                      update: {
+                          ...stateValues,
+                          availabilityAlertActive:
+                              alertResult.availabilityAlertActive,
+                      },
+                  })
+                : monitor.state!;
+            if (outcome.probeResultId) {
+                await tx.probeResult.update({
+                    where: { id: outcome.probeResultId },
+                    data: { appliedAt: new Date() },
+                });
+            }
 
-        const transition: MonitorTransition = {
-            ...derived,
-            previousStatus: previous.status,
-            previousFailCount: previous.failCount,
-            changed: derived.status !== previous.status,
-        };
+            const transition: MonitorTransition = {
+                ...(apply ? derived : previous),
+                previousStatus: previous.status,
+                previousFailCount: previous.failCount,
+                changed: apply && derived.status !== previous.status,
+            };
 
-        return { monitor, state, transition };
+            return {
+                monitor,
+                state,
+                transition,
+                deliveries: alertResult.deliveries,
+            };
+        });
     }
 
     /** Marks `status` as the last status that was pushed to notification channels. */

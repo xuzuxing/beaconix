@@ -176,6 +176,16 @@ export class SystemProbeScheduler implements OnModuleInit {
             .map(([probeId]) => probeId);
     }
 
+    async getAssignmentsForMonitors(monitorIds: string[]): Promise<string[]> {
+        const wanted = new Set(monitorIds);
+        const assignments = await this.loadAssignments();
+        if (!assignments)
+            throw new Error('System probe assignments unavailable');
+        return Object.entries(assignments)
+            .filter(([, ids]) => ids.some((id) => wanted.has(id)))
+            .map(([probeId]) => probeId);
+    }
+
     async getAssignedMonitorIds(probeId: string): Promise<string[]> {
         const assignments = await this.loadAssignments();
         if (!assignments) return [];

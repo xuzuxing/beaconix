@@ -115,18 +115,15 @@ export class ProbeEnrollmentController {
         @CurrentUser() user: JwtPayload,
         @Body() dto: ApproveEnrollmentDto,
     ) {
-        return this.enrollmentService.approve(
-            user.sub,
-            user.globalRole,
-            dto,
-        );
+        return this.enrollmentService.approve(user.sub, user.globalRole, dto);
     }
 
     @Post('probes/enroll/redeem')
     @Public()
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
-        summary: 'Redeem a web-issued one-time token (CLI: beacon-probe enroll)',
+        summary:
+            'Redeem a web-issued one-time token (CLI: beacon-probe enroll)',
     })
     @ApiBody({ type: RedeemEnrollmentDto })
     @ApiOkResponse({ description: '{ probeId, secret, apiUrl }' })

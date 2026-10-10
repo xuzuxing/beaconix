@@ -1,5 +1,6 @@
 import {
     BadRequestException,
+    ForbiddenException,
     NotFoundException,
     UnauthorizedException,
 } from '@nestjs/common';
@@ -81,9 +82,13 @@ function createService() {
             delete: jest.fn(),
         },
         probeResult: {
-            findMany: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([]),
             count: jest.fn(),
             createMany: jest.fn(),
+            create: jest.fn(),
+            findUnique: jest.fn(),
+            findUniqueOrThrow: jest.fn(),
+            update: jest.fn(),
         },
         probeExecution: {
             findMany: jest.fn(),
@@ -95,13 +100,19 @@ function createService() {
             findUnique: jest.fn(),
             delete: jest.fn(),
         },
-        monitor: { findMany: jest.fn(), findFirst: jest.fn() },
+        monitor: {
+            findMany: jest.fn(),
+            findFirst: jest.fn(),
+            findUnique: jest.fn(),
+            findUniqueOrThrow: jest.fn(),
+        },
         probeSecret: {
             findUnique: jest.fn(),
             update: jest.fn().mockResolvedValue({}),
             updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         },
         $transaction: jest.fn(),
+        $queryRaw: jest.fn(),
     };
     const checkerService = {
         ingestProbeReport: jest.fn(),
@@ -332,207 +343,62 @@ describe('ProbesService', () => {
     });
 
     describe('recordResults', () => {
-        it('stores raw results and folds them into monitor state', async () => {
+        it('stores authorized attributed results before applying the durable ingest', async () => {
             const { service, prisma, checkerService } = createService();
             prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
-            prisma.probeResult.createMany.mockResolvedValue({ count: 2 });
-            prisma.probe.update.mockResolvedValue(probeRow);
-            checkerService.ingestProbeReport
-                .mockResolvedValueOnce({
-                    monitorId: 'monitor-1',
-                    status: 'DOWN',
-                    changed: true,
-                })
-                .mockResolvedValueOnce(null);
-
-            const result = await service.recordResults('secret-1', [
-                {
-                    target: 'https://api.example.com/health',
-                    success: false,
-                    latency: 30,
-                    error: 'boom',
-                },
-                {
-                    target: 'https://unknown.example.com',
-                    success: true,
-                    latency: 5,
-                },
-            ]);
-
-            expect(prisma.probeResult.createMany).toHaveBeenCalledWith({
-                data: [
-                    {
-                        probeId: 'probe-1',
-                        target: 'https://api.example.com/health',
-                        success: false,
-                        latency: 30,
-                        error: 'boom',
-                        statusCode: null,
-                        checkedAt: expect.any(Date),
-                    },
-                    {
-                        probeId: 'probe-1',
-                        target: 'https://unknown.example.com',
-                        success: true,
-                        latency: 5,
-                        error: null,
-                        statusCode: null,
-                        checkedAt: expect.any(Date),
-                    },
-                ],
-            });
-            expect(checkerService.ingestProbeReport).toHaveBeenCalledWith(
-                'org-1',
-                expect.objectContaining({
-                    target: 'https://api.example.com/health',
-                    success: false,
-                }),
+            const m = {
+                ...monitorSummary,
+                organizationId: 'org-1',
+                projectId: 'project-1',
+                configRevision: 1,
+                updatedAt: new Date(0),
+            };
+            prisma.monitor.findMany.mockResolvedValue([m]);
+            prisma.monitor.findUniqueOrThrow.mockResolvedValue(m);
+            prisma.monitor.findUnique.mockResolvedValue(m);
+            prisma.monitorProbe.findUnique.mockResolvedValue({});
+            prisma.$transaction.mockImplementation(
+                (callback: (tx: unknown) => unknown) => callback(prisma),
             );
-            expect(result).toEqual({
-                accepted: 2,
-                applied: 1,
-                outcomes: [
-                    {
-                        target: 'https://api.example.com/health',
-                        monitorId: 'monitor-1',
-                        status: 'DOWN',
-                        changed: true,
-                    },
-                ],
-            });
-            expect(prisma.probeExecution.create).toHaveBeenCalledTimes(2);
-            expect(prisma.probeExecution.create).toHaveBeenNthCalledWith(1, {
-                data: expect.objectContaining({
-                    probeId: 'probe-1',
-                    monitorId: 'monitor-1',
-                    target: 'https://api.example.com/health',
-                    trigger: 'CALLBACK',
-                    status: 'FAILED',
-                    success: false,
-                    latency: 30,
-                    error: 'boom',
-                    responseMeta: {
-                        applied: true,
-                        status: 'DOWN',
-                        changed: true,
-                    },
-                }),
-            });
-            expect(prisma.probeExecution.create).toHaveBeenNthCalledWith(2, {
-                data: expect.objectContaining({
-                    probeId: 'probe-1',
-                    monitorId: null,
-                    target: 'https://unknown.example.com',
-                    trigger: 'CALLBACK',
-                    status: 'SUCCESS',
-                    success: true,
-                    latency: 5,
-                    error: null,
-                    responseMeta: { applied: false },
-                }),
-            });
-        });
-
-        it('collapses duplicated targets before folding them into state', async () => {
-            const { service, prisma, checkerService } = createService();
-            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
-            prisma.probeResult.createMany.mockResolvedValue({ count: 2 });
+            prisma.probeResult.create.mockImplementation(({ data }) => ({
+                ...data,
+                id: 'raw-1',
+                appliedAt: null,
+            }));
+            prisma.probeResult.findUniqueOrThrow.mockImplementation(() => ({
+                ...prisma.probeResult.create.mock.calls[0][0].data,
+                id: 'raw-1',
+                appliedAt: null,
+            }));
             prisma.probe.update.mockResolvedValue(probeRow);
-            checkerService.ingestProbeReport.mockResolvedValue({
-                monitorId: 'monitor-1',
-                status: 'UP',
-                changed: false,
-            });
-
-            const result = await service.recordResults('secret-1', [
-                {
-                    target: 'https://api.example.com/health',
-                    success: true,
-                    latency: 10,
-                },
-                {
-                    target: 'https://api.example.com/health',
-                    success: false,
-                    latency: 20,
-                    error: 'boom',
-                },
-            ]);
-
-            // Both rows are stored, but the monitor is only folded once and the
-            // last report for the target wins.
-            expect(result.accepted).toBe(2);
-            expect(result.applied).toBe(1);
-            expect(checkerService.ingestProbeReport).toHaveBeenCalledTimes(1);
-            expect(checkerService.ingestProbeReport).toHaveBeenCalledWith(
-                'org-1',
-                expect.objectContaining({ success: false, latency: 20 }),
-            );
-            expect(prisma.probeExecution.create).toHaveBeenCalledTimes(1);
-        });
-
-        it('rebalances when a system probe reports before its first heartbeat', async () => {
-            const { service, prisma, systemProbeScheduler } = createService();
-            prisma.probeSecret.findUnique.mockResolvedValue(
-                secretMatch({
-                    ...probeRow,
-                    organizationId: null,
-                    scope: 'SYSTEM',
-                    status: 'OFFLINE',
-                }),
-            );
-            prisma.probeResult.createMany.mockResolvedValue({ count: 1 });
-            prisma.probe.update.mockResolvedValue(probeRow);
-            systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([]);
-
-            await service.recordResults('sys_secret', [
-                {
-                    target: 'https://api.example.com/health',
-                    success: true,
-                    latency: 12,
-                },
-            ]);
-
-            expect(systemProbeScheduler.rebalance).toHaveBeenCalledTimes(1);
-        });
-
-        it('applies system probe results only to assigned monitors', async () => {
-            const { service, prisma, checkerService, systemProbeScheduler } =
-                createService();
-            prisma.probeSecret.findUnique.mockResolvedValue(
-                secretMatch({
-                    ...probeRow,
-                    organizationId: null,
-                    scope: 'SYSTEM',
-                }),
-            );
-            prisma.probeResult.createMany.mockResolvedValue({ count: 1 });
-            prisma.probe.update.mockResolvedValue(probeRow);
-            systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([
-                'monitor-1',
-            ]);
-            prisma.monitor.findFirst.mockResolvedValue({ id: 'monitor-1' });
             checkerService.ingestProbeReportForMonitor.mockResolvedValue({
                 monitorId: 'monitor-1',
-                status: 'UP',
-                changed: false,
+                status: 'DOWN',
+                changed: true,
             });
 
-            const result = await service.recordResults('sys_secret', [
+            const result = await service.recordResults('secret-1', [
                 {
                     target: 'https://api.example.com/health',
-                    success: true,
-                    latency: 20,
+                    success: false,
+                    latency: 30,
+                    error: 'boom',
+                    checkedAt: new Date().toISOString(),
+                    monitorId: m.id,
+                    reportId: 'report-1',
+                    configRevision: 1,
                 },
             ]);
 
-            expect(prisma.monitor.findFirst).toHaveBeenCalledWith({
-                where: {
-                    id: { in: ['monitor-1'] },
-                    target: 'https://api.example.com/health',
-                    enabled: true,
-                    deletedAt: null,
-                },
-                select: { id: true },
+            expect(prisma.probeResult.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    probeId: 'probe-1',
+                    monitorId: m.id,
+                    projectId: 'project-1',
+                    organizationId: 'org-1',
+                    configRevision: 1,
+                    reportId: 'report-1',
+                }),
             });
             expect(
                 checkerService.ingestProbeReportForMonitor,
@@ -540,7 +406,7 @@ describe('ProbesService', () => {
                 'monitor-1',
                 expect.objectContaining({
                     target: 'https://api.example.com/health',
-                    success: true,
+                    success: false,
                 }),
             );
             expect(result).toEqual({
@@ -550,11 +416,101 @@ describe('ProbesService', () => {
                     {
                         target: 'https://api.example.com/health',
                         monitorId: 'monitor-1',
-                        status: 'UP',
-                        changed: false,
+                        status: 'DOWN',
+                        changed: true,
                     },
                 ],
             });
+            expect(prisma.probeResult.update).toHaveBeenCalledWith({
+                where: { id: 'raw-1' },
+                data: { appliedAt: expect.any(Date) },
+            });
+        });
+
+        it('rejects ambiguous legacy targets instead of collapsing different monitor IDs', async () => {
+            const { service, prisma, checkerService } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
+            prisma.monitor.findMany.mockResolvedValue([
+                monitorSummary,
+                { ...monitorSummary, id: 'monitor-2' },
+            ]);
+            await expect(
+                service.recordResults('secret-1', [
+                    {
+                        target: 'https://api.example.com/health',
+                        success: true,
+                        latency: 10,
+                        checkedAt: new Date().toISOString(),
+                    },
+                ]),
+            ).rejects.toThrow(ForbiddenException);
+            expect(prisma.probeResult.create).not.toHaveBeenCalled();
+            expect(
+                checkerService.ingestProbeReportForMonitor,
+            ).not.toHaveBeenCalled();
+        });
+
+        it('rejects unassigned system reports before storing raw data', async () => {
+            const { service, prisma, systemProbeScheduler } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue(
+                secretMatch({
+                    ...probeRow,
+                    organizationId: null,
+                    scope: 'SYSTEM',
+                    status: 'OFFLINE',
+                }),
+            );
+            systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([]);
+            prisma.monitor.findMany.mockResolvedValue([]);
+
+            await expect(
+                service.recordResults('sys_secret', [
+                    {
+                        target: 'https://api.example.com/health',
+                        success: true,
+                        latency: 12,
+                        checkedAt: new Date().toISOString(),
+                    },
+                ]),
+            ).rejects.toThrow(ForbiddenException);
+            expect(prisma.probeResult.create).not.toHaveBeenCalled();
+        });
+
+        it('requires checkedAt even for assigned system monitors', async () => {
+            const { service, prisma, systemProbeScheduler } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue(
+                secretMatch({
+                    ...probeRow,
+                    organizationId: null,
+                    scope: 'SYSTEM',
+                }),
+            );
+            systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([
+                'monitor-1',
+            ]);
+            prisma.monitor.findMany.mockResolvedValue([monitorSummary]);
+
+            await expect(
+                service.recordResults('sys_secret', [
+                    {
+                        target: 'https://api.example.com/health',
+                        success: true,
+                        latency: 20,
+                    },
+                ]),
+            ).rejects.toThrow(BadRequestException);
+            expect(prisma.monitor.findMany).toHaveBeenCalledWith({
+                where: {
+                    id: { in: ['monitor-1'] },
+                    enabled: true,
+                    deletedAt: null,
+                    project: {
+                        deletedAt: null,
+                        organization: { deletedAt: null },
+                    },
+                },
+            });
+            expect(prisma.probeResult.create).not.toHaveBeenCalled();
         });
     });
 

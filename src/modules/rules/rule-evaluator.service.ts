@@ -16,6 +16,30 @@ const MAX_DEPTH = 10;
  */
 @Injectable()
 export class RuleEvaluatorService {
+    explain(
+        node: RuleNode,
+        ctx: RuleContext,
+    ): Array<{
+        id: string;
+        field: string;
+        operator: string;
+        threshold: ConditionNode['value'];
+        actual: string | number | boolean | null;
+        matched: boolean;
+    }> {
+        if (node.type !== 'condition')
+            return node.children.flatMap((child) => this.explain(child, ctx));
+        return [
+            {
+                id: node.id,
+                field: node.field,
+                operator: node.operator,
+                threshold: node.value,
+                actual: ctx[node.field] ?? null,
+                matched: this.evaluateCondition(node, ctx),
+            },
+        ];
+    }
     /** 递归求值。and 在首个 false 短路，or 在首个 true 短路。 */
     evaluate(node: RuleNode, ctx: RuleContext): boolean {
         if (node.type === 'condition') {

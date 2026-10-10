@@ -31,6 +31,7 @@ export class EmailService {
     async send<T extends EmailTemplate>(
         template: T,
         payload: EmailPayloadMap[T],
+        idempotencyKey?: string,
     ): Promise<void> {
         const to = (payload as Record<string, unknown>).to as string;
         const { subject, html } = this.buildEmail(template, payload);
@@ -45,12 +46,15 @@ export class EmailService {
 
         this.logger.log(`Sending "${template}" email to "${masked}"`);
 
-        const { data, error } = await this.resend.emails.send({
+        const message = {
             from: this.from,
             to,
             subject,
             html,
-        });
+        };
+        const { data, error } = idempotencyKey
+            ? await this.resend.emails.send(message, { idempotencyKey })
+            : await this.resend.emails.send(message);
 
         if (error) {
             this.logger.error(

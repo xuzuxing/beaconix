@@ -7,13 +7,10 @@ import {
     ExecutionTrigger,
     MonitorType,
 } from '../../generated/prisma/enums';
-import type {
-    MonitorModel,
-    MonitorStateModel,
-} from '../../generated/prisma/models';
+import type { MonitorModel } from '../../generated/prisma/models';
 import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
+import type { Prisma } from '../../generated/prisma/client';
 import { StateService } from '../state/state.service';
-import type { MonitorTransition } from '../state/state.service';
 import { NotifierService } from '../notifier/notifier.service';
 import type { NotificationResult } from '../notifier/notifier.service';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
@@ -91,6 +88,7 @@ interface EvaluatedResult {
 interface RuleOutcome {
     ruleMatched: boolean;
     ruleGroupIds: string[];
+    ruleEvidence?: Prisma.InputJsonValue[];
 }
 
 @Injectable()
@@ -137,7 +135,7 @@ export class CheckerService {
         organizationId: string,
         report: ProbeReport,
     ): Promise<CheckExecution | null> {
-        const monitor = await this.prisma.monitor.findFirst({
+        const monitors = await this.prisma.monitor.findMany({
             where: {
                 organizationId,
                 target: report.target,
@@ -146,9 +144,9 @@ export class CheckerService {
             },
         });
 
-        if (!monitor) return null;
+        if (monitors.length !== 1) return null;
 
-        return this.ingestProbeReportForMonitor(monitor.id, report);
+        return this.ingestProbeReportForMonitor(monitors[0].id, report);
     }
 
     async ingestProbeReportForMonitor(
@@ -167,7 +165,11 @@ export class CheckerService {
         if (!monitor) return null;
 
         const localLog = await this.prisma.checkLog.findFirst({
-            where: { monitorId: monitor.id, source: CheckSource.LOCAL },
+            where: {
+                monitorId: monitor.id,
+                source: CheckSource.LOCAL,
+                configRevision: monitor.configRevision,
+            },
             orderBy: { checkedAt: 'desc' },
         });
 
@@ -194,11 +196,29 @@ export class CheckerService {
             monitor,
             CheckSource.PROBE,
             {
-                success: localLog.success,
+                success: localLog.localSuccess ?? localLog.success,
                 latency: localLog.latency,
                 error: localLog.error,
                 checkedAt: report.checkedAt ?? new Date(),
                 statusCode: report.statusCode ?? localLog.statusCode ?? null,
+                configRevision: report.configRevision,
+                observationId: report.observationId,
+                probeResultId: report.probeResultId,
+                serviceVerdict:
+                    (localLog.localServiceVerdict as CheckResult['serviceVerdict']) ??
+                    (localLog.sslVerdict === 'INVALID'
+                        ? 'NO_EVIDENCE'
+                        : localLog.sslVerdict &&
+                            ['EXPIRING', 'EXPIRED'].includes(
+                                localLog.sslVerdict,
+                            )
+                          ? 'SUCCESS'
+                          : (localLog.localSuccess ?? localLog.success)
+                            ? 'SUCCESS'
+                            : 'FAILURE'),
+                sslVerdict:
+                    (localLog.sslVerdict as CheckResult['sslVerdict']) ??
+                    undefined,
             },
             ExecutionTrigger.CALLBACK,
         );
@@ -343,7 +363,7 @@ export class CheckerService {
         // on the CheckLog row below, then the availability alert consumes it.
         const ruleOutcome = await this.evaluateRuleTree(monitor, result);
 
-        const { state, transition } = await this.stateService.record(
+        const { transition, deliveries } = await this.stateService.record(
             monitor.id,
             {
                 success: result.success,
@@ -354,9 +374,29 @@ export class CheckerService {
                 ssl: result.ssl,
                 localSuccess: localResult.success,
                 rescuedByProbe,
-                statusCode: result.statusCode ?? null,
+                statusCode:
+                    source === CheckSource.LOCAL
+                        ? (localResult.statusCode ?? null)
+                        : (result.statusCode ?? null),
+                configRevision:
+                    reported?.configRevision ?? monitor.configRevision,
+                observationId: reported?.observationId,
+                probeResultId: reported?.probeResultId,
+                serviceVerdict:
+                    result.serviceVerdict ?? localResult.serviceVerdict,
+                localServiceVerdict: localResult.serviceVerdict,
+                sslVerdict:
+                    source === CheckSource.LOCAL
+                        ? localResult.sslVerdict
+                        : 'NO_EVIDENCE',
+                failureReason: localResult.failureReason,
                 ruleMatched: ruleOutcome.ruleMatched,
                 ruleGroupIds: ruleOutcome.ruleGroupIds,
+                ruleEvidence: ruleOutcome.ruleEvidence,
+                probeRoundWindowMs:
+                    source === CheckSource.PROBE
+                        ? probeReportDedupWindowMs(monitor.interval)
+                        : undefined,
             },
         );
 
@@ -364,9 +404,11 @@ export class CheckerService {
         // availability percentage and consecutive-failure count, then alert
         // when both cross their thresholds. Runs before the transition
         // notification.
-        await this.evaluateAvailabilityAlert(monitor, state);
-
-        const notified = await this.notifyIfChanged(monitor, state, transition);
+        const notified = {
+            skipped: !deliveries,
+            sent: deliveries ?? 0,
+            failed: 0,
+        };
 
         await this.writeExecution(monitor, result, trigger, {
             previousStatus: transition.previousStatus,
@@ -388,22 +430,6 @@ export class CheckerService {
             changed: transition.changed,
             notified,
         };
-    }
-
-    private async notifyIfChanged(
-        monitor: MonitorModel,
-        state: MonitorStateModel,
-        transition: MonitorTransition,
-    ): Promise<NotificationResult> {
-        if (!transition.changed) {
-            return { skipped: true, sent: 0, failed: 0 };
-        }
-
-        return this.notifierService.notifyTransition(
-            monitor,
-            state,
-            transition,
-        );
     }
 
     private async writeExecution(
@@ -475,7 +501,16 @@ export class CheckerService {
 
         // A certificate verdict is a fact about the certificate, not a
         // reachability signal, so a reachable probe must not override it.
-        if (localResult.ssl !== undefined) {
+        const certificatePolicyFailure =
+            localResult.ssl !== undefined ||
+            !!(
+                localResult.sslVerdict &&
+                localResult.sslVerdict !== 'NO_EVIDENCE'
+            );
+        if (
+            certificatePolicyFailure &&
+            (localResult.serviceVerdict === 'SUCCESS' || localResult.ssl)
+        ) {
             return { result: localResult, rescuedByProbe: false };
         }
 
@@ -485,7 +520,9 @@ export class CheckerService {
         const tenantProbeResults = await this.prisma.probeResult.findMany({
             where: {
                 target: monitor.target,
+                monitorId: monitor.id,
                 checkedAt: { gte: since },
+                configRevision: monitor.configRevision,
                 probe: {
                     organizationId: monitor.organizationId,
                     enabled: true,
@@ -506,8 +543,10 @@ export class CheckerService {
                 ? await this.prisma.probeResult.findMany({
                       where: {
                           target: monitor.target,
+                          monitorId: monitor.id,
                           probeId: { in: systemProbeIds },
                           checkedAt: { gte: since },
+                          configRevision: monitor.configRevision,
                           probe: {
                               scope: 'SYSTEM',
                               enabled: true,
@@ -525,12 +564,19 @@ export class CheckerService {
         }
 
         if (probeResults.some((result) => result.success)) {
+            if (certificatePolicyFailure) {
+                return {
+                    result: { ...localResult, serviceVerdict: 'SUCCESS' },
+                    rescuedByProbe: false,
+                };
+            }
             return {
                 result: {
                     success: true,
                     latency: localResult.latency,
                     error: null,
                     checkedAt: localResult.checkedAt,
+                    serviceVerdict: 'SUCCESS',
                 },
                 rescuedByProbe: true,
             };
@@ -560,101 +606,6 @@ export class CheckerService {
         if (!lastCheckAt) return true;
 
         return Date.now() - lastCheckAt.getTime() >= intervalSeconds * 1000;
-    }
-
-    /**
-     * Applies the availability rule to a fresh check outcome.
-     *
-     * - the alert fires once when availability is below the threshold AND the
-     *   consecutive-failure threshold is reached, then stays silent until the
-     *   monitor recovers;
-     * - recovery is announced once availability climbs back to the threshold.
-     *
-     * Alerting must never break the check pipeline: a failed enqueue or write
-     * only logs, the check outcome still stands.
-     */
-    private async evaluateAvailabilityAlert(
-        monitor: MonitorModel,
-        state: MonitorStateModel,
-    ): Promise<void> {
-        if (!monitor.availabilityEnabled) return;
-
-        const threshold = monitor.availabilityThreshold ?? 90;
-        const window = monitor.availabilityWindow ?? 10;
-
-        const recent = await this.prisma.checkLog.findMany({
-            where: { monitorId: monitor.id },
-            orderBy: { checkedAt: 'desc' },
-            take: window,
-            select: { ruleMatched: true },
-        });
-
-        if (recent.length === 0) return;
-
-        // Availability = share of checks the rule tree judged healthy (not
-        // matched). Consecutive failures = trailing run of matched (abnormal)
-        // checks, counted from the newest backwards.
-        const healthy = recent.filter((log) => !log.ruleMatched).length;
-        const availabilityPercent =
-            Math.round((healthy / recent.length) * 10000) / 100;
-
-        let consecutiveFailures = 0;
-        for (const log of recent) {
-            if (!log.ruleMatched) break;
-            consecutiveFailures += 1;
-        }
-
-        const alert = {
-            availabilityPercent,
-            threshold,
-            window,
-            sampleSize: recent.length,
-            consecutiveFailures,
-        };
-
-        const belowThreshold = availabilityPercent < threshold;
-        const failuresReached = consecutiveFailures >= monitor.failureThreshold;
-
-        try {
-            if (belowThreshold && failuresReached) {
-                // Already alerting: stay silent so a persistent outage does
-                // not re-notify on every check.
-                if (state.availabilityAlertActive) return;
-
-                await this.notifierService.notifyAvailabilityAlert(
-                    monitor,
-                    state,
-                    alert,
-                );
-
-                await this.prisma.monitorState.update({
-                    where: { monitorId: monitor.id },
-                    data: {
-                        availabilityAlertActive: true,
-                        lastAvailabilityAlertAt: new Date(),
-                    },
-                });
-                return;
-            }
-
-            // Availability recovered: announce it once and clear the flag.
-            if (state.availabilityAlertActive) {
-                await this.notifierService.notifyAvailabilityRecovery(
-                    monitor,
-                    state,
-                    alert,
-                );
-
-                await this.prisma.monitorState.update({
-                    where: { monitorId: monitor.id },
-                    data: { availabilityAlertActive: false },
-                });
-            }
-        } catch (error) {
-            this.logger.warn(
-                `Availability alert failed for monitor ${monitor.id}: ${(error as Error).message}`,
-            );
-        }
     }
 
     /** 构造规则求值上下文，来自聚合后的 CheckResult。 */
@@ -690,6 +641,7 @@ export class CheckerService {
 
             const ctx = this.buildRuleContext(result);
             const ruleGroupIds: string[] = [];
+            const ruleEvidence: Prisma.InputJsonValue[] = [];
 
             for (const binding of bindings) {
                 const matched = this.ruleEvaluator.evaluate(
@@ -697,11 +649,30 @@ export class CheckerService {
                     ctx,
                 );
                 if (matched) ruleGroupIds.push(binding.ruleGroupId);
+                if (matched)
+                    ruleEvidence.push({
+                        groupId: binding.ruleGroupId,
+                        reason: binding.ruleGroup.fieldsUsed?.includes(
+                            'latency',
+                        )
+                            ? 'SLOW_RESPONSE'
+                            : 'RULE_MATCHED',
+                        conditions: JSON.parse(
+                            JSON.stringify(
+                                this.ruleEvaluator.explain(
+                                    binding.ruleGroup
+                                        .tree as unknown as RuleNode,
+                                    ctx,
+                                ),
+                            ),
+                        ) as Prisma.InputJsonValue,
+                    });
             }
 
             return {
                 ruleMatched: ruleGroupIds.length > 0,
                 ruleGroupIds,
+                ruleEvidence,
             };
         } catch (error) {
             this.logger.warn(

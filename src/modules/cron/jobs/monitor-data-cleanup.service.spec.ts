@@ -2,7 +2,10 @@ import { MonitorDataCleanupService } from './monitor-data-cleanup.service';
 import type { PrismaService } from '../../../infra/database/prisma.service';
 
 function createService() {
-    const prisma = { $executeRawUnsafe: jest.fn() };
+    const prisma = {
+        $executeRawUnsafe: jest.fn(),
+        $executeRaw: jest.fn().mockResolvedValue(0),
+    };
     const registry = { register: jest.fn() };
 
     return {
@@ -33,6 +36,16 @@ describe('MonitorDataCleanupService', () => {
         expect(statements[1]).toContain('FROM "probe_executions"');
         expect(statements[1]).toContain('"executedAt" < $1');
         expect(statements[2]).toContain('FROM "probe_results"');
+        expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+        const args = prisma.$executeRawUnsafe.mock.calls.map(
+            (call) => call[1] as Date,
+        );
+        expect(
+            Math.abs(Date.now() - args[0].getTime() - 90 * 86400000),
+        ).toBeLessThan(1000);
+        expect(
+            Math.abs(Date.now() - args[2].getTime() - 90 * 86400000),
+        ).toBeLessThan(1000);
     });
 
     it('keeps deleting in batches until a table is drained', async () => {

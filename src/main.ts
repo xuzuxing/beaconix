@@ -33,6 +33,7 @@ async function bootstrap() {
         origin:
             appConfig.corsOrigins.length > 0 ? appConfig.corsOrigins : false,
         credentials: true,
+        exposedHeaders: ['ETag'],
     });
 
     // Views

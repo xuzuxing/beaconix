@@ -68,7 +68,21 @@ export class HttpChecker {
             }
 
             if (options.checkSsl) {
-                const ssl = await this.inspectSslCertificate(url, timeout);
+                let ssl: SslCertificateInfo;
+                try {
+                    ssl = await this.inspectSslCertificate(url, timeout);
+                } catch (error) {
+                    return {
+                        ...this.failure(
+                            Date.now() - startedAt,
+                            describeCheckError(error),
+                            response.status,
+                            bodyContains,
+                        ),
+                        serviceVerdict: 'SUCCESS',
+                        sslVerdict: 'NO_EVIDENCE',
+                    };
+                }
                 const sslFailure = this.evaluateSsl(
                     ssl,
                     options.sslExpiryThreshold ?? 30,
@@ -81,6 +95,9 @@ export class HttpChecker {
                         error: sslFailure,
                         checkedAt: new Date(),
                         ssl,
+                        serviceVerdict: 'SUCCESS',
+                        sslVerdict:
+                            ssl.daysRemaining < 0 ? 'EXPIRED' : 'EXPIRING',
                         statusCode: response.status,
                         bodyContains,
                     };
@@ -92,6 +109,8 @@ export class HttpChecker {
                     error: null,
                     checkedAt: new Date(),
                     ssl,
+                    serviceVerdict: 'SUCCESS',
+                    sslVerdict: 'VALID',
                     statusCode: response.status,
                     bodyContains,
                 };
@@ -106,6 +125,24 @@ export class HttpChecker {
                 bodyContains,
             };
         } catch (error) {
+            const code =
+                (error as { cause?: { code?: string }; code?: string }).cause
+                    ?.code ?? (error as { code?: string }).code;
+            if (
+                options.checkSsl &&
+                code &&
+                /CERT|SELF_SIGNED|UNABLE_TO_VERIFY|TLS_CERT/.test(code)
+            ) {
+                return {
+                    ...this.failure(
+                        Date.now() - startedAt,
+                        describeCheckError(error),
+                    ),
+                    serviceVerdict: 'NO_EVIDENCE',
+                    sslVerdict: 'INVALID',
+                    failureReason: 'SSL_INVALID',
+                };
+            }
             return this.failure(
                 Date.now() - startedAt,
                 describeCheckError(error),
@@ -126,6 +163,15 @@ export class HttpChecker {
             checkedAt: new Date(),
             statusCode,
             bodyContains,
+            serviceVerdict: 'FAILURE',
+            failureReason:
+                statusCode !== null
+                    ? 'STATUS_MISMATCH'
+                    : /timed out|timeout/i.test(error)
+                      ? 'TIMEOUT'
+                      : /ECONNREFUSED/i.test(error)
+                        ? 'CONNECTION_REFUSED'
+                        : 'CHECK_FAILED',
         };
     }
 

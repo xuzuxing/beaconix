@@ -15,6 +15,12 @@ export class NotificationsProcessor extends WorkerHost {
     }
 
     async process(job: Job<NotificationJobData>): Promise<void> {
+        if (job.data.deliveryId) {
+            await this.notifierService.deliverAlertDelivery(
+                job.data.deliveryId,
+            );
+            return;
+        }
         const { channelId, payload, transitionStatus, sslAlert } = job.data;
 
         await this.notifierService.deliver(channelId, payload);

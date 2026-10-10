@@ -27,17 +27,25 @@ export class EmailSender implements NotificationChannelSender {
 
         await Promise.all(
             config.to.map((to) =>
-                this.emailService.send(template, {
-                    to,
-                    monitorName: payload.monitorName,
-                    target: payload.target,
-                    status: payload.status,
-                    previousStatus: payload.previousStatus,
-                    error: payload.error ?? '-',
-                    latency:
-                        payload.latency === null ? '-' : `${payload.latency}ms`,
-                    checkedAt: payload.checkedAt.toISOString(),
-                }),
+                this.emailService.send(
+                    template,
+                    {
+                        to,
+                        monitorName: payload.monitorName,
+                        target: payload.target,
+                        status: payload.status,
+                        previousStatus: payload.previousStatus,
+                        error: payload.error ?? '-',
+                        latency:
+                            payload.latency === null
+                                ? '-'
+                                : `${payload.latency}ms`,
+                        checkedAt: payload.checkedAt.toISOString(),
+                    },
+                    payload.idempotencyKey
+                        ? `${payload.idempotencyKey}:${to}`
+                        : undefined,
+                ),
             ),
         );
 

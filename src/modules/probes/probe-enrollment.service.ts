@@ -92,7 +92,10 @@ function generateUserCode(): string {
 
 /** Normalises a user code so `wdjb-mjht` and `WDJBMJHT` match. */
 function normalizeUserCode(code: string): string {
-    return code.trim().toUpperCase().replace(/[\s-]+/g, '');
+    return code
+        .trim()
+        .toUpperCase()
+        .replace(/[\s-]+/g, '');
 }
 
 @Injectable()
@@ -186,7 +189,11 @@ export class ProbeEnrollmentService {
     }
 
     /** The user confirms in the browser; the probe is created here. */
-    async approve(userId: string, globalRole: GlobalRole, dto: ApproveEnrollmentDto) {
+    async approve(
+        userId: string,
+        globalRole: GlobalRole,
+        dto: ApproveEnrollmentDto,
+    ) {
         await this.assertCanApprove(userId, globalRole, dto.organizationId);
 
         const userCodeHash = hashSecret(normalizeUserCode(dto.userCode));
@@ -376,15 +383,13 @@ export class ProbeEnrollmentService {
 
     private activationUrl(): string {
         return (
-            process.env.BEACON_ACTIVATE_URL ||
-            'https://app.beacon.dev/activate'
+            process.env.BEACON_ACTIVATE_URL || 'https://app.beacon.dev/activate'
         );
     }
 
     private publicApiUrl(): string {
         return (
-            process.env.BEACON_PUBLIC_API_URL ||
-            'https://api.beacon.dev/api'
+            process.env.BEACON_PUBLIC_API_URL || 'https://api.beacon.dev/api'
         ).replace(/\/+$/, '');
     }
 

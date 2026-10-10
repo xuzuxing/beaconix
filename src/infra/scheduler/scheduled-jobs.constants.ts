@@ -20,6 +20,8 @@ export const SCHEDULED_JOBS = {
     subscriptionExpirySweep: 'subscription-expiry-sweep',
     systemProbeAssignmentRefresh: 'system-probe-assignment-refresh',
     probeOfflineSweep: 'probe-offline-sweep',
+    alertOutboxSweep: 'alert-outbox-sweep',
+    probeIngestSweep: 'probe-ingest-sweep',
 } as const;
 
 export type ScheduledJobName =
@@ -43,4 +45,6 @@ export const SCHEDULED_JOB_PATTERNS: Record<ScheduledJobName, string> = {
     'subscription-expiry-sweep': '0 * * * *',
     'system-probe-assignment-refresh': '0 * * * *',
     'probe-offline-sweep': '* * * * *',
+    'alert-outbox-sweep': '* * * * *',
+    'probe-ingest-sweep': '* * * * *',
 };

@@ -43,6 +43,7 @@ function startBackend(records) {
                                     interval: 10,
                                     timeout: 1000,
                                     expectedStatus: 200,
+                                    configRevision: 7,
                                 },
                             ],
                             serverTime: 'fixed',
@@ -112,6 +113,10 @@ test('one invocation runs exactly one full cycle using env credentials', async (
             `http://127.0.0.1:${port}/health`,
         );
         assert.equal(results.body.results[0].success, true);
+        assert.equal(results.body.results[0].monitorId, 'm1');
+        assert.equal(results.body.results[0].configRevision, 7);
+        assert.equal(results.body.results[0].statusCode, 200);
+        assert.match(results.body.results[0].reportId, /^[0-9a-f-]{36}$/);
     } finally {
         await new Promise((resolve) => server.close(resolve));
     }

@@ -84,7 +84,9 @@ describe('ProbeEnrollmentService', () => {
 
         it('hands the credential over exactly once', async () => {
             const { service, redis } = createService();
-            redis.getJson.mockResolvedValue(deviceState({ status: 'approved' }));
+            redis.getJson.mockResolvedValue(
+                deviceState({ status: 'approved' }),
+            );
             redis.consumeJson.mockResolvedValueOnce({
                 probeId: 'probe-1',
                 secret: 'tnt-x',
@@ -163,11 +165,10 @@ describe('ProbeEnrollmentService', () => {
                 secret: 'tnt-secret',
             });
 
-            const result = await service.approve(
-                'user-1',
-                GlobalRole.USER,
-                { userCode: 'ABCD-EFGH', organizationId: 'org-1' },
-            );
+            const result = await service.approve('user-1', GlobalRole.USER, {
+                userCode: 'ABCD-EFGH',
+                organizationId: 'org-1',
+            });
 
             expect(prisma.membership.findFirst).toHaveBeenCalledWith({
                 where: {
