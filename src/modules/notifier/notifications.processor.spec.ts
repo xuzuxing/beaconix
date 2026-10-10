@@ -38,6 +38,12 @@ function createProcessor() {
 }
 
 describe('NotificationsProcessor', () => {
+    it('does not mark stale notifications as delivered', async () => {
+        const { processor, notifierService, stateService } = createProcessor();
+        notifierService.deliver.mockResolvedValue(false);
+        await processor.process({ data: jobData } as never);
+        expect(stateService.markNotified).not.toHaveBeenCalled();
+    });
     it('delivers the channel job and records the notified status', async () => {
         const { processor, notifierService, stateService } = createProcessor();
         notifierService.deliver.mockResolvedValue(undefined);
@@ -51,6 +57,7 @@ describe('NotificationsProcessor', () => {
         expect(stateService.markNotified).toHaveBeenCalledWith(
             'monitor-1',
             'DOWN',
+            undefined,
         );
         expect(stateService.markSslNotified).not.toHaveBeenCalled();
     });
@@ -63,6 +70,10 @@ describe('NotificationsProcessor', () => {
             data: { ...jobData, sslAlert: true },
         } as never);
 
-        expect(stateService.markSslNotified).toHaveBeenCalledWith('monitor-1');
+        expect(stateService.markSslNotified).toHaveBeenCalledWith(
+            'monitor-1',
+            undefined,
+            undefined,
+        );
     });
 });

@@ -32,6 +32,9 @@ RUN pnpm build
 # Stage 3: Production runner
 FROM node:22-alpine AS runner
 
+# PING uses the system binary; ICMP permissions are still controlled by deployment.
+RUN apk add --no-cache iputils
+
 WORKDIR /app
 
 ENV NODE_ENV=production

@@ -168,13 +168,20 @@ export class AuditLogInterceptor implements NestInterceptor {
         'setupToken',
         'challengeId',
         'recoveryCodes',
+        'credentialsEnc',
+        'tlsKey',
     ]);
 
     private stripSensitiveFields(data: any): any {
         if (!data || typeof data !== 'object') return data;
+        if (Array.isArray(data))
+            return data.map((item) => this.stripSensitiveFields(item));
+        if (data instanceof Date) return data;
         const cleaned = { ...data };
-        for (const key of AuditLogInterceptor.SENSITIVE_FIELDS) {
-            if (key in cleaned) cleaned[key] = '[REDACTED]';
+        for (const key of Object.keys(cleaned)) {
+            cleaned[key] = AuditLogInterceptor.SENSITIVE_FIELDS.has(key)
+                ? '[REDACTED]'
+                : this.stripSensitiveFields(cleaned[key]);
         }
         if (cleaned.isSecret && 'value' in cleaned) {
             cleaned.value = '[REDACTED]';

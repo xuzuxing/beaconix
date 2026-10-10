@@ -6,6 +6,8 @@ import {
     IsInt,
     IsNumber,
     IsOptional,
+    IsObject,
+    ValidateIf,
     IsString,
     Max,
     MaxLength,
@@ -13,6 +15,7 @@ import {
     MinLength,
 } from 'class-validator';
 import { MonitorType } from '../../../generated/prisma/enums';
+import { MONITOR_CONFIG_API_OPTIONS } from './monitor-config.schema';
 
 export class UpdateMonitorDto {
     @ApiPropertyOptional({ example: 'Production API v2' })
@@ -33,6 +36,14 @@ export class UpdateMonitorDto {
     @MinLength(1)
     @MaxLength(2048)
     target?: string;
+
+    @ApiPropertyOptional({
+        ...MONITOR_CONFIG_API_OPTIONS,
+        description: `Replaces the entire config; required on type changes. ${MONITOR_CONFIG_API_OPTIONS.description}`,
+    })
+    @ValidateIf((_, value: unknown) => value !== undefined)
+    @IsObject()
+    config?: Record<string, unknown>;
 
     @ApiPropertyOptional({ example: 30, description: 'Seconds between checks' })
     @IsOptional()

@@ -384,6 +384,10 @@ export class ProbesService implements OnModuleInit {
                               monitor.deletedAt === null && monitor.enabled,
                       );
 
+        const supportedMonitors = monitors.filter(
+            (monitor) => monitor.type === 'HTTP' || monitor.type === 'TCP',
+        );
+
         await this.writeExecution({
             probeId: probe.id,
             target: 'heartbeat',
@@ -392,7 +396,7 @@ export class ProbesService implements OnModuleInit {
             success: true,
             requestMeta: {},
             responseMeta: {
-                monitorCount: monitors.length,
+                monitorCount: supportedMonitors.length,
             },
         });
 
@@ -403,7 +407,8 @@ export class ProbesService implements OnModuleInit {
                 status: updated.status,
                 lastHeartbeat: updated.lastHeartbeat,
             },
-            monitors: monitors.map((monitor) => ({
+            // Legacy agents only understand these two protocols.
+            monitors: supportedMonitors.map((monitor) => ({
                 id: monitor.id,
                 name: monitor.name,
                 type: monitor.type,

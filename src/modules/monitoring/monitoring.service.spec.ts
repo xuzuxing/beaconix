@@ -106,6 +106,9 @@ describe('MonitoringService', () => {
                 uptimePercent: 80,
             });
             expect(result.sslExpiringSoon).toBe(1);
+            expect(prisma.checkLog.count).toHaveBeenCalledWith({
+                where: expect.objectContaining({ evaluated: true }),
+            });
         });
 
         it('returns zeroed overview when the scope has no monitors', async () => {

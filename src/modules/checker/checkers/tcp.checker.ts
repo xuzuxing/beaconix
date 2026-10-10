@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { Socket } from 'node:net';
 import type { CheckResult } from './check-result';
+import { MonitorType } from '../../../generated/prisma/enums';
+import type { MonitorModel } from '../../../generated/prisma/models';
+import type { CheckerStrategy } from './checker.interface';
 
 export interface TcpTarget {
     host: string;
@@ -27,7 +30,12 @@ export function parseTcpTarget(target: string): TcpTarget | null {
 }
 
 @Injectable()
-export class TcpChecker {
+export class TcpChecker implements CheckerStrategy {
+    readonly type = MonitorType.TCP;
+
+    run(monitor: MonitorModel): Promise<CheckResult> {
+        return this.check(monitor.target, monitor.timeout);
+    }
     /** Opens a TCP connection and measures how long the handshake takes. */
     async check(target: string, timeout: number): Promise<CheckResult> {
         const parsed = parseTcpTarget(target);
@@ -37,6 +45,8 @@ export class TcpChecker {
                 success: false,
                 latency: 0,
                 error: `Invalid host:port target "${target}"`,
+                evaluated: false,
+                failureKind: 'CONFIGURATION',
                 checkedAt: new Date(),
             };
         }
@@ -45,17 +55,27 @@ export class TcpChecker {
 
         return new Promise<CheckResult>((resolve) => {
             const socket = new Socket();
+            const timer = setTimeout(
+                () => finish(false, `Connection timed out after ${timeout}ms`),
+                timeout,
+            );
             let settled = false;
 
             const finish = (success: boolean, error: string | null) => {
                 if (settled) return;
                 settled = true;
+                clearTimeout(timer);
                 socket.destroy();
                 resolve({
                     success,
                     latency: Date.now() - startedAt,
                     error,
                     checkedAt: new Date(),
+                    failureKind: success
+                        ? null
+                        : error?.includes('timed out')
+                          ? 'TIMEOUT'
+                          : 'TRANSPORT',
                 });
             };
 

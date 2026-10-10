@@ -3,6 +3,7 @@ export * from './app.config';
 export * from './database.config';
 export * from './jwt.config';
 export * from './logger.config';
+export * from './monitor.config';
 export * from './probe.config';
 export * from './resend.config';
 export * from './redis.config';

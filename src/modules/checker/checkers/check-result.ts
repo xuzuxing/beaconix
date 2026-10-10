@@ -5,7 +5,54 @@ export interface SslCertificateInfo {
     subject: string | null;
 }
 
-/** Outcome of a single probe run (HTTP or TCP). */
+export type CheckFailureKind =
+    | 'TRANSPORT'
+    | 'ASSERTION'
+    | 'TIMEOUT'
+    | 'CONFIGURATION'
+    | 'CAPABILITY'
+    | 'POLICY';
+
+export type HttpAssertionFailure =
+    | 'KEYWORD'
+    | 'JSON_VALUE'
+    | 'INVALID_JSON'
+    | 'BODY_LIMIT'
+    | 'INVALID_ENCODING';
+export type HttpAssertionResult =
+    | { kind: 'keyword'; passed: boolean }
+    | { kind: 'json'; index: number; passed: boolean };
+
+export type CheckMetadata =
+    | {
+          protocol: 'MYSQL' | 'POSTGRESQL' | 'REDIS' | 'MONGODB';
+          operation: 'SELECT 1' | 'PING';
+      }
+    | {
+          protocol: 'DOCKER';
+          containerState: string;
+          health: string | null;
+          startedAt: string | null;
+      }
+    | { protocol: 'GRPC'; serving: boolean }
+    | { protocol: 'WEBSOCKET'; heartbeat: boolean }
+    | {
+          protocol: 'DNS';
+          recordType: 'A' | 'AAAA' | 'CNAME';
+          actualValues: string[];
+          ttl?: number[];
+      }
+    | { protocol: 'PING'; sent: number; received: number; packetLoss: number }
+    | {
+          protocol: 'HTTP';
+          bodyTruncated: boolean;
+          bodyBytes?: number;
+          bodyLimitBytes?: number;
+          assertions?: HttpAssertionResult[];
+          assertionFailure?: HttpAssertionFailure;
+      };
+
+/** Outcome of a single local check. */
 export interface CheckResult {
     success: boolean;
     /** Round-trip time in milliseconds. */
@@ -18,6 +65,10 @@ export interface CheckResult {
     statusCode?: number | null;
     /** Bounded snippet of the response body, for bodyContains rules. */
     bodyContains?: string | null;
+    /** False means execution was blocked, not that the target is DOWN. */
+    evaluated?: boolean;
+    failureKind?: CheckFailureKind | null;
+    meta?: CheckMetadata;
 }
 
 /** A result reported by a remote probe. */

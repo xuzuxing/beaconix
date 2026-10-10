@@ -17,7 +17,11 @@ export class NotificationsProcessor extends WorkerHost {
     async process(job: Job<NotificationJobData>): Promise<void> {
         const { channelId, payload, transitionStatus, sslAlert } = job.data;
 
-        await this.notifierService.deliver(channelId, payload);
+        const delivered = await this.notifierService.deliver(
+            channelId,
+            payload,
+        );
+        if (delivered === false) return;
 
         // Availability alerts are a separate dimension from the status
         // transition, so they must not touch the transition dedup markers.
@@ -28,10 +32,15 @@ export class NotificationsProcessor extends WorkerHost {
         await this.stateService.markNotified(
             payload.monitorId,
             transitionStatus,
+            payload.monitorRevision,
         );
 
         if (sslAlert) {
-            await this.stateService.markSslNotified(payload.monitorId);
+            await this.stateService.markSslNotified(
+                payload.monitorId,
+                undefined,
+                payload.monitorRevision,
+            );
         }
     }
 }

@@ -139,6 +139,20 @@ describe('ProbesService', () => {
                     {
                         monitor: {
                             ...monitorSummary,
+                            id: 'local-dns',
+                            type: 'DNS',
+                        },
+                    },
+                    {
+                        monitor: {
+                            ...monitorSummary,
+                            id: 'local-ping',
+                            type: 'PING',
+                        },
+                    },
+                    {
+                        monitor: {
+                            ...monitorSummary,
                             id: 'monitor-2',
                             enabled: false,
                         },

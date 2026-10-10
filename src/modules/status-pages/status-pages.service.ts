@@ -194,6 +194,7 @@ export class StatusPagesService {
             const window = {
                 monitorId: monitor.id,
                 checkedAt: { gte: since },
+                evaluated: true,
             };
 
             const [totalChecks, successfulChecks] = await Promise.all([

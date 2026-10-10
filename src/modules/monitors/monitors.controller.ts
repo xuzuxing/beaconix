@@ -22,6 +22,7 @@ import {
     ApiUnauthorizedResponse,
     ApiForbiddenResponse,
     ApiNotFoundResponse,
+    ApiServiceUnavailableResponse,
 } from '@nestjs/swagger';
 import { MonitorsService } from './monitors.service';
 import { CreateMonitorDto, UpdateMonitorDto } from './dto';
@@ -59,6 +60,9 @@ export class MonitorsController {
     @ApiCreatedResponse({
         type: MonitorEntity,
         description: 'Monitor created',
+    })
+    @ApiServiceUnavailableResponse({
+        description: 'Monitor credential encryption is not configured',
     })
     @ApiBadRequestResponse({ description: 'Validation failed' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
@@ -100,6 +104,9 @@ export class MonitorsController {
     @ApiOkResponse({
         type: MonitorEntity,
         description: 'Monitor updated',
+    })
+    @ApiServiceUnavailableResponse({
+        description: 'Monitor credential encryption is not configured',
     })
     @ApiBadRequestResponse({ description: 'Validation failed' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })

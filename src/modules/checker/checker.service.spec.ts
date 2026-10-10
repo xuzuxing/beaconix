@@ -10,6 +10,7 @@ import type { StateService } from '../state/state.service';
 import type { NotifierService } from '../notifier/notifier.service';
 import { MONITOR_CHECK_JOB } from './checker.queue';
 import type { MonitorCheckJobData } from './checker.queue';
+import { CheckerRegistry } from './checker.registry';
 
 const monitorRow = {
     id: 'monitor-1',
@@ -25,6 +26,9 @@ const monitorRow = {
     checkSsl: false,
     sslExpiryThreshold: 30,
     enabled: true,
+    config: {},
+    configVersion: 1,
+    revision: 1,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
     deletedAt: null,
@@ -66,6 +70,8 @@ function createService() {
         monitorState: { update: jest.fn() },
     };
     const stateService = {
+        claimAvailabilityAlert: jest.fn().mockResolvedValue('pending-1'),
+        completeAvailabilityAlert: jest.fn(),
         record: jest.fn().mockResolvedValue({
             monitor: monitorRow,
             state: stateRow,
@@ -91,6 +97,55 @@ function createService() {
     };
     const httpChecker = { check: jest.fn().mockResolvedValue(checkResult) };
     const tcpChecker = { check: jest.fn().mockResolvedValue(checkResult) };
+    const dnsChecker = {
+        type: 'DNS',
+        run: jest.fn().mockResolvedValue(checkResult),
+    };
+    const pingChecker = {
+        type: 'PING',
+        run: jest.fn().mockResolvedValue(checkResult),
+    };
+    const registry = new CheckerRegistry(
+        {
+            type: 'HTTP',
+            run: (m: typeof monitorRow) =>
+                httpChecker.check(m.target, m.timeout, m.expectedStatus, {
+                    checkSsl: m.checkSsl,
+                    sslExpiryThreshold: m.sslExpiryThreshold,
+                }),
+        } as never,
+        {
+            type: 'TCP',
+            run: (m: typeof monitorRow) =>
+                tcpChecker.check(m.target, m.timeout),
+        } as never,
+        dnsChecker as never,
+        pingChecker as never,
+        ...([
+            'MYSQL',
+            'POSTGRESQL',
+            'REDIS',
+            'MONGODB',
+            'DOCKER',
+            'GRPC',
+            'WEBSOCKET',
+        ].map((type) => ({
+            type,
+            run: jest.fn().mockResolvedValue(checkResult),
+        })) as [never, never, never, never, never, never, never]),
+        { open: (monitor: typeof monitorRow) => monitor.config } as never,
+    );
+    const quotaService = {
+        assertMonitorTypeAllowed: jest.fn().mockResolvedValue(undefined),
+        assertIntervalAllowed: jest.fn().mockResolvedValue(undefined),
+        monitorEligibility: jest
+            .fn()
+            .mockResolvedValue({ eligible: true, reason: null }),
+        getMonitorPolicy: jest.fn().mockResolvedValue({
+            allowedMonitorTypes: ['HTTP', 'TCP', 'PING', 'DNS'],
+            minInterval: 10,
+        }),
+    };
     const systemProbeScheduler = {
         getAssignedProbes: jest.fn().mockResolvedValue([]),
     };
@@ -104,8 +159,8 @@ function createService() {
         prisma as unknown as PrismaService,
         stateService as unknown as StateService,
         notifierService as unknown as NotifierService,
-        httpChecker as never,
-        tcpChecker,
+        registry,
+        quotaService as never,
         systemProbeScheduler as never,
         ruleEvaluator as never,
         ruleGroups as never,
@@ -121,10 +176,216 @@ function createService() {
         systemProbeScheduler,
         ruleEvaluator,
         ruleGroups,
+        dnsChecker,
+        pingChecker,
+        quotaService,
     };
 }
 
 describe('CheckerService', () => {
+    describe('local protocol and execution isolation', () => {
+        it.each(['ASSERTION', 'TIMEOUT', 'TRANSPORT'])(
+            'keeps configured HTTP %s outcomes local, including new revision-one definitions',
+            async (failureKind) => {
+                const { service, prisma, httpChecker, stateService } =
+                    createService();
+                prisma.monitor.findFirst.mockResolvedValue({
+                    ...monitorRow,
+                    config: { keyword: 'healthy' },
+                });
+                const meta = {
+                    protocol: 'HTTP',
+                    bodyTruncated: false,
+                    bodyBytes: 100,
+                    bodyLimitBytes: 65536,
+                    assertions: [{ kind: 'keyword', passed: false }],
+                    assertionFailure: 'KEYWORD',
+                };
+                httpChecker.check.mockResolvedValue({
+                    ...checkResult,
+                    success: false,
+                    error: 'HTTP keyword assertion failed',
+                    failureKind,
+                    meta,
+                });
+                await service.checkMonitorForProject('project-1', 'monitor-1');
+                expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+                expect(stateService.record).toHaveBeenCalledWith(
+                    'monitor-1',
+                    expect.objectContaining({
+                        revision: 1,
+                        success: false,
+                        evaluated: true,
+                        rescuedByProbe: false,
+                        failureKind,
+                        meta,
+                        ruleMatched: true,
+                    }),
+                );
+                expect(
+                    await service.ingestProbeReportForMonitor('monitor-1', {
+                        target: monitorRow.target,
+                        success: true,
+                        latency: 1,
+                    }),
+                ).toBeNull();
+            },
+        );
+
+        it.each(['DNS', 'PING'])(
+            'routes %s through the registry and never applies legacy probe rescue',
+            async (type) => {
+                const {
+                    service,
+                    prisma,
+                    dnsChecker,
+                    pingChecker,
+                    stateService,
+                } = createService();
+                prisma.monitor.findFirst.mockResolvedValue({
+                    ...monitorRow,
+                    type,
+                    target: 'example.com',
+                    config: type === 'DNS' ? { recordType: 'A' } : {},
+                });
+                const checker = type === 'DNS' ? dnsChecker : pingChecker;
+                checker.run.mockResolvedValue({
+                    ...checkResult,
+                    success: false,
+                    error: 'Target failed',
+                    failureKind: 'ASSERTION',
+                });
+                await service.checkMonitorForProject('project-1', 'monitor-1');
+                expect(checker.run).toHaveBeenCalledTimes(1);
+                expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+                expect(stateService.record).toHaveBeenCalledWith(
+                    'monitor-1',
+                    expect.objectContaining({
+                        success: false,
+                        rescuedByProbe: false,
+                    }),
+                );
+                expect(
+                    await service.ingestProbeReportForMonitor('monitor-1', {
+                        target: 'example.com',
+                        success: true,
+                        latency: 1,
+                    }),
+                ).toBeNull();
+            },
+        );
+
+        it('does not rescue HTTP status assertions or revised definitions with old probe observations', async () => {
+            const { service, prisma, httpChecker } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            httpChecker.check.mockResolvedValue({
+                ...checkResult,
+                success: false,
+                failureKind: 'ASSERTION',
+            });
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                revision: 2,
+            });
+            httpChecker.check.mockResolvedValue({
+                ...checkResult,
+                success: false,
+            });
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+        });
+
+        it('stops queued jobs and manual checks when entitlement is revoked', async () => {
+            const { service, prisma, httpChecker, quotaService, stateService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            quotaService.monitorEligibility.mockResolvedValue({
+                eligible: false,
+                reason: 'MONITOR_TYPE_NOT_ALLOWED',
+            });
+            expect(await service.executeMonitor('monitor-1')).toBeNull();
+            quotaService.assertMonitorTypeAllowed.mockRejectedValue(
+                new Error('not allowed'),
+            );
+            await expect(
+                service.checkMonitorForProject('project-1', 'monitor-1'),
+            ).rejects.toThrow('not allowed');
+            expect(httpChecker.check).not.toHaveBeenCalled();
+            expect(stateService.record).not.toHaveBeenCalled();
+        });
+
+        it('filters the due scan by runtime entitlement and resolves each org policy once', async () => {
+            const { service, prisma, quotaService } = createService();
+            prisma.monitor.findMany.mockResolvedValue([
+                monitorRow,
+                { ...monitorRow, id: 'monitor-2', type: 'DNS' },
+            ]);
+            quotaService.monitorEligibility
+                .mockResolvedValueOnce({ eligible: true, reason: null })
+                .mockResolvedValueOnce({
+                    eligible: false,
+                    reason: 'MONITOR_TYPE_NOT_ALLOWED',
+                });
+            expect(await service.findDueMonitors()).toHaveLength(1);
+            expect(quotaService.getMonitorPolicy).toHaveBeenCalledTimes(1);
+        });
+
+        it('discards results that became stale without notifying', async () => {
+            const { service, prisma, stateService, notifierService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            stateService.record.mockResolvedValue(null);
+            expect(
+                await service.checkMonitorForProject('project-1', 'monitor-1'),
+            ).toMatchObject({
+                applied: false,
+                evaluated: false,
+                changed: false,
+            });
+            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
+            expect(prisma.probeExecution.create).not.toHaveBeenCalled();
+        });
+
+        it('does not record or alert after an entitlement expires during the network check', async () => {
+            const {
+                service,
+                prisma,
+                quotaService,
+                stateService,
+                notifierService,
+            } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            quotaService.monitorEligibility.mockResolvedValue({
+                eligible: false,
+                reason: 'INTERVAL_TOO_SHORT',
+            });
+            const result = await service.checkMonitorForProject(
+                'project-1',
+                'monitor-1',
+            );
+            expect(result).toMatchObject({
+                applied: false,
+                evaluated: false,
+                failureKind: 'POLICY',
+            });
+            expect(stateService.record).not.toHaveBeenCalled();
+            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
+        });
+
+        it('rejects manual execution while a monitor is paused', async () => {
+            const { service, prisma, httpChecker } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                enabled: false,
+            });
+            await expect(
+                service.checkMonitorForProject('project-1', 'monitor-1'),
+            ).rejects.toThrow('paused');
+            expect(httpChecker.check).not.toHaveBeenCalled();
+        });
+    });
     describe('checkMonitorForProject', () => {
         it('runs an HTTP check and notifies on a status change', async () => {
             const {
@@ -169,6 +430,10 @@ describe('CheckerService', () => {
                 statusCode: null,
                 ruleMatched: false,
                 ruleGroupIds: [],
+                revision: 1,
+                evaluated: true,
+                failureKind: null,
+                meta: undefined,
             });
             expect(notifierService.notifyTransition).toHaveBeenCalledTimes(1);
             expect(prisma.probeExecution.create).toHaveBeenCalledWith({
@@ -184,6 +449,8 @@ describe('CheckerService', () => {
                     requestMeta: {
                         source: 'LOCAL',
                         monitorType: 'HTTP',
+                        revision: 1,
+                        configVersion: 1,
                     },
                     responseMeta: {
                         previousStatus: 'UNKNOWN',
@@ -340,6 +607,10 @@ describe('CheckerService', () => {
                 statusCode: null,
                 ruleMatched: false,
                 ruleGroupIds: [],
+                revision: 1,
+                evaluated: true,
+                failureKind: null,
+                meta: undefined,
             });
         });
 
@@ -544,6 +815,10 @@ describe('CheckerService', () => {
                 statusCode: null,
                 ruleMatched: false,
                 ruleGroupIds: [],
+                revision: 1,
+                evaluated: true,
+                failureKind: null,
+                meta: undefined,
             });
             expect(result?.monitorId).toBe('monitor-1');
         });
@@ -793,6 +1068,45 @@ describe('CheckerService', () => {
             },
         });
 
+        it('retries a pending alert after enqueue failure without permanently suppressing it', async () => {
+            const { service, prisma, stateService, notifierService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
+            prisma.checkLog.findMany.mockResolvedValue([
+                { ruleMatched: true },
+                { ruleMatched: true },
+                { ruleMatched: true },
+            ]);
+            stateService.record.mockResolvedValue(
+                recordWith({
+                    availabilityAlertActive: false,
+                }),
+            );
+            notifierService.notifyAvailabilityAlert.mockRejectedValueOnce(
+                new Error('queue unavailable'),
+            );
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+            expect(
+                stateService.completeAvailabilityAlert,
+            ).not.toHaveBeenCalled();
+            stateService.record.mockResolvedValue(
+                recordWith({
+                    availabilityAlertActive: true,
+                    availabilityAlertPendingId: 'pending-1',
+                }),
+            );
+            await service.checkMonitorForProject('project-1', 'monitor-1');
+            expect(
+                notifierService.notifyAvailabilityAlert,
+            ).toHaveBeenCalledTimes(2);
+            expect(stateService.completeAvailabilityAlert).toHaveBeenCalledWith(
+                'monitor-1',
+                1,
+                true,
+                'pending-1',
+            );
+        });
+
         it('alerts once when failures reached the threshold and availability is below it', async () => {
             const { service, prisma, stateService, notifierService } =
                 createService();
@@ -814,7 +1128,7 @@ describe('CheckerService', () => {
             await service.checkMonitorForProject('project-1', 'monitor-1');
 
             expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1' },
+                where: { monitorId: 'monitor-1', evaluated: true, revision: 1 },
                 orderBy: { checkedAt: 'desc' },
                 take: 10,
                 select: { ruleMatched: true },
@@ -832,13 +1146,12 @@ describe('CheckerService', () => {
                     consecutiveFailures: 3,
                 },
             );
-            expect(prisma.monitorState.update).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1' },
-                data: {
-                    availabilityAlertActive: true,
-                    lastAvailabilityAlertAt: expect.any(Date),
-                },
-            });
+            expect(stateService.claimAvailabilityAlert).toHaveBeenCalledWith(
+                'monitor-1',
+                1,
+                true,
+                stateRow.lastCheckAt,
+            );
         });
 
         it('stays silent while already alerting', async () => {
@@ -890,10 +1203,12 @@ describe('CheckerService', () => {
                 expect.objectContaining({ failCount: 0 }),
                 expect.objectContaining({ availabilityPercent: 100 }),
             );
-            expect(prisma.monitorState.update).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1' },
-                data: { availabilityAlertActive: false },
-            });
+            expect(stateService.claimAvailabilityAlert).toHaveBeenCalledWith(
+                'monitor-1',
+                1,
+                false,
+                stateRow.lastCheckAt,
+            );
         });
 
         it('does not alert while consecutive failures are below the threshold', async () => {

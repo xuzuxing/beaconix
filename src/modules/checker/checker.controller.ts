@@ -18,6 +18,7 @@ import {
     ApiUnauthorizedResponse,
     ApiForbiddenResponse,
     ApiNotFoundResponse,
+    ApiBadRequestResponse,
 } from '@nestjs/swagger';
 import { CheckerService } from './checker.service';
 import { QueryCheckLogsDto } from './dto';
@@ -42,9 +43,11 @@ export class CheckerController {
     @ApiParam({ name: 'projectId', description: 'Project UUID' })
     @ApiParam({ name: 'monitorId', description: 'Monitor UUID' })
     @ApiOkResponse({ description: 'The check outcome and the derived status' })
+    @ApiBadRequestResponse({ description: 'Monitor is paused' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({
-        description: 'Insufficient role (requires MEMBER)',
+        description:
+            'Insufficient role (requires MEMBER) or monitor type/interval not allowed by plan',
     })
     @ApiNotFoundResponse({ description: 'Monitor not found' })
     async check(

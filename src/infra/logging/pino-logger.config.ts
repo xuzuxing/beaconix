@@ -35,6 +35,8 @@ const SENSITIVE_FIELD_PATTERNS: Record<
     smtppassword: 'password',
     accesskeysecret: 'password',
     appsecret: 'password',
+    tlskey: 'password',
+    credentialsenc: 'password',
 };
 
 interface AuthenticatedActor {

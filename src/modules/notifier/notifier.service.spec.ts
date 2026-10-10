@@ -61,6 +61,7 @@ const transition = {
 
 function createService() {
     const prisma = {
+        monitor: { findFirst: jest.fn() },
         notificationChannel: {
             findMany: jest.fn(),
             findFirst: jest.fn(),
@@ -388,6 +389,21 @@ describe('NotifierService', () => {
     });
 
     describe('deliver', () => {
+        it('skips stale or paused monitor notification jobs before channel delivery', async () => {
+            const { service, prisma, senders } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(null);
+            expect(
+                await service.deliver('channel-1', {
+                    monitorId: 'monitor-1',
+                    monitorRevision: 1,
+                    organizationId: 'org-1',
+                } as never),
+            ).toBe(false);
+            expect(
+                prisma.notificationChannel.findUnique,
+            ).not.toHaveBeenCalled();
+            expect(senders.feishu.send).not.toHaveBeenCalled();
+        });
         it('sends synchronously and writes a SUCCESS log', async () => {
             const { service, prisma, senders } = createService();
             prisma.notificationChannel.findUnique.mockResolvedValue(channelRow);

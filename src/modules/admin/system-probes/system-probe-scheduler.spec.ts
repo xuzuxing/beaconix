@@ -48,9 +48,12 @@ describe('SystemProbeScheduler', () => {
             { ...baseProbe, id: 'system-b', priority: 5, maxTenants: 0 },
         ]);
         prisma.monitor.findMany.mockResolvedValue([
-            { id: 'monitor-1', probes: [] },
+            { id: 'monitor-1', type: 'HTTP', probes: [] },
+            { id: 'local-dns', type: 'DNS', probes: [] },
+            { id: 'local-ping', type: 'PING', probes: [] },
             {
                 id: 'monitor-2',
+                type: 'TCP',
                 probes: [
                     {
                         probe: {
@@ -64,6 +67,7 @@ describe('SystemProbeScheduler', () => {
             },
             {
                 id: 'monitor-3',
+                type: 'HTTP',
                 probes: [
                     {
                         probe: {

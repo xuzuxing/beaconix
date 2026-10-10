@@ -17,6 +17,7 @@ const monitorRow = {
     checkSsl: false,
     sslExpiryThreshold: 30,
     enabled: true,
+    revision: 1,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
     deletedAt: null,
@@ -41,16 +42,22 @@ const stateRow = {
 function createService() {
     const prisma = {
         monitor: { findFirst: jest.fn() },
-        monitorState: { upsert: jest.fn(), update: jest.fn() },
+        monitorState: {
+            upsert: jest.fn(),
+            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
         checkLog: {
             create: jest.fn(),
             count: jest.fn(),
             aggregate: jest.fn(),
         },
-        $transaction: jest.fn((operations: unknown[]) =>
-            Promise.all(operations),
-        ),
+        $queryRaw: jest.fn(),
+        $transaction: jest.fn(),
     };
+    prisma.$transaction.mockImplementation(
+        (operation: (tx: unknown) => unknown) => operation(prisma),
+    );
 
     const service = new StateService(prisma as unknown as PrismaService);
 
@@ -101,6 +108,157 @@ describe('deriveState', () => {
 
 describe('StateService', () => {
     describe('record', () => {
+        it('does not let a legacy future probe timestamp freeze local state', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                state: {
+                    ...stateRow,
+                    lastCheckAt: new Date('2099-01-01T00:00:00Z'),
+                },
+            });
+            prisma.monitorState.upsert.mockResolvedValue(stateRow);
+            const at = new Date();
+            expect(
+                await service.record('monitor-1', {
+                    revision: 1,
+                    success: true,
+                    latency: 10,
+                    checkedAt: at,
+                }),
+            ).not.toBeNull();
+            await service.record('monitor-1', {
+                revision: 1,
+                success: true,
+                latency: 10,
+                source: CheckSource.PROBE,
+                checkedAt: new Date('2099-01-01T00:00:00Z'),
+            });
+            const probeLog = prisma.checkLog.create.mock.calls[1][0].data;
+            expect(probeLog.checkedAt.getFullYear()).toBeLessThan(2099);
+        });
+        it.each([
+            { enabled: false, revision: 1 },
+            { enabled: true, revision: 2 },
+        ])(
+            'discards paused or superseded in-flight results: %j',
+            async (change) => {
+                const { service, prisma } = createService();
+                prisma.monitor.findFirst.mockResolvedValue({
+                    ...monitorRow,
+                    ...change,
+                    state: stateRow,
+                });
+                await expect(
+                    service.record('monitor-1', {
+                        success: false,
+                        latency: 10,
+                        revision: 1,
+                    }),
+                ).resolves.toBeNull();
+                expect(prisma.checkLog.create).not.toHaveBeenCalled();
+                expect(prisma.monitorState.upsert).not.toHaveBeenCalled();
+                expect(prisma.$queryRaw).toHaveBeenCalled();
+            },
+        );
+
+        it('does not write results for a monitor deleted during execution', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(null);
+            await expect(
+                service.record('monitor-1', {
+                    success: false,
+                    latency: 10,
+                    revision: 1,
+                }),
+            ).resolves.toBeNull();
+            expect(prisma.checkLog.create).not.toHaveBeenCalled();
+        });
+
+        it('logs execution blocks without increasing failures or target downtime', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                state: { ...stateRow, status: 'UP' },
+            });
+            prisma.monitorState.upsert.mockResolvedValue(stateRow);
+            const recorded = await service.record('monitor-1', {
+                revision: 1,
+                success: false,
+                latency: 0,
+                evaluated: false,
+                failureKind: 'CAPABILITY',
+                error: 'ICMP unavailable',
+            });
+            expect(recorded!.transition).toMatchObject({
+                status: 'UP',
+                failCount: 0,
+                changed: false,
+            });
+            expect(prisma.monitorState.upsert).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    update: expect.objectContaining({
+                        lastCheckAt: undefined,
+                        lastError: undefined,
+                        executionBlockedReason: 'ICMP unavailable',
+                        lastLocalCheckAt: expect.any(Date),
+                    }),
+                }),
+            );
+            expect(prisma.checkLog.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    evaluated: false,
+                    failureKind: 'CAPABILITY',
+                    ruleMatched: false,
+                }),
+            });
+        });
+
+        it('persists DNS metadata and revision alongside its assertion', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                revision: 3,
+                state: stateRow,
+            });
+            prisma.monitorState.upsert.mockResolvedValue(stateRow);
+            const meta = {
+                protocol: 'DNS' as const,
+                recordType: 'A' as const,
+                actualValues: ['1.1.1.1'],
+                ttl: [30],
+            };
+            await service.record('monitor-1', {
+                revision: 3,
+                success: true,
+                latency: 5,
+                meta,
+            });
+            expect(prisma.checkLog.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({ revision: 3, meta }),
+            });
+        });
+
+        it('ignores results older than the state already committed', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                state: {
+                    ...stateRow,
+                    lastLocalCheckAt: new Date('2026-10-10T00:01:00Z'),
+                },
+            });
+            expect(
+                await service.record('monitor-1', {
+                    revision: 1,
+                    success: false,
+                    latency: 1,
+                    checkedAt: new Date('2026-10-10T00:00:00Z'),
+                }),
+            ).toBeNull();
+            expect(prisma.checkLog.create).not.toHaveBeenCalled();
+        });
+
         it('appends a check log and folds the outcome into the state row', async () => {
             const { service, prisma } = createService();
             prisma.monitor.findFirst.mockResolvedValue({
@@ -114,12 +272,13 @@ describe('StateService', () => {
                 failCount: 1,
             });
 
-            const { transition } = await service.record('monitor-1', {
+            const recorded = await service.record('monitor-1', {
                 success: false,
                 latency: 30,
                 error: 'Unexpected status 500 (expected 200)',
                 statusCode: 500,
             });
+            const transition = recorded!.transition;
 
             expect(prisma.checkLog.create).toHaveBeenCalledWith({
                 data: {
@@ -134,6 +293,10 @@ describe('StateService', () => {
                     ruleGroupIds: [],
                     source: 'LOCAL',
                     checkedAt: expect.any(Date),
+                    revision: 1,
+                    evaluated: true,
+                    failureKind: null,
+                    meta: {},
                 },
             });
             expect(prisma.monitorState.upsert).toHaveBeenCalledWith({
@@ -166,10 +329,11 @@ describe('StateService', () => {
             prisma.checkLog.create.mockResolvedValue({ id: 'log-1' });
             prisma.monitorState.upsert.mockResolvedValue(stateRow);
 
-            const { transition } = await service.record('monitor-1', {
+            const recorded = await service.record('monitor-1', {
                 success: false,
                 latency: 12,
             });
+            const transition = recorded!.transition;
 
             expect(transition.changed).toBe(false);
             expect(transition.status).toBe('DEGRADED');
@@ -185,10 +349,11 @@ describe('StateService', () => {
             prisma.checkLog.create.mockResolvedValue({ id: 'log-1' });
             prisma.monitorState.upsert.mockResolvedValue(stateRow);
 
-            const { transition } = await service.record('monitor-1', {
+            const recorded = await service.record('monitor-1', {
                 success: true,
                 latency: 10,
             });
+            const transition = recorded!.transition;
 
             expect(transition.previousStatus).toBe('UNKNOWN');
             expect(transition.status).toBe('UP');
@@ -278,9 +443,11 @@ describe('StateService', () => {
             });
             expect(prisma.monitorState.upsert).toHaveBeenCalledWith({
                 where: { monitorId: 'monitor-1' },
-                create: expect.objectContaining({ lastCheckAt: checkedAt }),
+                create: expect.objectContaining({
+                    lastCheckAt: expect.any(Date),
+                }),
                 update: expect.objectContaining({
-                    lastCheckAt: checkedAt,
+                    lastCheckAt: expect.any(Date),
                     lastLocalCheckAt: undefined,
                 }),
             });
@@ -349,6 +516,9 @@ describe('StateService', () => {
             expect(summary.uptimePercent).toBe(99);
             expect(summary.avgLatency).toBe(128);
             expect(summary.sslExpiresAt).toBeNull();
+            expect(prisma.checkLog.count).toHaveBeenCalledWith({
+                where: expect.objectContaining({ evaluated: true }),
+            });
         });
 
         it('returns null metrics when there is no check history', async () => {
@@ -380,6 +550,101 @@ describe('StateService', () => {
     });
 
     describe('markNotified', () => {
+        it('does not let stale alert acknowledgements update a new definition', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(null);
+            await service.markNotified('monitor-1', MonitorStatus.DOWN, 1);
+            await service.markSslNotified('monitor-1', new Date(), 1);
+            expect(
+                await service.claimAvailabilityAlert(
+                    'monitor-1',
+                    1,
+                    true,
+                    new Date(),
+                ),
+            ).toBeNull();
+            expect(prisma.monitorState.update).not.toHaveBeenCalled();
+            expect(prisma.monitorState.updateMany).not.toHaveBeenCalled();
+        });
+
+        it('claims availability state only for the current revision and observation', async () => {
+            const { service, prisma } = createService();
+            const checkedAt = new Date();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                revision: 2,
+                state: {
+                    ...stateRow,
+                    lastCheckAt: checkedAt,
+                    availabilityAlertActive: false,
+                },
+            });
+            expect(
+                await service.claimAvailabilityAlert(
+                    'monitor-1',
+                    2,
+                    true,
+                    checkedAt,
+                ),
+            ).toEqual(expect.any(String));
+            expect(prisma.monitor.findFirst).toHaveBeenCalledWith({
+                where: {
+                    id: 'monitor-1',
+                    revision: 2,
+                    enabled: true,
+                    deletedAt: null,
+                },
+                include: { state: true },
+            });
+            expect(prisma.monitorState.updateMany).toHaveBeenCalledWith({
+                where: {
+                    monitorId: 'monitor-1',
+                },
+                data: {
+                    availabilityAlertActive: true,
+                    availabilityAlertPendingId: expect.any(String),
+                    lastAvailabilityAlertAt: expect.any(Date),
+                },
+            });
+        });
+
+        it('recovers the durable alert claim after enqueue failure or process restart', async () => {
+            const { service, prisma } = createService();
+            const checkedAt = new Date();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                state: {
+                    ...stateRow,
+                    lastCheckAt: checkedAt,
+                    availabilityAlertActive: true,
+                    availabilityAlertPendingId: 'persisted-pending-event',
+                },
+            });
+            expect(
+                await service.claimAvailabilityAlert(
+                    'monitor-1',
+                    1,
+                    true,
+                    checkedAt,
+                ),
+            ).toBe('persisted-pending-event');
+            expect(prisma.monitorState.updateMany).not.toHaveBeenCalled();
+            await service.completeAvailabilityAlert(
+                'monitor-1',
+                1,
+                true,
+                'persisted-pending-event',
+            );
+            expect(prisma.monitorState.updateMany).toHaveBeenCalledWith({
+                where: {
+                    monitorId: 'monitor-1',
+                    availabilityAlertActive: true,
+                    availabilityAlertPendingId: 'persisted-pending-event',
+                },
+                data: { availabilityAlertPendingId: null },
+            });
+        });
+
         it('stores the last notified status on the state row', async () => {
             const { service, prisma } = createService();
             prisma.monitorState.update.mockResolvedValue(stateRow);
