@@ -154,7 +154,7 @@ export class ProbesController {
     @ApiParam({ name: 'id', description: 'Probe UUID' })
     @ApiOkResponse({
         description:
-            '{ validationId, challenge: { iv, tag, data }, expiresAt, status }',
+            '{ validationId, expiresAt, status }',
     })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })

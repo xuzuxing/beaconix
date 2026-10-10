@@ -13,6 +13,7 @@ import {
 } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
+import { hashSecret } from './probe-secret.util';
 import {
     ExecutionStatus,
     ExecutionTrigger,
@@ -57,13 +58,13 @@ export class ProbeValidationService {
     /** Manual trigger for a tenant probe (admin/org scope). */
     async triggerForTenant(orgId: string, probeId: string) {
         const probe = await this.requireTenantProbe(orgId, probeId);
-        return this.createChallenge(probe);
+        return this.createChallenge(probe.id);
     }
 
     /** Manual trigger for a system probe (SUPER_ADMIN scope). */
     async triggerForSystem(probeId: string) {
         const probe = await this.requireSystemProbe(probeId);
-        return this.createChallenge(probe);
+        return this.createChallenge(probe.id);
     }
 
     /** Agent-facing: fetch the pending challenge for the authenticated probe. */
@@ -73,7 +74,10 @@ export class ProbeValidationService {
 
         if (!stored) return { validation: null };
 
-        const challenge = this.encrypt(this.deriveKey(probe.secret), {
+        // The challenge is encrypted here, keyed by the hash of the secret the
+        // caller just presented: the backend holds no plaintext to key it with
+        // at trigger time, and a rotation may leave several secrets valid.
+        const challenge = this.encrypt(this.deriveKey(probe.secretHash), {
             nonce: stored.nonce,
             issuedAt: stored.issuedAt,
         } satisfies ChallengePlaintext);
@@ -116,7 +120,7 @@ export class ProbeValidationService {
         let plaintext: AnswerPlaintext;
         try {
             const decrypted = this.decrypt(
-                this.deriveKey(probe.secret),
+                this.deriveKey(probe.secretHash),
                 answer,
             );
             plaintext = JSON.parse(decrypted) as AnswerPlaintext;
@@ -159,32 +163,31 @@ export class ProbeValidationService {
 
     // -- Helpers ---------------------------------------------------------
 
-    private async createChallenge(probe: { id: string; secret: string }) {
+    /**
+     * Records a pending challenge. The challenge is deliberately NOT encrypted
+     * here — the key depends on which secret the probe presents, which is only
+     * known when it pulls (see {@link pullForSecret}).
+     */
+    private async createChallenge(probeId: string) {
         const nonce = randomBytes(32).toString('hex');
         const issuedAt = new Date().toISOString();
         const expiresAt = new Date(Date.now() + VALIDATION_TTL_SECONDS * 1000);
 
         const stored: StoredValidation = {
-            probeId: probe.id,
+            probeId,
             nonce,
             issuedAt,
             expiresAt: expiresAt.toISOString(),
         };
 
         await this.redis.setJson(
-            this.validationKey(probe.id),
+            this.validationKey(probeId),
             stored,
             VALIDATION_TTL_SECONDS,
         );
 
-        const challenge = this.encrypt(this.deriveKey(probe.secret), {
-            nonce,
-            issuedAt,
-        } satisfies ChallengePlaintext);
-
         return {
-            validationId: probe.id,
-            challenge,
+            validationId: probeId,
             expiresAt: stored.expiresAt,
             status: 'PENDING',
         };
@@ -212,20 +215,24 @@ export class ProbeValidationService {
             throw new UnauthorizedException('Missing probe secret');
         }
 
-        const probe = await this.prisma.probe.findUnique({
-            where: { secret: secret.trim() },
-            select: { id: true, secret: true, enabled: true },
+        const record = await this.prisma.probeSecret.findUnique({
+            where: { secretHash: hashSecret(secret.trim()) },
+            include: { probe: { select: { id: true, enabled: true } } },
         });
 
-        if (!probe) {
+        if (!record || record.revokedAt) {
             throw new UnauthorizedException('Unknown probe secret');
         }
 
-        if (!probe.enabled) {
+        if (record.expiresAt && record.expiresAt.getTime() <= Date.now()) {
+            throw new UnauthorizedException('Probe secret has expired');
+        }
+
+        if (!record.probe.enabled) {
             throw new UnauthorizedException('Probe is disabled');
         }
 
-        return probe;
+        return { id: record.probe.id, secretHash: record.secretHash };
     }
 
     private async requireTenantProbe(orgId: string, probeId: string) {
@@ -235,7 +242,7 @@ export class ProbeValidationService {
                 organizationId: orgId,
                 scope: ProbeScope.TENANT,
             },
-            select: { id: true, secret: true, enabled: true },
+            select: { id: true },
         });
 
         if (!probe) {
@@ -248,7 +255,7 @@ export class ProbeValidationService {
     private async requireSystemProbe(probeId: string) {
         const probe = await this.prisma.probe.findFirst({
             where: { id: probeId, scope: ProbeScope.SYSTEM },
-            select: { id: true, secret: true, enabled: true },
+            select: { id: true },
         });
 
         if (!probe) {

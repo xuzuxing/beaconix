@@ -45,6 +45,7 @@ import { CronModule } from './modules/cron/cron.module';
 import { MonitorsModule } from './modules/monitors/monitors.module';
 import { RulesModule } from './modules/rules/rules.module';
 import { ProbesModule } from './modules/probes/probes.module';
+import { ProbeEnrollmentModule } from './modules/probes/probe-enrollment.module';
 import { CheckerModule } from './modules/checker/checker.module';
 import { StateModule } from './modules/state/state.module';
 import { NotifierModule } from './modules/notifier/notifier.module';
@@ -147,6 +148,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         MonitorsModule,
         RulesModule,
         ProbesModule,
+        ProbeEnrollmentModule,
         CheckerModule,
         StateModule,
         NotifierModule,

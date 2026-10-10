@@ -100,7 +100,7 @@ async function bootstrap() {
         ignoreGlobalPrefix: false,
     });
     app.use(
-        '/reference',
+        '/api/docs',
         apiReference({
             content: document,
             localization: {
@@ -116,7 +116,7 @@ async function bootstrap() {
             `Application running on port http://localhost:${appConfig.port} with env ${appConfig.env}`,
         );
         logger.log(
-            `Swagger docs available at http://localhost:${appConfig.port}/reference`,
+            `Swagger docs available at http://localhost:${appConfig.port}/api/docs`,
         );
     });
 }

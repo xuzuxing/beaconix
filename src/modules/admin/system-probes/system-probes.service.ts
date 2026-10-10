@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { ProbeScope, ProbeStatus } from '../../../generated/prisma/enums';
 import { ProbeEntity } from '../../probes/entities';
+import { hashSecret, secretPrefixOf } from '../../probes/probe-secret.util';
 import { CreateSystemProbeDto, UpdateSystemProbeDto } from './dto';
 import { SystemProbeScheduler } from './system-probe-scheduler';
 
@@ -14,6 +15,8 @@ export class SystemProbesService {
     ) {}
 
     async create(dto: CreateSystemProbeDto): Promise<ProbeEntity> {
+        const secret = this.generateSecret();
+
         const probe = await this.prisma.probe.create({
             data: {
                 scope: ProbeScope.SYSTEM,
@@ -25,13 +28,18 @@ export class SystemProbesService {
                 enabled: dto.enabled ?? true,
                 maxTenants: dto.maxTenants ?? 0,
                 priority: dto.priority ?? 0,
-                secret: this.generateSecret(),
+                secrets: {
+                    create: {
+                        secretHash: hashSecret(secret),
+                        secretPrefix: secretPrefixOf(secret),
+                    },
+                },
             },
         });
 
         await this.systemProbeScheduler.rebalance();
 
-        return this.toEntity(probe);
+        return this.toEntity(probe, secret);
     }
 
     async findAll(): Promise<ProbeEntity[]> {
@@ -118,7 +126,6 @@ export class SystemProbesService {
         provider: string;
         region: string;
         callbackUrl: string;
-        secret: string;
         enabled: boolean;
         lastHeartbeat: Date | null;
         heartbeatIntervalSeconds: number | null;
@@ -127,7 +134,9 @@ export class SystemProbesService {
         priority: number;
         createdAt: Date;
         updatedAt: Date;
-    }): ProbeEntity {
+    },
+        secretPlaintext?: string,
+    ): ProbeEntity {
         return new ProbeEntity({
             id: probe.id,
             organizationId: probe.organizationId,
@@ -136,7 +145,7 @@ export class SystemProbesService {
             provider: probe.provider,
             region: probe.region,
             callbackUrl: probe.callbackUrl,
-            secret: probe.secret,
+            ...(secretPlaintext ? { secret: secretPlaintext } : {}),
             enabled: probe.enabled,
             lastHeartbeat: probe.lastHeartbeat,
             heartbeatIntervalSeconds: probe.heartbeatIntervalSeconds,

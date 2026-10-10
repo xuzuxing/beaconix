@@ -6,3 +6,8 @@ export * from './query-probe-results.dto';
 export * from './query-probe-executions.dto';
 export * from './answer-probe-validation.dto';
 export * from './probe-heartbeat.dto';
+export * from './device-authorization.dto';
+export * from './device-token.dto';
+export * from './approve-enrollment.dto';
+export * from './redeem-enrollment.dto';
+export * from './create-enroll-token.dto';

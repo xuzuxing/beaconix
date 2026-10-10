@@ -9,7 +9,7 @@
   <img src="https://shieldcn.dev/badge/TypeScript-6.0-3178C6.svg?logo=typescript&logoColor=white" alt="TypeScript 6.0" />
   <img src="https://shieldcn.dev/badge/Node.js-22-5FA04E.svg?logo=nodedotjs&logoColor=white" alt="Node.js 22" />
   <img src="https://shieldcn.dev/badge/Docker-ready-2496ED.svg?logo=docker&logoColor=white" alt="Docker ready" />
-  <a href="https://beacon-tmtz.onrender.com/api/docs"><img src="https://shieldcn.dev/badge/API_Docs-Swagger-85EA2D.svg?logo=swagger&logoColor=white" alt="API Docs" /></a>
+  <a href="https://getbeacon.dev/api/docs/api/docs"><img src="https://shieldcn.dev/badge/API_Docs-Swagger-85EA2D.svg?logo=swagger&logoColor=white" alt="API Docs" /></a>
 </p>
 
 ---
@@ -136,7 +136,7 @@ Managing agile workflows across distributed teams requires robust tooling: organ
 
 The full interactive API documentation is available at:
 
-**[https://beacon-tmtz.onrender.com/api/docs](https://beacon-tmtz.onrender.com/api/docs)**
+**[https://getbeacon.dev/api/docs/api/docs](https://getbeacon.dev/api/docs/api/docs)**
 
 > **Note:** This deployment uses a Render free-tier instance. The server spins down after inactivity, so the first request may take **50 seconds or more** to respond while the instance cold-starts.
 
@@ -440,10 +440,10 @@ beacon/
 ├── prisma/
 │   ├── schema.prisma                    # Database schema (35 models, 27 enums)
 │   └── migrations/                      # Prisma migration history
+├── probes/
+│   └── agent/                           # Probe agent CLI (zero deps) + SCF entry
 ├── scripts/
-│   ├── test-resend.ts                   # Resend integration test script
-│   ├── probe-agent.js                   # Long-running/local probe agent
-│   └── probe-agent-scf.js               # Tencent SCF probe entry
+│   └── test-resend.ts                   # Resend integration test script
 ├── src/
 │   ├── main.ts                          # Application bootstrap
 │   ├── app.module.ts                    # Root module

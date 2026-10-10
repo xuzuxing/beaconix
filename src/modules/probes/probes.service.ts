@@ -27,6 +27,7 @@ import type { ProbeModel } from '../../generated/prisma/models';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { QuotaService } from '../../shared/quota/quota.service';
 import { CheckerService } from '../checker/checker.service';
+import { hashSecret, secretPrefixOf } from './probe-secret.util';
 import {
     BindMonitorsDto,
     CreateProbeDto,
@@ -44,6 +45,12 @@ import {
 
 /** How many reported targets are folded into monitor state in parallel. */
 const PROBE_REPORT_CONCURRENCY = 5;
+
+/**
+ * Grace window during which a rotated secret keeps working alongside the new
+ * one, so a probe that has not yet picked up the new secret does not go dark.
+ */
+const PROBE_SECRET_ROTATION_GRACE_HOURS = 24;
 
 /** One reported target that was applied to a monitor. */
 export interface AppliedOutcome {
@@ -110,6 +117,8 @@ export class ProbesService implements OnModuleInit {
         await this.quotaService.assertFeatureAllowed(orgId, 'tenantProbe');
         await this.quotaService.assertCanCreate(orgId, 'probes');
 
+        const secret = this.generateSecret('tnt');
+
         const probe = await this.prisma.probe.create({
             data: {
                 organizationId: orgId,
@@ -119,11 +128,12 @@ export class ProbesService implements OnModuleInit {
                 region: dto.region,
                 callbackUrl: dto.callbackUrl,
                 enabled: dto.enabled ?? true,
-                secret: this.generateSecret('tnt'),
+                secrets: { create: this.secretRecord(secret) },
             },
         });
 
-        return this.toEntity(probe);
+        // The plaintext secret is handed back exactly once, on this response.
+        return this.toEntity(probe, secret);
     }
 
     async findAll(orgId: string): Promise<ProbeEntity[]> {
@@ -181,25 +191,42 @@ export class ProbesService implements OnModuleInit {
         await this.systemProbeScheduler.rebalance();
     }
 
+    /**
+     * Issues a new secret while the previous one keeps working for a grace
+     * window (smooth rotation): the probe stays online and picks up the new
+     * secret on its own schedule instead of being knocked offline.
+     */
     async rotateSecret(orgId: string, probeId: string): Promise<ProbeEntity> {
         await this.ensureProbeExists(orgId, probeId);
 
-        const probe = await this.prisma.probe.update({
-            where: { id: probeId },
-            data: {
-                secret: this.generateSecret('tnt'),
-                // The probe must call in again with the new secret.
-                status: ProbeStatus.OFFLINE,
-            },
-            include: {
-                monitors: { include: { monitor: { select: MONITOR_SELECT } } },
-                _count: { select: { results: true } },
-            },
+        const secret = this.generateSecret('tnt');
+        const graceDeadline = new Date(
+            Date.now() + PROBE_SECRET_ROTATION_GRACE_HOURS * 60 * 60 * 1000,
+        );
+
+        const probe = await this.prisma.$transaction(async (tx) => {
+            // Give the secrets currently in force an expiry rather than
+            // revoking them, so an un-updated probe keeps working meanwhile.
+            await tx.probeSecret.updateMany({
+                where: { probeId, revokedAt: null, expiresAt: null },
+                data: { expiresAt: graceDeadline },
+            });
+
+            return tx.probe.update({
+                where: { id: probeId },
+                data: { secrets: { create: this.secretRecord(secret) } },
+                include: {
+                    monitors: {
+                        include: { monitor: { select: MONITOR_SELECT } },
+                    },
+                    _count: { select: { results: true } },
+                },
+            });
         });
 
         await this.systemProbeScheduler.rebalance();
 
-        return this.toEntity(probe);
+        return this.toEntity(probe, secret);
     }
 
     async bindMonitors(
@@ -347,8 +374,18 @@ export class ProbesService implements OnModuleInit {
         secret: string,
         heartbeatIntervalSeconds?: number,
     ): Promise<ProbeHeartbeatResult> {
-        const probe = await this.requireProbeBySecret(secret);
+        const { probe, secretId } = await this.matchProbeSecret(secret);
         const cameOnline = probe.status !== ProbeStatus.ONLINE;
+
+        // Best-effort: record which credential is in use, so an operator can
+        // see a probe still calling in with a rotated-away secret. Never blocks
+        // the beat.
+        void this.prisma.probeSecret
+            .update({
+                where: { id: secretId },
+                data: { lastUsedAt: new Date() },
+            })
+            .catch(() => undefined);
 
         const updated = await this.prisma.probe.update({
             where: { id: probe.id },
@@ -626,6 +663,14 @@ export class ProbesService implements OnModuleInit {
         return `${prefix}_${randomBytes(32).toString('hex')}`;
     }
 
+    /** The stored form of a fresh secret — hash, plus a display prefix. */
+    private secretRecord(secret: string) {
+        return {
+            secretHash: hashSecret(secret),
+            secretPrefix: secretPrefixOf(secret),
+        };
+    }
+
     private async getAssignedSystemProbeMonitors(probeId: string) {
         const monitorIds =
             await this.systemProbeScheduler.getAssignedMonitorIds(probeId);
@@ -676,28 +721,84 @@ export class ProbesService implements OnModuleInit {
     }
 
     /**
-     * Resolves a probe from its shared secret. The secret column is unique, so
-     * the lookup itself rejects unknown secrets; missing headers are rejected
-     * before touching the database.
+     * Revokes the presented credential. When it was the probe's last usable
+     * secret the probe is taken offline so it stops looking healthy.
      */
-    private async requireProbeBySecret(secret: string | undefined) {
+    async revokeBySecret(secret: string | undefined) {
         if (!secret || secret.trim() === '') {
             throw new UnauthorizedException('Missing probe secret');
         }
 
-        const probe = await this.prisma.probe.findUnique({
-            where: { secret: secret.trim() },
+        const record = await this.prisma.probeSecret.findUnique({
+            where: { secretHash: hashSecret(secret.trim()) },
         });
-
-        if (!probe) {
+        if (!record || record.revokedAt) {
             throw new UnauthorizedException('Unknown probe secret');
         }
 
-        if (!probe.enabled) {
+        await this.prisma.probeSecret.update({
+            where: { id: record.id },
+            data: { revokedAt: new Date() },
+        });
+
+        const remaining = await this.prisma.probeSecret.count({
+            where: {
+                probeId: record.probeId,
+                revokedAt: null,
+                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+            },
+        });
+
+        if (remaining === 0) {
+            await this.prisma.probe.update({
+                where: { id: record.probeId },
+                data: { status: ProbeStatus.OFFLINE },
+            });
+        }
+
+        return {
+            ok: true,
+            probeId: record.probeId,
+            revokedSecretId: record.id,
+        };
+    }
+
+    /**
+     * Resolves a probe from its shared secret.
+     *
+     * Secrets are stored as sha256 hashes, so the lookup itself authenticates:
+     * an unknown secret simply finds no row. A rotated-away secret is rejected
+     * once its grace deadline passes; a revoked one is rejected immediately.
+     */
+    private async requireProbeBySecret(secret: string | undefined) {
+        const matched = await this.matchProbeSecret(secret);
+        return matched.probe;
+    }
+
+    /** Like {@link requireProbeBySecret} but also returns the credential id. */
+    private async matchProbeSecret(secret: string | undefined) {
+        if (!secret || secret.trim() === '') {
+            throw new UnauthorizedException('Missing probe secret');
+        }
+
+        const record = await this.prisma.probeSecret.findUnique({
+            where: { secretHash: hashSecret(secret.trim()) },
+            include: { probe: true },
+        });
+
+        if (!record || record.revokedAt) {
+            throw new UnauthorizedException('Unknown probe secret');
+        }
+
+        if (record.expiresAt && record.expiresAt.getTime() <= Date.now()) {
+            throw new UnauthorizedException('Probe secret has expired');
+        }
+
+        if (!record.probe.enabled) {
             throw new UnauthorizedException('Probe is disabled');
         }
 
-        return probe;
+        return { probe: record.probe, secretId: record.id };
     }
 
     private async ensureProbeExists(orgId: string, probeId: string) {
@@ -756,7 +857,6 @@ export class ProbesService implements OnModuleInit {
         provider: string;
         region: string;
         callbackUrl: string;
-        secret: string;
         enabled: boolean;
         lastHeartbeat: Date | null;
         heartbeatIntervalSeconds: number | null;
@@ -776,7 +876,9 @@ export class ProbesService implements OnModuleInit {
             };
         }>;
         _count?: { results: number };
-    }): ProbeEntity {
+    },
+        secretPlaintext?: string,
+    ): ProbeEntity {
         const monitors = (probe.monitors ?? [])
             .map((binding) => binding.monitor)
             .filter((monitor) => monitor.deletedAt === null)
@@ -799,7 +901,8 @@ export class ProbesService implements OnModuleInit {
             provider: probe.provider,
             region: probe.region,
             callbackUrl: probe.callbackUrl,
-            secret: probe.secret,
+            // Only present on the create/rotate response — never listed again.
+            ...(secretPlaintext ? { secret: secretPlaintext } : {}),
             enabled: probe.enabled,
             lastHeartbeat: probe.lastHeartbeat,
             heartbeatIntervalSeconds: probe.heartbeatIntervalSeconds,

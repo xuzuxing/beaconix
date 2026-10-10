@@ -942,7 +942,6 @@ model Probe {
   provider                 ProbeProvider
   region                   String
   callbackUrl              String
-  secret                   String        @unique
   enabled                  Boolean       @default(true)
   lastHeartbeat            DateTime?
   // 探针最近一次上报的心跳周期（秒）；离线阈值按它的倍数推导，null = 未上报过
@@ -958,11 +957,33 @@ model Probe {
   monitors     MonitorProbe[]
   results      ProbeResult[]
   executions   ProbeExecution[]
+  secrets      ProbeSecret[]
 
   @@index([scope])
   @@index([organizationId])
   @@index([enabled])
   @@map("probes")
+}
+
+// 探针凭据：哈希存储（sha256），支持平滑轮换——同一探针在一次轮换期间
+// 新旧 secret 并存，旧的在宽限期后由 expiresAt 自动失效。
+model ProbeSecret {
+  id           String    @id @default(cuid())
+  probeId      String
+  secretHash   String    @unique // sha256 hex of the raw secret
+  secretPrefix String // e.g. tnt_1a2b3c4d — for display only
+  // 宽限期截止：null = 不过期（当前有效）；轮换后的旧 secret 在此刻失效
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  probe Probe @relation(fields: [probeId], references: [id], onDelete: Cascade)
+
+  @@index([probeId])
+  @@index([revokedAt])
+  @@index([expiresAt])
+  @@map("probe_secrets")
 }
 
 // 监控-探针多对多

@@ -65,8 +65,7 @@ export class SystemProbesController {
     })
     @ApiParam({ name: 'id', description: 'Probe UUID' })
     @ApiOkResponse({
-        description:
-            '{ validationId, challenge: { iv, tag, data }, expiresAt, status }',
+        description: '{ validationId, expiresAt, status }',
     })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })

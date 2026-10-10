@@ -29,9 +29,13 @@
     "prisma:validate": "npx prisma validate",
     "admin:create": "tsx scripts/create-admin.ts",
     "test:resend": "ts-node scripts/test-resend.ts",
-    "probe:run": "node scripts/probe-agent.js run",
-    "probe:validate": "node scripts/probe-agent.js validate",
-    "probe:scf": "node scripts/probe-agent-scf.js"
+    "probe:cli": "node probes/agent/bin/beacon-probe.js",
+    "probe:login": "node probes/agent/bin/beacon-probe.js login",
+    "probe:run": "node probes/agent/bin/beacon-probe.js run",
+    "probe:validate": "node probes/agent/bin/beacon-probe.js validate",
+    "probe:status": "node probes/agent/bin/beacon-probe.js status",
+    "probe:stop": "node probes/agent/bin/beacon-probe.js stop",
+    "probe:scf": "node probes/agent/functions/scf.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

@@ -4,10 +4,30 @@ import {
     UnauthorizedException,
 } from '@nestjs/common';
 import { ProbesService } from './probes.service';
+import { hashSecret } from './probe-secret.util';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { CheckerService } from '../checker/checker.service';
 
-const probeRow = {
+const RAW_SECRET = 'secret-1';
+
+interface ProbeStub {
+    id: string;
+    organizationId: string | null;
+    scope: string;
+    name: string;
+    provider: string;
+    region: string;
+    callbackUrl: string;
+    enabled: boolean;
+    lastHeartbeat: Date | null;
+    status: string;
+    maxTenants: number;
+    priority: number;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
+const probeRow: ProbeStub = {
     id: 'probe-1',
     organizationId: 'org-1',
     scope: 'TENANT',
@@ -15,7 +35,6 @@ const probeRow = {
     provider: 'TENCENT',
     region: 'ap-northeast-1',
     callbackUrl: 'https://probe.example.com/callback',
-    secret: 'secret-1',
     enabled: true,
     lastHeartbeat: null,
     status: 'OFFLINE',
@@ -24,6 +43,18 @@ const probeRow = {
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
 };
+
+/** A credential row as `probeSecret.findUnique` returns it. */
+function secretMatch(probe: ProbeStub = probeRow) {
+    return {
+        id: 'secret-1',
+        probeId: probe.id,
+        secretHash: hashSecret(RAW_SECRET),
+        revokedAt: null as Date | null,
+        expiresAt: null as Date | null,
+        probe,
+    };
+}
 
 const monitorSummary = {
     id: 'monitor-1',
@@ -65,6 +96,12 @@ function createService() {
             delete: jest.fn(),
         },
         monitor: { findMany: jest.fn(), findFirst: jest.fn() },
+        probeSecret: {
+            findUnique: jest.fn(),
+            update: jest.fn().mockResolvedValue({}),
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        $transaction: jest.fn(),
     };
     const checkerService = {
         ingestProbeReport: jest.fn(),
@@ -120,7 +157,13 @@ describe('ProbesService', () => {
             const created = prisma.probe.create.mock.calls[0][0];
             expect(created.data.organizationId).toBe('org-1');
             expect(created.data.scope).toBe('TENANT');
-            expect(created.data.secret).toMatch(/^tnt_[0-9a-f]{64}$/);
+            // Stored as a hash, never the plaintext secret.
+            expect(created.data.secrets.create.secretHash).toMatch(
+                /^[0-9a-f]{64}$/,
+            );
+            expect(created.data.secrets.create.secretPrefix).toMatch(
+                /^tnt_[0-9a-f]{8}$/,
+            );
             expect(result.secret).toMatch(/^tnt_[0-9a-f]{64}$/);
             expect(result.monitors).toEqual([]);
         });
@@ -129,7 +172,7 @@ describe('ProbesService', () => {
     describe('recordHeartbeat', () => {
         it('marks a tenant probe online and returns directly bound monitors', async () => {
             const { service, prisma } = createService();
-            prisma.probe.findUnique.mockResolvedValue(probeRow);
+            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
             prisma.probe.update.mockResolvedValue({
                 ...probeRow,
                 status: 'ONLINE',
@@ -155,8 +198,9 @@ describe('ProbesService', () => {
 
             const result = await service.recordHeartbeat('secret-1');
 
-            expect(prisma.probe.findUnique).toHaveBeenCalledWith({
-                where: { secret: 'secret-1' },
+            expect(prisma.probeSecret.findUnique).toHaveBeenCalledWith({
+                where: { secretHash: hashSecret('secret-1') },
+                include: { probe: true },
             });
             expect(result.probe.status).toBe('ONLINE');
             expect(result.monitors).toEqual([
@@ -185,12 +229,13 @@ describe('ProbesService', () => {
 
         it('returns dynamically assigned monitors once a system probe comes online', async () => {
             const { service, prisma, systemProbeScheduler } = createService();
-            prisma.probe.findUnique.mockResolvedValue({
-                ...probeRow,
-                organizationId: null,
-                scope: 'SYSTEM',
-                secret: 'sys_secret',
-            });
+            prisma.probeSecret.findUnique.mockResolvedValue(
+                secretMatch({
+                    ...probeRow,
+                    organizationId: null,
+                    scope: 'SYSTEM',
+                }),
+            );
             prisma.probe.update.mockResolvedValue({
                 ...probeRow,
                 organizationId: null,
@@ -233,13 +278,14 @@ describe('ProbesService', () => {
 
         it('does not rebuild the assignment table on a steady-state heartbeat', async () => {
             const { service, prisma, systemProbeScheduler } = createService();
-            prisma.probe.findUnique.mockResolvedValue({
-                ...probeRow,
-                organizationId: null,
-                scope: 'SYSTEM',
-                secret: 'sys_secret',
-                status: 'ONLINE',
-            });
+            prisma.probeSecret.findUnique.mockResolvedValue(
+                secretMatch({
+                    ...probeRow,
+                    organizationId: null,
+                    scope: 'SYSTEM',
+                    status: 'ONLINE',
+                }),
+            );
             prisma.probe.update.mockResolvedValue({
                 ...probeRow,
                 organizationId: null,
@@ -261,12 +307,12 @@ describe('ProbesService', () => {
             await expect(service.recordHeartbeat('')).rejects.toThrow(
                 UnauthorizedException,
             );
-            expect(prisma.probe.findUnique).not.toHaveBeenCalled();
+            expect(prisma.probeSecret.findUnique).not.toHaveBeenCalled();
         });
 
         it('rejects an unknown secret', async () => {
             const { service, prisma } = createService();
-            prisma.probe.findUnique.mockResolvedValue(null);
+            prisma.probeSecret.findUnique.mockResolvedValue(null);
 
             await expect(service.recordHeartbeat('nope')).rejects.toThrow(
                 UnauthorizedException,
@@ -275,10 +321,9 @@ describe('ProbesService', () => {
 
         it('rejects a disabled probe', async () => {
             const { service, prisma } = createService();
-            prisma.probe.findUnique.mockResolvedValue({
-                ...probeRow,
-                enabled: false,
-            });
+            prisma.probeSecret.findUnique.mockResolvedValue(
+                secretMatch({ ...probeRow, enabled: false }),
+            );
 
             await expect(service.recordHeartbeat('secret-1')).rejects.toThrow(
                 UnauthorizedException,
@@ -289,7 +334,7 @@ describe('ProbesService', () => {
     describe('recordResults', () => {
         it('stores raw results and folds them into monitor state', async () => {
             const { service, prisma, checkerService } = createService();
-            prisma.probe.findUnique.mockResolvedValue(probeRow);
+            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
             prisma.probeResult.createMany.mockResolvedValue({ count: 2 });
             prisma.probe.update.mockResolvedValue(probeRow);
             checkerService.ingestProbeReport
@@ -390,7 +435,7 @@ describe('ProbesService', () => {
 
         it('collapses duplicated targets before folding them into state', async () => {
             const { service, prisma, checkerService } = createService();
-            prisma.probe.findUnique.mockResolvedValue(probeRow);
+            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
             prisma.probeResult.createMany.mockResolvedValue({ count: 2 });
             prisma.probe.update.mockResolvedValue(probeRow);
             checkerService.ingestProbeReport.mockResolvedValue({
@@ -427,13 +472,14 @@ describe('ProbesService', () => {
 
         it('rebalances when a system probe reports before its first heartbeat', async () => {
             const { service, prisma, systemProbeScheduler } = createService();
-            prisma.probe.findUnique.mockResolvedValue({
-                ...probeRow,
-                organizationId: null,
-                scope: 'SYSTEM',
-                secret: 'sys_secret',
-                status: 'OFFLINE',
-            });
+            prisma.probeSecret.findUnique.mockResolvedValue(
+                secretMatch({
+                    ...probeRow,
+                    organizationId: null,
+                    scope: 'SYSTEM',
+                    status: 'OFFLINE',
+                }),
+            );
             prisma.probeResult.createMany.mockResolvedValue({ count: 1 });
             prisma.probe.update.mockResolvedValue(probeRow);
             systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([]);
@@ -452,12 +498,13 @@ describe('ProbesService', () => {
         it('applies system probe results only to assigned monitors', async () => {
             const { service, prisma, checkerService, systemProbeScheduler } =
                 createService();
-            prisma.probe.findUnique.mockResolvedValue({
-                ...probeRow,
-                organizationId: null,
-                scope: 'SYSTEM',
-                secret: 'sys_secret',
-            });
+            prisma.probeSecret.findUnique.mockResolvedValue(
+                secretMatch({
+                    ...probeRow,
+                    organizationId: null,
+                    scope: 'SYSTEM',
+                }),
+            );
             prisma.probeResult.createMany.mockResolvedValue({ count: 1 });
             prisma.probe.update.mockResolvedValue(probeRow);
             systemProbeScheduler.getAssignedMonitorIds.mockResolvedValue([

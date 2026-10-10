@@ -48,11 +48,12 @@ export class ProbeEntity {
     @ApiProperty({ example: 'https://probe.example.com/beacon/callback' })
     callbackUrl: string;
 
-    @ApiProperty({
-        example: 'a1b2c3...',
-        description: 'Shared secret the probe must send as x-probe-secret',
+    @ApiPropertyOptional({
+        example: 'tnt_1a2b3c4d...',
+        description:
+            'Shared secret the probe sends as x-probe-secret. Returned ONLY on the create and rotate responses — never on subsequent reads.',
     })
-    secret: string;
+    secret?: string;
 
     @ApiProperty({ example: true })
     enabled: boolean;

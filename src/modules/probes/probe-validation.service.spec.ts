@@ -2,6 +2,7 @@ import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import {
     createCipheriv,
     createDecipheriv,
+    createHash,
     hkdfSync,
     randomBytes,
 } from 'node:crypto';
@@ -10,24 +11,38 @@ import type { PrismaService } from '../../infra/database/prisma.service';
 import type { RedisService } from '../../infra/redis/redis.service';
 
 const VALIDATION_INFO = 'beacon-probe-validation-v1';
+const RAW_SECRET = 'tnt_good';
 
-const probeRow = {
-    id: 'probe-1',
-    secret: 'tnt_good',
-    enabled: true,
-};
+function hashSecret(secret: string): string {
+    return createHash('sha256').update(secret, 'utf8').digest('hex');
+}
 
-function deriveKey(token: string): Buffer {
+/**
+ * The backend only stores sha256(secret), so both it and the probe key the
+ * challenge off the hash — never the plaintext.
+ */
+function deriveKey(secretHash: string): Buffer {
     return Buffer.from(
         hkdfSync(
             'sha256',
-            Buffer.from(token, 'utf8'),
+            Buffer.from(secretHash, 'utf8'),
             Buffer.alloc(0),
             Buffer.from(VALIDATION_INFO, 'utf8'),
             32,
         ),
     );
 }
+
+const probeRow = { id: 'probe-1' };
+
+const secretRow = {
+    id: 'secret-1',
+    probeId: 'probe-1',
+    secretHash: hashSecret(RAW_SECRET),
+    revokedAt: null as Date | null,
+    expiresAt: null as Date | null,
+    probe: { id: 'probe-1', enabled: true },
+};
 
 function encryptJson(key: Buffer, value: unknown) {
     const iv = randomBytes(12);
@@ -64,12 +79,23 @@ function decryptJson(
     return JSON.parse(plaintext.toString('utf8'));
 }
 
+function pendingValidation() {
+    return {
+        probeId: 'probe-1',
+        nonce: 'nonce-123',
+        issuedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+}
+
 function createService() {
     const prisma = {
         probe: {
-            findUnique: jest.fn(),
             findFirst: jest.fn(),
             update: jest.fn(),
+        },
+        probeSecret: {
+            findUnique: jest.fn(),
         },
         probeExecution: {
             create: jest.fn(),
@@ -91,7 +117,7 @@ function createService() {
 
 describe('ProbeValidationService', () => {
     describe('triggerForTenant', () => {
-        it('creates an encrypted challenge and stores it in Redis', async () => {
+        it('records a pending challenge without encrypting it up front', async () => {
             const { service, prisma, redis } = createService();
             prisma.probe.findFirst.mockResolvedValue(probeRow);
 
@@ -103,11 +129,15 @@ describe('ProbeValidationService', () => {
                     organizationId: 'org-1',
                     scope: 'TENANT',
                 },
-                select: { id: true, secret: true, enabled: true },
+                select: { id: true },
             });
-            expect(result.validationId).toBe('probe-1');
-            expect(result.status).toBe('PENDING');
-            expect(result.expiresAt).toEqual(expect.any(String));
+            // No challenge in the trigger response: it is only produced when the
+            // probe pulls, keyed by whichever secret it presents.
+            expect(result).toEqual({
+                validationId: 'probe-1',
+                expiresAt: expect.any(String),
+                status: 'PENDING',
+            });
             expect(redis.setJson).toHaveBeenCalledWith(
                 'probe:validation:probe-1',
                 expect.objectContaining({
@@ -116,13 +146,6 @@ describe('ProbeValidationService', () => {
                 }),
                 120,
             );
-
-            const plaintext = decryptJson(
-                deriveKey('tnt_good'),
-                result.challenge,
-            ) as { nonce: string; issuedAt: string };
-            expect(plaintext.nonce).toHaveLength(64);
-            expect(Number.isNaN(Date.parse(plaintext.issuedAt))).toBe(false);
         });
 
         it('throws when the tenant probe is not found', async () => {
@@ -136,21 +159,16 @@ describe('ProbeValidationService', () => {
     });
 
     describe('pullForSecret', () => {
-        it('returns a decryptable challenge for a pending validation', async () => {
+        it('returns a challenge keyed by the presented secret hash', async () => {
             const { service, prisma, redis } = createService();
-            prisma.probe.findUnique.mockResolvedValue(probeRow);
-            redis.getJson.mockResolvedValue({
-                probeId: 'probe-1',
-                nonce: 'nonce-123',
-                issuedAt: new Date().toISOString(),
-                expiresAt: new Date(Date.now() + 60_000).toISOString(),
-            });
+            prisma.probeSecret.findUnique.mockResolvedValue(secretRow);
+            redis.getJson.mockResolvedValue(pendingValidation());
 
-            const result = await service.pullForSecret('tnt_good');
+            const result = await service.pullForSecret(RAW_SECRET);
 
-            expect(prisma.probe.findUnique).toHaveBeenCalledWith({
-                where: { secret: 'tnt_good' },
-                select: { id: true, secret: true, enabled: true },
+            expect(prisma.probeSecret.findUnique).toHaveBeenCalledWith({
+                where: { secretHash: hashSecret(RAW_SECRET) },
+                include: { probe: { select: { id: true, enabled: true } } },
             });
             expect(result).toMatchObject({
                 validation: {
@@ -159,38 +177,59 @@ describe('ProbeValidationService', () => {
                 },
             });
 
+            const challenge = (
+                result as {
+                    validation: {
+                        challenge: { iv: string; tag: string; data: string };
+                    };
+                }
+            ).validation.challenge;
             const plaintext = decryptJson(
-                deriveKey('tnt_good'),
-                (
-                    result as {
-                        validation: {
-                            challenge: {
-                                iv: string;
-                                tag: string;
-                                data: string;
-                            };
-                        };
-                    }
-                ).validation.challenge,
+                deriveKey(hashSecret(RAW_SECRET)),
+                challenge,
             ) as { nonce: string };
             expect(plaintext.nonce).toBe('nonce-123');
         });
 
         it('returns null when no validation is pending', async () => {
             const { service, prisma, redis } = createService();
-            prisma.probe.findUnique.mockResolvedValue(probeRow);
+            prisma.probeSecret.findUnique.mockResolvedValue(secretRow);
             redis.getJson.mockResolvedValue(null);
 
-            await expect(service.pullForSecret('tnt_good')).resolves.toEqual({
+            await expect(service.pullForSecret(RAW_SECRET)).resolves.toEqual({
                 validation: null,
             });
         });
 
         it('rejects an unknown secret', async () => {
             const { service, prisma } = createService();
-            prisma.probe.findUnique.mockResolvedValue(null);
+            prisma.probeSecret.findUnique.mockResolvedValue(null);
 
             await expect(service.pullForSecret('nope')).rejects.toThrow(
+                UnauthorizedException,
+            );
+        });
+
+        it('rejects a secret whose rotation grace window has passed', async () => {
+            const { service, prisma } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue({
+                ...secretRow,
+                expiresAt: new Date(Date.now() - 1000),
+            });
+
+            await expect(service.pullForSecret(RAW_SECRET)).rejects.toThrow(
+                'Probe secret has expired',
+            );
+        });
+
+        it('rejects a revoked secret', async () => {
+            const { service, prisma } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue({
+                ...secretRow,
+                revokedAt: new Date(),
+            });
+
+            await expect(service.pullForSecret(RAW_SECRET)).rejects.toThrow(
                 UnauthorizedException,
             );
         });
@@ -199,22 +238,17 @@ describe('ProbeValidationService', () => {
     describe('answerForSecret', () => {
         it('verifies the encrypted answer and marks the probe online', async () => {
             const { service, prisma, redis } = createService();
-            prisma.probe.findUnique.mockResolvedValue(probeRow);
+            prisma.probeSecret.findUnique.mockResolvedValue(secretRow);
             prisma.probe.update.mockResolvedValue(probeRow);
-            redis.getJson.mockResolvedValue({
-                probeId: 'probe-1',
-                nonce: 'nonce-123',
-                issuedAt: new Date().toISOString(),
-                expiresAt: new Date(Date.now() + 60_000).toISOString(),
-            });
+            redis.getJson.mockResolvedValue(pendingValidation());
 
-            const answer = encryptJson(deriveKey('tnt_good'), {
+            const answer = encryptJson(deriveKey(hashSecret(RAW_SECRET)), {
                 nonce: 'nonce-123',
                 answeredAt: new Date().toISOString(),
             });
 
             const result = await service.answerForSecret(
-                'tnt_good',
+                RAW_SECRET,
                 'probe-1',
                 answer,
             );
@@ -248,36 +282,34 @@ describe('ProbeValidationService', () => {
 
         it('rejects a nonce mismatch', async () => {
             const { service, prisma, redis } = createService();
-            prisma.probe.findUnique.mockResolvedValue(probeRow);
+            prisma.probeSecret.findUnique.mockResolvedValue(secretRow);
             redis.getJson.mockResolvedValue({
-                probeId: 'probe-1',
+                ...pendingValidation(),
                 nonce: 'expected-nonce',
-                issuedAt: new Date().toISOString(),
-                expiresAt: new Date(Date.now() + 60_000).toISOString(),
             });
 
-            const answer = encryptJson(deriveKey('tnt_good'), {
+            const answer = encryptJson(deriveKey(hashSecret(RAW_SECRET)), {
                 nonce: 'wrong-nonce',
                 answeredAt: new Date().toISOString(),
             });
 
             await expect(
-                service.answerForSecret('tnt_good', 'probe-1', answer),
+                service.answerForSecret(RAW_SECRET, 'probe-1', answer),
             ).rejects.toThrow(BadRequestException);
         });
 
         it('rejects when no challenge is pending', async () => {
             const { service, prisma, redis } = createService();
-            prisma.probe.findUnique.mockResolvedValue(probeRow);
+            prisma.probeSecret.findUnique.mockResolvedValue(secretRow);
             redis.getJson.mockResolvedValue(null);
 
-            const answer = encryptJson(deriveKey('tnt_good'), {
+            const answer = encryptJson(deriveKey(hashSecret(RAW_SECRET)), {
                 nonce: 'nonce',
                 answeredAt: new Date().toISOString(),
             });
 
             await expect(
-                service.answerForSecret('tnt_good', 'probe-1', answer),
+                service.answerForSecret(RAW_SECRET, 'probe-1', answer),
             ).rejects.toThrow(
                 'Validation challenge not found or already answered',
             );
