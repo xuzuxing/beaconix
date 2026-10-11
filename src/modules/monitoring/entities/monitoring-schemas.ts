@@ -1,4 +1,5 @@
 import { ApiProperty, type ApiPropertyOptions } from '@nestjs/swagger';
+import { MonitorType } from '../../../generated/prisma/enums';
 
 type SchemaObject = Exclude<
     NonNullable<ApiPropertyOptions['items']>,
@@ -99,7 +100,7 @@ export const sparklineSchema: SchemaObject = object(
 export const distributionSchema: SchemaObject = object({
     protocols: array(
         object({
-            type: { type: 'string', enum: ['HTTP', 'TCP'] },
+            type: { type: 'string', enum: Object.values(MonitorType) },
             count: integer,
         }),
     ),
@@ -130,7 +131,7 @@ export const slowSchema: SchemaObject = array(
         id: string,
         name: string,
         target: string,
-        type: { type: 'string', enum: ['HTTP', 'TCP'] },
+        type: { type: 'string', enum: Object.values(MonitorType) },
         avgLatencyMs: number,
         p95LatencyMs: number,
         uptimePercent: number,

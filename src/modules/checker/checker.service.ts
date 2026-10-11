@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+    BadRequestException,
+    Injectable,
+    Logger,
+    NotFoundException,
+} from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import { PrismaService } from '../../infra/database/prisma.service';
 import {
@@ -17,7 +22,9 @@ import { SystemProbeScheduler } from '../admin/system-probes/system-probe-schedu
 import { RuleEvaluatorService } from '../rules/rule-evaluator.service';
 import { RuleGroupsService } from '../rules/rule-groups.service';
 import type { RuleContext, RuleNode } from '../rules/types';
-import { HttpChecker, TcpChecker } from './checkers';
+import { CheckerRegistry } from './checker.registry';
+import { QuotaService } from '../../shared/quota/quota.service';
+import type { MonitorPolicy } from '../../shared/quota/quota.service';
 import type { CheckResult, ProbeReport } from './checkers';
 import { QueryCheckLogsDto } from './dto';
 import { CheckLogEntity } from './entities';
@@ -71,6 +78,7 @@ export interface CheckExecution extends CheckResult {
     status: string;
     changed: boolean;
     notified: NotificationResult;
+    applied: boolean;
 }
 
 /** A monitor plus the state fields the due check needs. */
@@ -99,8 +107,8 @@ export class CheckerService {
         private readonly prisma: PrismaService,
         private readonly stateService: StateService,
         private readonly notifierService: NotifierService,
-        private readonly httpChecker: HttpChecker,
-        private readonly tcpChecker: TcpChecker,
+        private readonly registry: CheckerRegistry,
+        private readonly quotaService: QuotaService,
         private readonly systemProbeScheduler: SystemProbeScheduler,
         private readonly ruleEvaluator: RuleEvaluatorService,
         private readonly ruleGroups: RuleGroupsService,
@@ -118,6 +126,16 @@ export class CheckerService {
         if (!monitor) {
             throw new NotFoundException('Monitor not found');
         }
+        if (!monitor.enabled)
+            throw new BadRequestException('Monitor is paused');
+        await this.quotaService.assertMonitorTypeAllowed(
+            monitor.organizationId,
+            monitor.type,
+        );
+        await this.quotaService.assertIntervalAllowed(
+            monitor.organizationId,
+            monitor.interval,
+        );
 
         return this.execute(
             monitor,
@@ -162,7 +180,13 @@ export class CheckerService {
             },
         });
 
-        if (!monitor) return null;
+        if (!monitor || !this.acceptsLegacyProbe(monitor)) return null;
+        const eligibility = await this.quotaService.monitorEligibility(
+            monitor.organizationId,
+            monitor.type,
+            monitor.interval,
+        );
+        if (!eligibility.eligible) return null;
 
         const localLog = await this.prisma.checkLog.findFirst({
             where: {
@@ -174,6 +198,13 @@ export class CheckerService {
         });
 
         if (!localLog) return null;
+        if (
+            localLog.evaluated === false ||
+            (localLog.revision !== undefined &&
+                localLog.revision !== monitor.revision) ||
+            localLog.failureKind === 'ASSERTION'
+        )
+            return null;
 
         // Reports inside one round are folded once. The raw ProbeResult rows are
         // already stored, so the next local check still aggregates all of them -
@@ -199,7 +230,8 @@ export class CheckerService {
                 success: localLog.localSuccess ?? localLog.success,
                 latency: localLog.latency,
                 error: localLog.error,
-                checkedAt: report.checkedAt ?? new Date(),
+                // Legacy agent clocks are not trusted for local state ordering.
+                checkedAt: new Date(),
                 statusCode: report.statusCode ?? localLog.statusCode ?? null,
                 configRevision: report.configRevision,
                 observationId: report.observationId,
@@ -234,12 +266,31 @@ export class CheckerService {
             include: { state: { select: { lastLocalCheckAt: true } } },
         });
 
-        return monitors.filter((monitor) =>
+        const due = monitors.filter((monitor) =>
             this.isDue(
                 monitor.interval,
                 monitor.state?.lastLocalCheckAt ?? null,
             ),
         );
+        const cache = new Map<string, Promise<MonitorPolicy>>();
+        const eligibility = await Promise.all(
+            due.map((monitor) => {
+                const key = monitor.organizationId;
+                if (!cache.has(key))
+                    cache.set(key, this.quotaService.getMonitorPolicy(key));
+                return cache
+                    .get(key)!
+                    .then((policy) =>
+                        this.quotaService.monitorEligibility(
+                            key,
+                            monitor.type,
+                            monitor.interval,
+                            policy,
+                        ),
+                    );
+            }),
+        );
+        return due.filter((_, index) => eligibility[index].eligible);
     }
 
     /**
@@ -292,6 +343,12 @@ export class CheckerService {
         });
 
         if (!monitor) return null;
+        const eligibility = await this.quotaService.monitorEligibility(
+            monitor.organizationId,
+            monitor.type,
+            monitor.interval,
+        );
+        if (!eligibility.eligible) return null;
 
         return this.execute(
             monitor,
@@ -362,48 +419,75 @@ export class CheckerService {
         // Rule tree only produces a verdict (matched = abnormal); it is stored
         // on the CheckLog row below, then the availability alert consumes it.
         const ruleOutcome = await this.evaluateRuleTree(monitor, result);
-
-        const { transition, deliveries } = await this.stateService.record(
-            monitor.id,
-            {
-                success: result.success,
-                latency: result.latency,
-                error: result.error,
-                source,
-                checkedAt: result.checkedAt,
-                ssl: result.ssl,
-                localSuccess: localResult.success,
-                rescuedByProbe,
-                statusCode:
-                    source === CheckSource.LOCAL
-                        ? (localResult.statusCode ?? null)
-                        : (result.statusCode ?? null),
-                configRevision:
-                    reported?.configRevision ?? monitor.configRevision,
-                observationId: reported?.observationId,
-                probeResultId: reported?.probeResultId,
-                serviceVerdict:
-                    result.serviceVerdict ?? localResult.serviceVerdict,
-                localServiceVerdict: localResult.serviceVerdict,
-                sslVerdict:
-                    source === CheckSource.LOCAL
-                        ? localResult.sslVerdict
-                        : 'NO_EVIDENCE',
-                failureReason: localResult.failureReason,
-                ruleMatched: ruleOutcome.ruleMatched,
-                ruleGroupIds: ruleOutcome.ruleGroupIds,
-                ruleEvidence: ruleOutcome.ruleEvidence,
-                probeRoundWindowMs:
-                    source === CheckSource.PROBE
-                        ? probeReportDedupWindowMs(monitor.interval)
-                        : undefined,
-            },
+        // A plan can expire while a slow network operation is in flight.
+        const eligibility = await this.quotaService.monitorEligibility(
+            monitor.organizationId,
+            monitor.type,
+            monitor.interval,
         );
+        if (!eligibility.eligible) {
+            return {
+                ...result,
+                evaluated: false,
+                applied: false,
+                failureKind: 'POLICY',
+                error: eligibility.reason,
+                monitorId: monitor.id,
+                previousStatus: 'UNKNOWN',
+                status: 'UNKNOWN',
+                changed: false,
+                notified: { skipped: true, sent: 0, failed: 0 },
+            };
+        }
 
-        // Alert condition: aggregate the stored rule verdicts into an
-        // availability percentage and consecutive-failure count, then alert
-        // when both cross their thresholds. Runs before the transition
-        // notification.
+        const recorded = await this.stateService.record(monitor.id, {
+            success: result.success,
+            latency: result.latency,
+            error: result.error,
+            source,
+            checkedAt: result.checkedAt,
+            ssl: result.ssl,
+            localSuccess: localResult.success,
+            rescuedByProbe,
+            statusCode: result.statusCode ?? null,
+            configRevision: reported?.configRevision ?? monitor.configRevision,
+            observationId: reported?.observationId,
+            probeResultId: reported?.probeResultId,
+            serviceVerdict: result.serviceVerdict ?? localResult.serviceVerdict,
+            localServiceVerdict: localResult.serviceVerdict,
+            sslVerdict:
+                source === CheckSource.LOCAL
+                    ? localResult.sslVerdict
+                    : 'NO_EVIDENCE',
+            failureReason: localResult.failureReason,
+            ruleMatched: ruleOutcome.ruleMatched,
+            ruleGroupIds: ruleOutcome.ruleGroupIds,
+            ruleEvidence: ruleOutcome.ruleEvidence,
+            probeRoundWindowMs:
+                source === CheckSource.PROBE
+                    ? probeReportDedupWindowMs(monitor.interval)
+                    : undefined,
+            revision: monitor.revision,
+            evaluated: result.evaluated !== false,
+            failureKind: result.failureKind ?? null,
+            meta: result.meta,
+        });
+        if (!recorded) {
+            return {
+                ...result,
+                evaluated: false,
+                applied: false,
+                error: 'Result discarded: monitor changed while check was running',
+                monitorId: monitor.id,
+                previousStatus: 'UNKNOWN',
+                status: 'UNKNOWN',
+                changed: false,
+                notified: { skipped: true, sent: 0, failed: 0 },
+            };
+        }
+        const { transition, deliveries } = recorded;
+
+        // State recording writes alert deliveries into the transactional outbox.
         const notified = {
             skipped: !deliveries,
             sent: deliveries ?? 0,
@@ -429,6 +513,7 @@ export class CheckerService {
             status: transition.status,
             changed: transition.changed,
             notified,
+            applied: true,
         };
     }
 
@@ -445,15 +530,20 @@ export class CheckerService {
                     monitorId: monitor.id,
                     target: monitor.target,
                     trigger,
-                    status: result.success
-                        ? ExecutionStatus.SUCCESS
-                        : ExecutionStatus.FAILED,
+                    status:
+                        result.evaluated === false
+                            ? ExecutionStatus.SKIPPED
+                            : result.success
+                              ? ExecutionStatus.SUCCESS
+                              : ExecutionStatus.FAILED,
                     success: result.success,
                     latency: result.latency,
                     error: result.error,
                     requestMeta: {
                         source: CheckSource.LOCAL,
                         monitorType: monitor.type,
+                        revision: monitor.revision,
+                        configVersion: monitor.configVersion,
                     },
                     responseMeta,
                     executedAt: result.checkedAt,
@@ -467,28 +557,21 @@ export class CheckerService {
     }
 
     private async probe(monitor: MonitorModel): Promise<CheckResult> {
-        if (monitor.type === MonitorType.HTTP) {
-            return this.httpChecker.check(
-                monitor.target,
-                monitor.timeout,
-                monitor.expectedStatus,
-                {
-                    checkSsl: monitor.checkSsl,
-                    sslExpiryThreshold: monitor.sslExpiryThreshold,
-                },
-            );
-        }
+        return this.registry.check(monitor);
+    }
 
-        if (monitor.type === MonitorType.TCP) {
-            return this.tcpChecker.check(monitor.target, monitor.timeout);
-        }
-
-        return {
-            success: false,
-            latency: 0,
-            error: `Unsupported monitor type "${String(monitor.type)}"`,
-            checkedAt: new Date(),
-        };
+    private acceptsLegacyProbe(monitor: MonitorModel): boolean {
+        return (
+            [MonitorType.HTTP, MonitorType.TCP].includes(
+                monitor.type as 'HTTP' | 'TCP',
+            ) &&
+            (!monitor.checkSsl || monitor.configRevision !== undefined) &&
+            !!monitor.config &&
+            typeof monitor.config === 'object' &&
+            !Array.isArray(monitor.config) &&
+            Object.keys(monitor.config).length === 0 &&
+            (monitor.revision === 1 || monitor.configRevision !== undefined)
+        );
     }
 
     private async evaluateResult(
@@ -496,6 +579,13 @@ export class CheckerService {
         localResult: CheckResult,
     ): Promise<EvaluatedResult> {
         if (localResult.success) {
+            return { result: localResult, rescuedByProbe: false };
+        }
+        if (
+            !this.acceptsLegacyProbe(monitor) ||
+            localResult.evaluated === false ||
+            localResult.failureKind === 'ASSERTION'
+        ) {
             return { result: localResult, rescuedByProbe: false };
         }
 
@@ -572,9 +662,11 @@ export class CheckerService {
             }
             return {
                 result: {
+                    ...localResult,
                     success: true,
                     latency: localResult.latency,
                     error: null,
+                    failureKind: null,
                     checkedAt: localResult.checkedAt,
                     serviceVerdict: 'SUCCESS',
                 },

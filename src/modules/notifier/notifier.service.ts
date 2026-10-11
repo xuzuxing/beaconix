@@ -181,7 +181,20 @@ export class NotifierService {
     async deliver(
         channelId: string,
         payload: NotificationPayload,
-    ): Promise<void> {
+    ): Promise<boolean> {
+        if (payload.monitorRevision !== undefined) {
+            const monitor = await this.prisma.monitor.findFirst({
+                where: {
+                    id: payload.monitorId,
+                    revision: payload.monitorRevision,
+                    organizationId: payload.organizationId,
+                    enabled: true,
+                    deletedAt: null,
+                },
+                select: { id: true },
+            });
+            if (!monitor) return false;
+        }
         const channel = await this.prisma.notificationChannel.findUnique({
             where: { id: channelId },
         });
@@ -198,6 +211,7 @@ export class NotifierService {
                 NotificationStatus.SUCCESS,
                 null,
             );
+            return true;
         } catch (error) {
             const message = (error as Error).message;
             this.logger.warn(
@@ -292,10 +306,15 @@ export class NotifierService {
                     return null;
                 }
             }
+            const planned = delivery.payload as unknown as NotificationPayload;
             const suppressed =
                 !monitor ||
                 !!monitor.deletedAt ||
                 !monitor.enabled ||
+                (planned.monitorRevision !== undefined &&
+                    planned.monitorRevision !== monitor.revision) ||
+                (planned.monitorConfigRevision !== undefined &&
+                    planned.monitorConfigRevision !== monitor.configRevision) ||
                 (delivery.event.kind === 'SSL' && !monitor.checkSsl) ||
                 (delivery.event.kind === 'AVAILABILITY' &&
                     !monitor.availabilityEnabled);
@@ -476,6 +495,7 @@ export class NotifierService {
 
         const payload: NotificationPayload = {
             monitorId: monitor.id,
+            monitorRevision: monitor.revision,
             monitorName: monitor.name,
             monitorType: monitor.type,
             target: monitor.target,
@@ -607,6 +627,7 @@ export class NotifierService {
     ): NotificationPayload {
         return {
             monitorId: monitor.id,
+            monitorRevision: monitor.revision,
             monitorName: monitor.name,
             monitorType: monitor.type,
             target: monitor.target,

@@ -5,6 +5,7 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: true
   prisma: true
+  protobufjs: false
   unrs-resolver: true
 
 minimumReleaseAgeExclude:

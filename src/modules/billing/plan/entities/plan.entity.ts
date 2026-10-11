@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MonitorType } from '../../../../generated/prisma/enums';
 
 export class PlanEntity {
+    @ApiProperty({ enum: MonitorType, isArray: true })
+    allowedMonitorTypes: MonitorType[];
     @ApiProperty({ example: 'uuid-plan' })
     id: string;
 

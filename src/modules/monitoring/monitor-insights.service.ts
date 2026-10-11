@@ -116,14 +116,14 @@ export class MonitorInsightsService {
                 const sampleFrom = later(existedFrom, availableFrom);
                 const [totals] = await tx.$queryRaw<Metrics[]>`
                 SELECT ${metricsSql} FROM check_logs WHERE "projectId" = ${projectId}
-                AND "monitorId" = ${monitorId} AND source = 'LOCAL'
+                AND "monitorId" = ${monitorId} AND source = 'LOCAL' AND evaluated = true
                 AND "checkedAt" >= ${sampleFrom} AND "checkedAt" < ${asOf}`;
                 const groups = await tx.$queryRaw<
                     (Metrics & { key: number })[]
                 >`
                 SELECT floor((extract(epoch FROM "checkedAt") * 1000 - ${first}::float8) / ${step}::float8)::integer AS key,
                 ${metricsSql} FROM check_logs WHERE "projectId" = ${projectId}
-                AND "monitorId" = ${monitorId} AND source = 'LOCAL'
+                AND "monitorId" = ${monitorId} AND source = 'LOCAL' AND evaluated = true
                 AND "checkedAt" >= ${sampleFrom} AND "checkedAt" < ${asOf} GROUP BY key`;
                 const byKey = new Map(groups.map((row) => [row.key, row]));
                 const total = totals ?? empty;
@@ -173,6 +173,7 @@ export class MonitorInsightsService {
                         projectId,
                         monitorId,
                         source: 'LOCAL',
+                        evaluated: true,
                         checkedAt: { gte: sampleFrom, lt: asOf },
                     },
                     orderBy: [{ checkedAt: 'desc' }, { id: 'desc' }],

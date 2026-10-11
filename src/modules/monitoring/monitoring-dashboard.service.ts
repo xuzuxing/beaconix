@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Temporal } from '@js-temporal/polyfill';
 import { Prisma } from '../../generated/prisma/client';
+import { MonitorType } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { MultiLevelCacheService } from '../../infra/cache/multi-level-cache.service';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
@@ -121,7 +122,7 @@ export class MonitoringDashboardService {
         const rows = await tx.$queryRaw<
             Metrics[]
         >`SELECT ${aggregate} FROM check_logs
-            WHERE "projectId" = ${projectId} AND source = 'LOCAL'
+            WHERE "projectId" = ${projectId} AND source = 'LOCAL' AND evaluated = true
             AND "checkedAt" >= ${from} AND "checkedAt" < ${to}`;
         return rows[0] ?? EMPTY;
     }
@@ -141,7 +142,7 @@ export class MonitoringDashboardService {
             floor((extract(epoch FROM "checkedAt") * 1000 - ${first}::float8) / ${step}::float8)::integer AS key,
             ${monitorIds ? Prisma.sql`"monitorId"` : Prisma.sql`''::text`} AS "monitorId",
             ${aggregate} FROM check_logs WHERE "projectId" = ${projectId}
-            AND source = 'LOCAL' AND "checkedAt" >= ${from} AND "checkedAt" < ${to}
+            AND source = 'LOCAL' AND evaluated = true AND "checkedAt" >= ${from} AND "checkedAt" < ${to}
             ${monitorIds ? Prisma.sql`AND "monitorId" IN (${Prisma.join(monitorIds)})` : Prisma.empty}
             GROUP BY key ${monitorIds ? Prisma.sql`, "monitorId"` : Prisma.empty}`;
     }
@@ -347,12 +348,12 @@ export class MonitoringDashboardService {
                 SELECT CASE WHEN latency < 100 THEN 0 WHEN latency < 200 THEN 1
                     WHEN latency < 300 THEN 2 WHEN latency < 500 THEN 3 WHEN latency < 1000 THEN 4 ELSE 5 END AS key,
                     COUNT(*)::integer AS count FROM check_logs WHERE "projectId" = ${projectId}
-                    AND source = 'LOCAL' AND "checkedAt" >= ${window.from} AND "checkedAt" < ${asOf} GROUP BY key`
+                    AND source = 'LOCAL' AND evaluated = true AND "checkedAt" >= ${window.from} AND "checkedAt" < ${asOf} GROUP BY key`
                         : [];
                 const slow = complete
                     ? await tx.$queryRaw<(Metrics & { id: string })[]>`
                 SELECT c."monitorId" AS id, ${aggregate} FROM check_logs c
-                WHERE c."projectId" = ${projectId} AND c.source = 'LOCAL'
+                WHERE c."projectId" = ${projectId} AND c.source = 'LOCAL' AND c.evaluated = true
                 AND c."checkedAt" >= ${window.from} AND c."checkedAt" < ${asOf}
                 AND EXISTS (SELECT 1 FROM monitors m WHERE m.id = c."monitorId" AND m."deletedAt" IS NULL)
                 GROUP BY c."monitorId" ORDER BY avg DESC,c."monitorId" ASC LIMIT ${slowLimit}`
@@ -562,7 +563,7 @@ export class MonitoringDashboardService {
                         failing: points.map((p) => p.failingCount),
                     },
                     distribution: {
-                        protocols: ['HTTP', 'TCP']
+                        protocols: Object.values(MonitorType)
                             .map((type) => ({
                                 type,
                                 count: monitors.filter((m) => m.type === type)
@@ -684,7 +685,7 @@ export class MonitoringDashboardService {
                 SELECT to_char("checkedAt" AT TIME ZONE 'UTC' AT TIME ZONE ${tz},'YYYY-MM-DD') AS day,
                 extract(hour FROM "checkedAt" AT TIME ZONE 'UTC' AT TIME ZONE ${tz})::integer AS hour,
                 COUNT(*)::integer AS checks, COUNT(*) FILTER (WHERE success)::integer AS successes
-                FROM check_logs WHERE "projectId" = ${projectId} AND source = 'LOCAL'
+                FROM check_logs WHERE "projectId" = ${projectId} AND source = 'LOCAL' AND evaluated = true
                 AND "checkedAt" >= ${maximumDate(from, water.checks)} AND "checkedAt" < ${asOf} GROUP BY day,hour`;
                 const unavailableCells: number[][] = [];
                 const cells: number[][] = [];
@@ -783,7 +784,7 @@ export class MonitoringDashboardService {
                 COUNT(*) FILTER (WHERE "statusCode" >= 500 AND "statusCode" < 600)::integer AS "serverError5xx",
                 COUNT(*) FILTER (WHERE "statusCode" IS NOT NULL AND ("statusCode" < 200 OR "statusCode" >= 600))::integer AS "otherStatusCode",
                 COUNT(*) FILTER (WHERE "statusCode" IS NULL)::integer AS "noStatusCode"
-                FROM check_logs WHERE "projectId" = ${projectId} AND source = 'LOCAL' AND "monitorType" = 'HTTP'
+                FROM check_logs WHERE "projectId" = ${projectId} AND source = 'LOCAL' AND evaluated = true AND "monitorType" = 'HTTP'
                 AND "checkedAt" >= ${validFrom} AND "checkedAt" < ${asOf} GROUP BY key ORDER BY key`
                     : [];
                 const unclassifiedChecks = validFrom
@@ -791,6 +792,7 @@ export class MonitoringDashboardService {
                           where: {
                               projectId,
                               source: 'LOCAL',
+                              evaluated: true,
                               monitorType: null,
                               checkedAt: { gte: validFrom, lt: asOf },
                           },

@@ -6,6 +6,8 @@ import {
     IsInt,
     IsNumber,
     IsOptional,
+    IsObject,
+    ValidateIf,
     IsString,
     Max,
     MaxLength,
@@ -13,6 +15,7 @@ import {
     MinLength,
 } from 'class-validator';
 import { MonitorType } from '../../../generated/prisma/enums';
+import { MONITOR_CONFIG_API_OPTIONS } from './monitor-config.schema';
 
 export class CreateMonitorDto {
     @ApiProperty({ example: 'Production API', description: 'Monitor name' })
@@ -31,12 +34,21 @@ export class CreateMonitorDto {
 
     @ApiProperty({
         example: 'https://api.example.com/health',
-        description: 'URL (HTTP) or host:port (TCP) to check',
+        description:
+            'HTTP/WS URL; TCP/database/gRPC host:port; DNS domain; PING hostname/IP; Docker HTTPS origin or unix:///var/run/docker.sock. No credentials in application targets.',
     })
     @IsString()
     @MinLength(1)
     @MaxLength(2048)
     target: string;
+
+    @ApiPropertyOptional({
+        ...MONITOR_CONFIG_API_OPTIONS,
+        example: { recordType: 'A', expectedValues: ['1.1.1.1'] },
+    })
+    @ValidateIf((_, value: unknown) => value !== undefined)
+    @IsObject()
+    config?: Record<string, unknown>;
 
     @ApiPropertyOptional({
         example: 60,

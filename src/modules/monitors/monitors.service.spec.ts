@@ -1,6 +1,8 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MonitorsService } from './monitors.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
+import { MonitorSecretsService } from './monitor-secrets.service';
+import { ConfigService } from '@nestjs/config';
 
 const monitorRow = {
     id: 'monitor-1',
@@ -16,6 +18,9 @@ const monitorRow = {
     checkSsl: false,
     sslExpiryThreshold: 30,
     enabled: true,
+    config: {},
+    configVersion: 1,
+    revision: 1,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
     deletedAt: null,
@@ -66,6 +71,14 @@ function createService() {
     const quotaService = {
         assertCanCreate: jest.fn().mockResolvedValue(undefined),
         assertIntervalAllowed: jest.fn().mockResolvedValue(undefined),
+        assertMonitorTypeAllowed: jest.fn().mockResolvedValue(undefined),
+        monitorEligibility: jest
+            .fn()
+            .mockResolvedValue({ eligible: true, reason: null }),
+        getMonitorPolicy: jest.fn().mockResolvedValue({
+            allowedMonitorTypes: ['HTTP', 'TCP', 'PING', 'DNS'],
+            minInterval: 10,
+        }),
     };
 
     const notifierService = {
@@ -79,6 +92,11 @@ function createService() {
         systemProbeScheduler as never,
         quotaService as never,
         notifierService as never,
+        new MonitorSecretsService(
+            new ConfigService({
+                monitor: { secretKey: Buffer.alloc(32, 7).toString('base64') },
+            }),
+        ),
     );
 
     return {
@@ -91,6 +109,109 @@ function createService() {
 }
 
 describe('MonitorsService', () => {
+    describe('application credentials and revisions', () => {
+        const crypto = new MonitorSecretsService(
+            new ConfigService({
+                monitor: { secretKey: Buffer.alloc(32, 7).toString('base64') },
+            }),
+        );
+        const context = {
+            organizationId: 'org-1',
+            type: 'REDIS' as const,
+            target: 'cache.example.com:6379',
+        };
+        const definition = { password: 'private-password', tls: true, db: 0 };
+        const existing = {
+            ...monitorRow,
+            ...context,
+            ...crypto.seal(definition, context),
+        };
+
+        it('preserves credentials and revision on a metadata-only update', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockImplementation(({ data }) => ({
+                ...existing,
+                ...data,
+            }));
+            const response = await service.update('project-1', 'monitor-1', {
+                name: 'Renamed',
+            });
+            const data = prisma.monitor.update.mock.calls[0][0].data;
+            expect(data.revision).toBeUndefined();
+            expect(data.credentialsEnc).toBe(existing.credentialsEnc);
+            expect(crypto.open({ ...existing, ...data }).password).toBe(
+                'private-password',
+            );
+            expect(JSON.stringify(response)).not.toContain('private-password');
+            expect(response).not.toHaveProperty('credentialsEnc');
+        });
+        it('revises and resets the monitor when credentials change', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockImplementation(({ data }) => ({
+                ...existing,
+                ...data,
+            }));
+            await service.update('project-1', 'monitor-1', {
+                config: { password: 'replacement-password' },
+            });
+            const data = prisma.monitor.update.mock.calls[0][0].data;
+            expect(data.revision).toEqual({ increment: 1 });
+            expect(crypto.open({ ...existing, ...data }).password).toBe(
+                'replacement-password',
+            );
+            expect(data.config).toEqual({ tls: true, db: 0 });
+            expect(data.state.upsert.update).toMatchObject({
+                connectivityFailCount: 0,
+                lastAppliedObservationAt: null,
+                lastAppliedObservationId: null,
+            });
+        });
+        it('does not revise an equivalent full config despite randomized ciphertext', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue(existing);
+            await service.update('project-1', 'monitor-1', {
+                config: { password: 'private-password' },
+            });
+            expect(
+                prisma.monitor.update.mock.calls[0][0].data.revision,
+            ).toBeUndefined();
+            expect(
+                prisma.monitor.update.mock.calls[0][0].data.credentialsEnc,
+            ).toBe(existing.credentialsEnc);
+        });
+        it('requires credential re-entry on retargeting and clears omitted replacement credentials', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue(existing);
+            await expect(
+                service.update('project-1', 'monitor-1', {
+                    target: 'other.example.com:6379',
+                }),
+            ).rejects.toThrow('re-entered');
+            expect(prisma.monitor.update).not.toHaveBeenCalled();
+            await service.update('project-1', 'monitor-1', {
+                target: 'other.example.com:6379',
+                config: definition,
+            });
+            const data = prisma.monitor.update.mock.calls[0][0].data;
+            expect(crypto.open({ ...existing, ...data }).password).toBe(
+                'private-password',
+            );
+            expect(() =>
+                crypto.open({
+                    ...existing,
+                    credentialsEnc: data.credentialsEnc,
+                }),
+            ).toThrow();
+            await service.update('project-1', 'monitor-1', { config: {} });
+            expect(
+                prisma.monitor.update.mock.calls[1][0].data.credentialsEnc,
+            ).toBeNull();
+        });
+    });
     describe('create', () => {
         it('creates the companion state row and flattens it into the response', async () => {
             const { service, prisma, systemProbeScheduler } = createService();
@@ -112,6 +233,8 @@ describe('MonitorsService', () => {
                     target: 'https://api.example.com/health',
                     organizationId: 'org-1',
                     projectId: 'project-1',
+                    config: {},
+                    configVersion: 1,
                     state: { create: {} },
                 },
                 include: { state: true, notificationChannels: true },
@@ -195,6 +318,168 @@ describe('MonitorsService', () => {
     });
 
     describe('update', () => {
+        it('keeps revision for equivalent HTTP assertion defaults', async () => {
+            const { service, prisma } = createService();
+            const existing = { ...monitorRow, config: { keyword: 'healthy' } };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue(existing);
+            await service.update('project-1', 'monitor-1', {
+                config: {
+                    maxBodyBytes: 65536,
+                    keywordMode: 'contains',
+                    keyword: 'healthy',
+                },
+            });
+            const data = prisma.monitor.update.mock.calls[0][0].data;
+            expect(data.revision).toBeUndefined();
+            expect(data.state).toBeUndefined();
+        });
+
+        it.each([
+            {},
+            { keyword: 'ready' },
+            { keyword: 'healthy', keywordMode: 'notContains' },
+            { keyword: 'healthy', maxBodyBytes: 1024 },
+            {
+                jsonAssertions: [
+                    { path: '/status', operator: 'eq', value: 'ok' },
+                ],
+            },
+        ])(
+            'revises and resets state for HTTP semantic changes %#',
+            async (config) => {
+                const { service, prisma } = createService();
+                const existing = {
+                    ...monitorRow,
+                    config: { keyword: 'healthy' },
+                    state: stateRow,
+                };
+                prisma.monitor.findFirst.mockResolvedValue(existing);
+                prisma.monitor.update.mockResolvedValue(existing);
+                await service.update('project-1', 'monitor-1', { config });
+                expect(prisma.monitor.update).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        data: expect.objectContaining({
+                            revision: { increment: 1 },
+                            state: expect.objectContaining({
+                                upsert: expect.objectContaining({
+                                    update: expect.objectContaining({
+                                        status: 'UNKNOWN',
+                                        failCount: 0,
+                                        lastLocalCheckAt: null,
+                                        availabilityAlertPendingId: null,
+                                    }),
+                                }),
+                            }),
+                        }),
+                    }),
+                );
+            },
+        );
+
+        it('does not change revision for reordered but semantically identical DNS config', async () => {
+            const { service, prisma } = createService();
+            const existing = {
+                ...monitorRow,
+                type: 'DNS',
+                target: 'example.com',
+                config: { expectedValues: ['1.1.1.1'], recordType: 'A' },
+            };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue(existing);
+            await service.update('project-1', 'monitor-1', {
+                config: { recordType: 'A', expectedValues: ['1.1.1.1'] },
+            });
+            expect(
+                prisma.monitor.update.mock.calls[0][0].data.revision,
+            ).toBeUndefined();
+        });
+        it('requires explicit replacement config when changing type', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            await expect(
+                service.update('project-1', 'monitor-1', {
+                    type: 'DNS',
+                    target: 'example.com',
+                }),
+            ).rejects.toThrow('complete config');
+            expect(prisma.monitor.update).not.toHaveBeenCalled();
+        });
+
+        it('replaces DNS config instead of preserving omitted nested fields', async () => {
+            const { service, prisma } = createService();
+            const existing = {
+                ...monitorRow,
+                type: 'DNS',
+                target: 'example.com',
+                config: { recordType: 'A', expectedValues: ['1.1.1.1'] },
+            };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue(existing);
+            await service.update('project-1', 'monitor-1', {
+                config: { recordType: 'AAAA' },
+            });
+            expect(prisma.monitor.update).toHaveBeenCalledWith({
+                where: { id: 'monitor-1', revision: 1, deletedAt: null },
+                data: expect.objectContaining({
+                    config: { recordType: 'AAAA' },
+                    revision: { increment: 1 },
+                    state: expect.objectContaining({
+                        upsert: expect.objectContaining({
+                            update: expect.objectContaining({
+                                lastLocalCheckAt: null,
+                                availabilityAlertActive: false,
+                                availabilityAlertPendingId: null,
+                            }),
+                        }),
+                    }),
+                }),
+                include: { state: true, notificationChannels: true },
+            });
+        });
+
+        it('checks new type entitlement before switching and enabling', async () => {
+            const { service, prisma, quotaService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            quotaService.assertMonitorTypeAllowed.mockRejectedValue(
+                new Error('not entitled'),
+            );
+            await expect(
+                service.update('project-1', 'monitor-1', {
+                    type: 'DNS',
+                    target: 'example.com',
+                    config: {},
+                }),
+            ).rejects.toThrow('not entitled');
+            expect(prisma.monitor.update).not.toHaveBeenCalled();
+        });
+
+        it('does not block an explicit disable after plan downgrade', async () => {
+            const { service, prisma, quotaService } = createService();
+            const existing = {
+                ...monitorRow,
+                type: 'DNS',
+                target: 'example.com',
+                config: { recordType: 'A' },
+            };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue({
+                ...existing,
+                enabled: false,
+            });
+            quotaService.monitorEligibility.mockResolvedValue({
+                eligible: false,
+                reason: 'MONITOR_TYPE_NOT_ALLOWED',
+            });
+            const result = await service.update('project-1', 'monitor-1', {
+                enabled: false,
+            });
+            expect(
+                quotaService.assertMonitorTypeAllowed,
+            ).not.toHaveBeenCalled();
+            expect(result.executionEligible).toBe(false);
+            expect(result.executionBlockedReason).toBe('PAUSED');
+        });
         it('resets state when the target changes', async () => {
             const { service, prisma } = createService();
             prisma.monitor.findFirst.mockResolvedValue({
@@ -212,16 +497,23 @@ describe('MonitorsService', () => {
             });
 
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1' },
+                where: { id: 'monitor-1', revision: 1, deletedAt: null },
                 data: {
                     target: 'https://api.example.com/ready',
+                    config: {},
+                    revision: { increment: 1 },
                     state: {
                         upsert: {
-                            create: {},
+                            create: { status: 'UNKNOWN' },
                             update: {
                                 status: 'UNKNOWN',
                                 failCount: 0,
                                 lastCheckAt: null,
+                                connectivityFailCount: 0,
+                                lastAppliedObservationAt: null,
+                                lastAppliedObservationId: null,
+                                lastLocalCheckAt: null,
+                                executionBlockedReason: null,
                                 lastError: null,
                                 lastLatency: null,
                                 lastNotifiedStatus: null,
@@ -230,6 +522,9 @@ describe('MonitorsService', () => {
                                 sslIssuer: null,
                                 sslSubject: null,
                                 sslLastNotifiedAt: null,
+                                availabilityAlertActive: false,
+                                availabilityAlertPendingId: null,
+                                lastAvailabilityAlertAt: null,
                             },
                         },
                     },
@@ -255,9 +550,10 @@ describe('MonitorsService', () => {
             });
 
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1' },
+                where: { id: 'monitor-1', revision: 1, deletedAt: null },
                 data: {
                     name: 'Renamed API',
+                    config: {},
                     state: undefined,
                 },
                 include: { state: true, notificationChannels: true },
@@ -302,13 +598,17 @@ describe('MonitorsService', () => {
             const result = await service.pause('project-1', 'monitor-1');
 
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1' },
+                where: { id: 'monitor-1', revision: 1 },
                 data: {
                     enabled: false,
+                    revision: { increment: 1 },
                     state: {
                         upsert: {
                             create: { status: 'PAUSED' },
-                            update: { status: 'PAUSED' },
+                            update: {
+                                status: 'PAUSED',
+                                availabilityAlertPendingId: null,
+                            },
                         },
                     },
                 },
@@ -347,11 +647,25 @@ describe('MonitorsService', () => {
             const result = await service.resume('project-1', 'monitor-1');
 
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1' },
+                where: { id: 'monitor-1', revision: 1 },
                 data: {
                     enabled: true,
+                    revision: { increment: 1 },
                     state: {
-                        upsert: { create: {}, update: { status: 'UNKNOWN' } },
+                        upsert: {
+                            create: {},
+                            update: {
+                                status: 'UNKNOWN',
+                                failCount: 0,
+                                connectivityFailCount: 0,
+                                lastAppliedObservationAt: null,
+                                lastAppliedObservationId: null,
+                                lastLocalCheckAt: null,
+                                executionBlockedReason: null,
+                                availabilityAlertActive: false,
+                                availabilityAlertPendingId: null,
+                            },
+                        },
                     },
                 },
                 include: { state: true, notificationChannels: true },
@@ -361,6 +675,27 @@ describe('MonitorsService', () => {
     });
 
     describe('restore', () => {
+        it('rechecks quota, type and interval when restoring', async () => {
+            const { service, prisma, quotaService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                deletedAt: new Date(),
+            });
+            prisma.monitor.update.mockResolvedValue(monitorRow);
+            await service.restore('project-1', 'monitor-1');
+            expect(quotaService.assertCanCreate).toHaveBeenCalledWith(
+                'org-1',
+                'monitors',
+            );
+            expect(quotaService.assertMonitorTypeAllowed).toHaveBeenCalledWith(
+                'org-1',
+                'HTTP',
+            );
+            expect(quotaService.assertIntervalAllowed).toHaveBeenCalledWith(
+                'org-1',
+                60,
+            );
+        });
         it('rejects restoring a monitor that is not deleted', async () => {
             const { service, prisma } = createService();
             prisma.monitor.findFirst.mockResolvedValue({
@@ -406,7 +741,7 @@ describe('MonitorsService', () => {
             );
 
             expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1' },
+                where: { monitorId: 'monitor-1', evaluated: true, revision: 1 },
                 orderBy: { checkedAt: 'desc' },
                 take: 10,
                 select: { success: true },

@@ -12,6 +12,9 @@ export type MonitorEvent =
 export interface NotificationPayload {
     idempotencyKey?: string;
     monitorId: string;
+    /** Present on new local jobs; old queued payloads remain compatible. */
+    monitorRevision?: number;
+    monitorConfigRevision?: number;
     monitorName: string;
     monitorType: string;
     target: string;

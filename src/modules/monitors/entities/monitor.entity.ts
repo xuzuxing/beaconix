@@ -1,5 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude } from 'class-transformer';
+import { MonitorType } from '../../../generated/prisma/enums';
+import type { JsonValue } from '../../../generated/prisma/internal/prismaNamespace';
+import { MONITOR_CONFIG_API_OPTIONS } from '../dto/monitor-config.schema';
 
 export class MonitorEntity {
     @ApiProperty({ example: 'uuid-here' })
@@ -14,8 +17,29 @@ export class MonitorEntity {
     @ApiProperty({ example: 'Production API' })
     name: string;
 
-    @ApiProperty({ enum: ['HTTP', 'TCP'], example: 'HTTP' })
+    @ApiProperty({ enum: MonitorType, example: 'HTTP' })
     type: string;
+
+    @ApiProperty(MONITOR_CONFIG_API_OPTIONS)
+    config: JsonValue;
+
+    @ApiProperty({
+        description:
+            'Credentials are configured; their values are never returned',
+    })
+    hasCredentials: boolean;
+
+    @ApiProperty({ example: 1 })
+    configVersion: number;
+
+    @ApiProperty({ example: 1 })
+    revision: number;
+
+    @ApiProperty({ example: true })
+    executionEligible: boolean;
+
+    @ApiPropertyOptional({ example: 'MONITOR_TYPE_NOT_ALLOWED' })
+    executionBlockedReason: string | null;
 
     @ApiProperty({ example: 'https://api.example.com/health' })
     target: string;

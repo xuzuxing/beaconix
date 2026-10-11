@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { PrismaClient } from '../src/generated/prisma/client';
+import { MonitorType } from '../src/generated/prisma/enums';
 
 const FREE_SUBSCRIPTION_EXPIRY = new Date('2099-12-31T23:59:59.000Z');
 
@@ -85,6 +86,11 @@ async function main() {
     const plans = [
         {
             code: 'FREE',
+            allowedMonitorTypes: [
+                MonitorType.HTTP,
+                MonitorType.TCP,
+                MonitorType.PING,
+            ],
             name: '免费版',
             description: 'For trying out Beacon monitoring',
             price: 0,
@@ -101,6 +107,7 @@ async function main() {
         },
         {
             code: 'PRO',
+            allowedMonitorTypes: Object.values(MonitorType),
             name: '专业版',
             description: 'For small teams',
             price: 2900,
@@ -117,6 +124,7 @@ async function main() {
         },
         {
             code: 'TEAM',
+            allowedMonitorTypes: Object.values(MonitorType),
             name: '团队版',
             description: 'For growing businesses',
             price: 9900,

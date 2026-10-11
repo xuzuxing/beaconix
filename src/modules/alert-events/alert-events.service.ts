@@ -110,7 +110,11 @@ export class AlertEventsService {
             previous?.availabilityAlertActive ?? false;
         if (monitor.availabilityEnabled) {
             const recent = await tx.checkLog.findMany({
-                where: { monitorId: monitor.id },
+                where: {
+                    monitorId: monitor.id,
+                    evaluated: true,
+                    revision: monitor.revision,
+                },
                 orderBy: [{ checkedAt: 'desc' }, { id: 'desc' }],
                 take: monitor.availabilityWindow ?? 10,
                 select: { ruleMatched: true },
@@ -283,6 +287,8 @@ export class AlertEventsService {
               });
         const payload: NotificationPayload = {
             monitorId: monitor.id,
+            monitorRevision: monitor.revision,
+            monitorConfigRevision: monitor.configRevision,
             monitorName: monitor.name,
             monitorType: monitor.type,
             target: monitor.target,

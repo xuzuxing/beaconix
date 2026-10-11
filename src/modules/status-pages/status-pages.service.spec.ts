@@ -171,6 +171,24 @@ describe('StatusPagesService', () => {
     });
 
     describe('getPublicBySlug', () => {
+        it('excludes execution blocks from public uptime', async () => {
+            const { service, prisma } = createService();
+            prisma.statusPage.findUnique.mockResolvedValue({
+                ...statusPageRow,
+                showUptime: true,
+            });
+            prisma.monitor.findMany.mockResolvedValue([monitorRow]);
+            prisma.checkLog.count.mockImplementation(({ where }) =>
+                Promise.resolve(
+                    where.evaluated ? (where.success ? 9 : 10) : 20,
+                ),
+            );
+            const result = await service.getPublicBySlug('acme-status');
+            expect(result.monitors[0].uptimePercent).toBe(90);
+            expect(prisma.checkLog.count).toHaveBeenCalledWith({
+                where: expect.objectContaining({ evaluated: true }),
+            });
+        });
         it('returns the public page with only visible monitors', async () => {
             const { service, prisma } = createService();
             prisma.statusPage.findUnique.mockResolvedValue(statusPageRow);

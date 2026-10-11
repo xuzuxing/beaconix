@@ -20,6 +20,8 @@ const monitor = {
     availabilityWindow: 10,
     checkSsl: true,
     sslExpiryThreshold: 30,
+    revision: 2,
+    configRevision: 3,
 } as MonitorModel;
 function fixture() {
     const tx = {
@@ -88,6 +90,14 @@ describe('Alert events', () => {
             }),
         });
         expect(tx.alertDelivery.create).toHaveBeenCalledTimes(1);
+        expect(tx.alertDelivery.create).toHaveBeenCalledWith({
+            data: expect.objectContaining({
+                payload: expect.objectContaining({
+                    monitorRevision: 2,
+                    monitorConfigRevision: 3,
+                }),
+            }),
+        });
     });
     it('does not invent service failure from pure SSL evidence', async () => {
         const { tx, record } = fixture();
@@ -137,6 +147,11 @@ describe('Alert events', () => {
         await record({
             ruleEvidence: [{ groupId: 'rules', reason: 'SLOW_RESPONSE' }],
         });
+        expect(tx.checkLog.findMany).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: { monitorId: 'm', evaluated: true, revision: 2 },
+            }),
+        );
         expect(tx.alertEvent.create.mock.calls[0][0].data).toMatchObject({
             kind: 'AVAILABILITY',
             reason: 'AVAILABILITY_LOW',

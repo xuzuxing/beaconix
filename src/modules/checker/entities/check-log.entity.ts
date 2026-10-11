@@ -1,7 +1,27 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CheckSource } from '../../../generated/prisma/enums';
+import type { JsonValue } from '../../../generated/prisma/internal/prismaNamespace';
 
 export class CheckLogEntity {
+    @ApiProperty({ example: 1 })
+    revision: number;
+
+    @ApiProperty({
+        example: true,
+        description: 'False means blocked execution, excluded from uptime',
+    })
+    evaluated: boolean;
+
+    @ApiPropertyOptional({ example: 'ASSERTION' })
+    failureKind: string | null;
+
+    @ApiProperty({
+        type: 'object',
+        additionalProperties: true,
+        description:
+            'Bounded protocol diagnostics. HTTP: byte limits and boolean assertion outcomes, never bodies/field values. Databases: fixed health operation. Docker: validated containerState/health/startedAt only. gRPC: serving. WebSocket: heartbeat. Never credentials, SQL results or full daemon responses.',
+    })
+    meta: JsonValue;
     @ApiProperty({ example: 'uuid-check' })
     id: string;
 

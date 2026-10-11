@@ -123,6 +123,8 @@ export class SystemProbeScheduler implements OnModuleInit {
         });
 
         const needSystemProbe = monitors.filter((monitor) => {
+            // New protocols are local-only until the probe upgrade is implemented.
+            if (monitor.type !== 'HTTP' && monitor.type !== 'TCP') return false;
             const activeTenantProbeCount = monitor.probes.filter(
                 (binding) =>
                     binding.probe.scope === ProbeScope.TENANT &&

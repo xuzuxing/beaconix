@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MonitorType } from '../../../generated/prisma/enums';
 
 export class MonitorStateEntity {
     @ApiProperty({ example: 'uuid-monitor' })
@@ -10,8 +11,13 @@ export class MonitorStateEntity {
     @ApiProperty({ example: 'https://api.example.com/health' })
     target: string;
 
-    @ApiProperty({ enum: ['HTTP', 'TCP'], example: 'HTTP' })
+    @ApiProperty({ enum: MonitorType, example: 'HTTP' })
     type: string;
+
+    @ApiPropertyOptional({
+        example: 'PING executable or ICMP permission unavailable',
+    })
+    executionBlockedReason: string | null;
 
     @ApiProperty({
         enum: ['UNKNOWN', 'UP', 'DEGRADED', 'DOWN', 'PAUSED'],

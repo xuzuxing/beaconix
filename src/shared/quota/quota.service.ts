@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
-import { ProbeScope } from '../../generated/prisma/enums';
+import { MonitorType, ProbeScope } from '../../generated/prisma/enums';
 import type { PlanModel } from '../../generated/prisma/models';
 import { EffectivePlanService } from '../subscription/effective-plan.service';
 
@@ -30,7 +30,17 @@ const FREE_FALLBACK = {
     minInterval: 300,
     allowTenantProbe: false,
     allowStatusPage: false,
+    allowedMonitorTypes: [MonitorType.HTTP, MonitorType.TCP, MonitorType.PING],
+    code: 'FREE',
+    name: 'Free',
+    price: 0,
 };
+
+type QuotaPlan = Pick<PlanModel, keyof typeof FREE_FALLBACK>;
+export type MonitorPolicy = Pick<
+    PlanModel,
+    'allowedMonitorTypes' | 'minInterval'
+>;
 
 @Injectable()
 export class QuotaService {
@@ -101,6 +111,43 @@ export class QuotaService {
         }
     }
 
+    async assertMonitorTypeAllowed(
+        organizationId: string,
+        type: MonitorType,
+    ): Promise<void> {
+        const plan = await this.getPlan(organizationId);
+        if (!plan.allowedMonitorTypes.includes(type)) {
+            throw new ForbiddenException({
+                code: 'MONITOR_TYPE_NOT_ALLOWED',
+                type,
+                message: `当前套餐不支持 ${type} 监控，请升级套餐`,
+            });
+        }
+    }
+
+    async monitorEligibility(
+        organizationId: string,
+        type: MonitorType,
+        interval: number,
+        policy?: MonitorPolicy,
+    ): Promise<{ eligible: boolean; reason: string | null }> {
+        const plan = policy ?? (await this.getPlan(organizationId));
+        const reason = !plan.allowedMonitorTypes.includes(type)
+            ? 'MONITOR_TYPE_NOT_ALLOWED'
+            : interval < plan.minInterval
+              ? 'INTERVAL_TOO_SHORT'
+              : null;
+        return { eligible: reason === null, reason };
+    }
+
+    async getMonitorPolicy(organizationId: string): Promise<MonitorPolicy> {
+        const plan = await this.getPlan(organizationId);
+        return {
+            allowedMonitorTypes: plan.allowedMonitorTypes,
+            minInterval: plan.minInterval,
+        };
+    }
+
     async assertFeatureAllowed(
         organizationId: string,
         feature: QuotaFeature,
@@ -145,6 +192,7 @@ export class QuotaService {
                 allowStatusPage: plan.allowStatusPage,
             },
             minInterval: plan.minInterval,
+            allowedMonitorTypes: plan.allowedMonitorTypes,
         };
     }
 
@@ -169,18 +217,18 @@ export class QuotaService {
 
     // -- Helpers ---------------------------------------------------------
 
-    private async getPlan(organizationId: string): Promise<PlanModel> {
+    private async getPlan(organizationId: string): Promise<QuotaPlan> {
         const plan =
             await this.effectivePlanService.getEffectivePlan(organizationId);
 
         if (!plan) {
-            return FREE_FALLBACK as PlanModel;
+            return FREE_FALLBACK;
         }
 
         return plan;
     }
 
-    private getLimit(plan: PlanModel, resource: QuotaResource): number {
+    private getLimit(plan: QuotaPlan, resource: QuotaResource): number {
         if (resource === 'monitors') return plan.maxMonitors;
         if (resource === 'probes') return plan.maxProbes;
         if (resource === 'members') return plan.maxMembers;

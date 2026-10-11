@@ -61,6 +61,7 @@ const transition = {
 
 function createService() {
     const prisma = {
+        monitor: { findFirst: jest.fn() },
         notificationChannel: {
             findMany: jest.fn(),
             findFirst: jest.fn(),
@@ -183,6 +184,58 @@ describe('NotifierService.shouldNotify', () => {
             ),
         ).toBe(false);
     });
+});
+
+describe('NotifierService outbox revision protection', () => {
+    it.each([
+        { revision: 2, configRevision: 1 },
+        { revision: 1, configRevision: 2 },
+    ])(
+        'skips a queued delivery after its definition changes: %j',
+        async (change) => {
+            const { service, prisma, senders } = createService();
+            const tx = {
+                ...prisma,
+                $queryRaw: jest.fn(),
+                alertDelivery: {
+                    findUnique: jest.fn().mockResolvedValue({
+                        id: 'delivery-1',
+                        channelId: 'channel-1',
+                        status: 'PENDING',
+                        phase: 'OPEN',
+                        nextAttemptAt: new Date(0),
+                        event: {
+                            monitorId: 'monitor-1',
+                            organizationId: 'org-1',
+                            kind: 'CONNECTIVITY',
+                            status: 'ongoing',
+                        },
+                        payload: {
+                            monitorRevision: 1,
+                            monitorConfigRevision: 1,
+                        },
+                    }),
+                    update: jest.fn(),
+                },
+            };
+            Object.assign(prisma, {
+                $transaction: jest.fn((callback: (value: unknown) => unknown) =>
+                    callback(tx),
+                ),
+            });
+            prisma.notificationChannel.findFirst.mockResolvedValue(channelRow);
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                ...change,
+            });
+            await service.deliverAlertDelivery('delivery-1');
+            expect(tx.alertDelivery.update).toHaveBeenCalledWith({
+                where: { id: 'delivery-1' },
+                data: expect.objectContaining({ status: 'SKIPPED' }),
+            });
+            expect(senders.feishu.send).not.toHaveBeenCalled();
+        },
+    );
 });
 
 describe('NotifierService', () => {
@@ -388,6 +441,21 @@ describe('NotifierService', () => {
     });
 
     describe('deliver', () => {
+        it('skips stale or paused monitor notification jobs before channel delivery', async () => {
+            const { service, prisma, senders } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(null);
+            expect(
+                await service.deliver('channel-1', {
+                    monitorId: 'monitor-1',
+                    monitorRevision: 1,
+                    organizationId: 'org-1',
+                } as never),
+            ).toBe(false);
+            expect(
+                prisma.notificationChannel.findUnique,
+            ).not.toHaveBeenCalled();
+            expect(senders.feishu.send).not.toHaveBeenCalled();
+        });
         it('sends synchronously and writes a SUCCESS log', async () => {
             const { service, prisma, senders } = createService();
             prisma.notificationChannel.findUnique.mockResolvedValue(channelRow);

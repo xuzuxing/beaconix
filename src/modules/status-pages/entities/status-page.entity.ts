@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MonitorType } from '../../../generated/prisma/enums';
 
 export class StatusPageEntity {
     @ApiProperty({ example: 'uuid-status-page' })
@@ -46,7 +47,7 @@ export class PublicStatusPageMonitorEntity {
     @ApiProperty({ example: 'Production API' })
     name: string;
 
-    @ApiProperty({ enum: ['HTTP', 'TCP'], example: 'HTTP' })
+    @ApiProperty({ enum: MonitorType, example: 'HTTP' })
     type: string;
 
     @ApiProperty({ example: 'https://api.example.com/health' })

@@ -9,11 +9,16 @@ import { CheckSource, MonitorStatus } from '../../generated/prisma/enums';
 import type {
     MonitorModel,
     MonitorStateModel,
+    MonitorStateUpdateManyMutationInput,
 } from '../../generated/prisma/models';
 import { MonitorStateEntity } from './entities';
 import type { SslCertificateInfo } from '../checker/checkers';
 import { AlertEventsService } from '../alert-events/alert-events.service';
 import type { Prisma } from '../../generated/prisma/client';
+import type {
+    CheckFailureKind,
+    CheckMetadata,
+} from '../checker/checkers/check-result';
 
 /** A check outcome (local run or probe report) before it is folded into state. */
 export interface CheckOutcome {
@@ -26,6 +31,10 @@ export interface CheckOutcome {
     failureReason?: string;
     ruleEvidence?: Prisma.InputJsonValue[];
     probeRoundWindowMs?: number;
+    revision?: number;
+    evaluated?: boolean;
+    failureKind?: CheckFailureKind | null;
+    meta?: CheckMetadata;
     success: boolean;
     latency: number;
     error?: string | null;
@@ -129,15 +138,28 @@ export class StateService {
             });
 
             if (!monitor) {
+                if (outcome.revision !== undefined) return null;
                 throw new NotFoundException('Monitor not found');
             }
             if (
                 outcome.configRevision !== undefined &&
                 outcome.configRevision !== monitor.configRevision
             ) {
+                if (outcome.revision !== undefined) return null;
                 throw new ConflictException(
                     'Monitor configuration changed; discard stale observation',
                 );
+            }
+            if (
+                !monitor.enabled ||
+                (outcome.revision !== undefined &&
+                    monitor.revision !== outcome.revision) ||
+                (outcome.source !== CheckSource.PROBE &&
+                    outcome.checkedAt &&
+                    monitor.state?.lastLocalCheckAt &&
+                    outcome.checkedAt < monitor.state.lastLocalCheckAt)
+            ) {
+                return null;
             }
 
             const previous: DerivedState = {
@@ -145,27 +167,34 @@ export class StateService {
                 failCount: monitor.state?.failCount ?? 0,
             };
 
-            const derived = deriveState(
-                {
-                    ...previous,
-                    status:
-                        monitor.enabled &&
-                        previous.status === MonitorStatus.PAUSED
-                            ? MonitorStatus.UNKNOWN
-                            : previous.status,
-                },
-                outcome.success,
-                monitor.failureThreshold,
-            );
+            const evaluated = outcome.evaluated !== false;
+            const derived = evaluated
+                ? deriveState(
+                      {
+                          ...previous,
+                          status:
+                              monitor.enabled &&
+                              previous.status === MonitorStatus.PAUSED
+                                  ? MonitorStatus.UNKNOWN
+                                  : previous.status,
+                      },
+                      outcome.success,
+                      monitor.failureThreshold,
+                  )
+                : previous;
 
-            const checkedAt = outcome.checkedAt ?? new Date();
+            const checkedAt =
+                outcome.source === CheckSource.PROBE
+                    ? new Date()
+                    : (outcome.checkedAt ?? new Date());
             const error = outcome.success
                 ? null
                 : (outcome.error ?? 'Check failed');
             const source = outcome.source ?? CheckSource.LOCAL;
             const localSuccess = outcome.localSuccess ?? outcome.success;
             const rescuedByProbe = outcome.rescuedByProbe ?? false;
-            const ruleMatched = outcome.ruleMatched ?? !outcome.success;
+            const ruleMatched =
+                evaluated && (outcome.ruleMatched ?? !outcome.success);
             const ruleGroupIds = outcome.ruleGroupIds ?? [];
             const observationId = outcome.observationId ?? randomUUID();
             const duplicate = await tx.checkLog.findUnique({
@@ -223,16 +252,19 @@ export class StateService {
             const stateValues = {
                 status: derived.status,
                 failCount: derived.failCount,
-                lastCheckAt: checkedAt,
+                lastCheckAt: evaluated ? checkedAt : undefined,
+                executionBlockedReason: evaluated ? null : error,
                 // The schedule only moves on local checks: a chatty probe must not
                 // push the next local run out of reach.
                 lastLocalCheckAt:
                     source === CheckSource.LOCAL ? checkedAt : undefined,
-                lastError: error,
-                lastLatency: outcome.latency,
-                connectivityFailCount,
-                lastAppliedObservationAt: checkedAt,
-                lastAppliedObservationId: observationId,
+                lastError: evaluated ? error : undefined,
+                lastLatency: evaluated ? outcome.latency : undefined,
+                connectivityFailCount: evaluated
+                    ? connectivityFailCount
+                    : undefined,
+                lastAppliedObservationAt: evaluated ? checkedAt : undefined,
+                lastAppliedObservationId: evaluated ? observationId : undefined,
                 ...(outcome.ssl !== undefined
                     ? {
                           sslExpiresAt: outcome.ssl?.expiresAt ?? null,
@@ -266,21 +298,26 @@ export class StateService {
                     ruleGroupIds,
                     source,
                     checkedAt,
+                    revision: outcome.revision ?? monitor.revision,
+                    evaluated,
+                    failureKind: outcome.failureKind ?? null,
+                    meta: outcome.meta ?? {},
                 },
             });
-            const alertResult = apply
-                ? await this.alerts.record(
-                      tx,
-                      monitor,
-                      monitor.state,
-                      outcome,
-                      { ...derived, connectivityFailCount },
-                  )
-                : {
-                      deliveries: 0,
-                      availabilityAlertActive:
-                          monitor.state?.availabilityAlertActive ?? false,
-                  };
+            const alertResult =
+                apply && evaluated
+                    ? await this.alerts.record(
+                          tx,
+                          monitor,
+                          monitor.state,
+                          outcome,
+                          { ...derived, connectivityFailCount },
+                      )
+                    : {
+                          deliveries: 0,
+                          availabilityAlertActive:
+                              monitor.state?.availabilityAlertActive ?? false,
+                      };
             const state = apply
                 ? await tx.monitorState.upsert({
                       where: { monitorId },
@@ -324,7 +361,14 @@ export class StateService {
     async markNotified(
         monitorId: string,
         status: MonitorStatus,
+        revision?: number,
     ): Promise<void> {
+        if (revision !== undefined) {
+            await this.updateCurrentState(monitorId, revision, {
+                lastNotifiedStatus: status,
+            });
+            return;
+        }
         await this.prisma.monitorState.update({
             where: { monitorId },
             data: { lastNotifiedStatus: status },
@@ -332,10 +376,103 @@ export class StateService {
     }
 
     /** Remembers that the current SSL certificate alert was delivered. */
-    async markSslNotified(monitorId: string, at = new Date()): Promise<void> {
+    async markSslNotified(
+        monitorId: string,
+        at = new Date(),
+        revision?: number,
+    ): Promise<void> {
+        if (revision !== undefined) {
+            await this.updateCurrentState(monitorId, revision, {
+                sslLastNotifiedAt: at,
+            });
+            return;
+        }
         await this.prisma.monitorState.update({
             where: { monitorId },
             data: { sslLastNotifiedAt: at },
+        });
+    }
+
+    async claimAvailabilityAlert(
+        monitorId: string,
+        revision: number,
+        active: boolean,
+        checkedAt: Date | null,
+    ): Promise<string | null> {
+        return this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT "id" FROM "monitors" WHERE "id" = ${monitorId} FOR UPDATE`;
+            const current = await tx.monitor.findFirst({
+                where: {
+                    id: monitorId,
+                    revision,
+                    enabled: true,
+                    deletedAt: null,
+                },
+                include: { state: true },
+            });
+            const state = current?.state;
+            if (!state || state.lastCheckAt?.getTime() !== checkedAt?.getTime())
+                return null;
+            if (state.availabilityAlertActive === active) {
+                return state.availabilityAlertPendingId;
+            }
+            const pendingId = randomUUID();
+            await tx.monitorState.updateMany({
+                where: { monitorId },
+                data: {
+                    availabilityAlertActive: active,
+                    availabilityAlertPendingId: pendingId,
+                    ...(active ? { lastAvailabilityAlertAt: new Date() } : {}),
+                },
+            });
+            return pendingId;
+        });
+    }
+
+    async completeAvailabilityAlert(
+        monitorId: string,
+        revision: number,
+        active: boolean,
+        pendingId: string,
+    ): Promise<void> {
+        await this.updateCurrentState(
+            monitorId,
+            revision,
+            { availabilityAlertPendingId: null },
+            {
+                availabilityAlertActive: active,
+                availabilityAlertPendingId: pendingId,
+            },
+        );
+    }
+
+    private async updateCurrentState(
+        monitorId: string,
+        revision: number,
+        data: MonitorStateUpdateManyMutationInput,
+        expected: {
+            availabilityAlertActive?: boolean;
+            lastCheckAt?: Date | null;
+            availabilityAlertPendingId?: string | null;
+        } = {},
+    ): Promise<boolean> {
+        return this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT "id" FROM "monitors" WHERE "id" = ${monitorId} FOR UPDATE`;
+            const current = await tx.monitor.findFirst({
+                where: {
+                    id: monitorId,
+                    revision,
+                    enabled: true,
+                    deletedAt: null,
+                },
+                select: { id: true },
+            });
+            if (!current) return false;
+            const changed = await tx.monitorState.updateMany({
+                where: { monitorId, ...expected },
+                data,
+            });
+            return changed.count > 0;
         });
     }
 
@@ -351,7 +488,11 @@ export class StateService {
         }
 
         const since = new Date(Date.now() - UPTIME_WINDOW_MS);
-        const window = { monitorId, checkedAt: { gte: since } };
+        const window = {
+            monitorId,
+            checkedAt: { gte: since },
+            evaluated: true,
+        };
 
         const [totalChecks, successfulChecks, latency] = await Promise.all([
             this.prisma.checkLog.count({ where: window }),
@@ -371,6 +512,8 @@ export class StateService {
             name: monitor.name,
             target: monitor.target,
             type: monitor.type,
+            executionBlockedReason:
+                monitor.state?.executionBlockedReason ?? null,
             status: monitor.state?.status ?? MonitorStatus.UNKNOWN,
             failCount: monitor.state?.failCount ?? 0,
             lastCheckAt: monitor.state?.lastCheckAt ?? null,

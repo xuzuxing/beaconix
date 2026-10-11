@@ -15,6 +15,24 @@ import type {
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { NotifierService } from '../notifier/notifier.service';
 import { QuotaService } from '../../shared/quota/quota.service';
+import type { MonitorPolicy } from '../../shared/quota/quota.service';
+import { isIP } from 'node:net';
+import { parseTcpTarget } from '../checker/checkers/tcp.checker';
+import {
+    CONFIG_VERSION,
+    isDomain,
+    validateMonitorConfig,
+} from './monitor-config';
+import type { MonitorConfig } from './monitor-config';
+import {
+    APPLICATION_MONITOR_TYPES,
+    validateApplicationMonitorTarget,
+} from './application-monitor-config';
+import { MonitorSecretsService } from './monitor-secrets.service';
+import type {
+    InputJsonValue,
+    JsonValue,
+} from '../../generated/prisma/internal/prismaNamespace';
 
 /** A monitor row with its companion state row and channel bindings loaded. */
 type MonitorWithState = MonitorModel & {
@@ -29,9 +47,11 @@ export class MonitorsService {
         private readonly systemProbeScheduler: SystemProbeScheduler,
         private readonly quotaService: QuotaService,
         private readonly notifierService: NotifierService,
+        private readonly secrets: MonitorSecretsService,
     ) {}
 
     async create(projectId: string, dto: CreateMonitorDto) {
+        this.rejectNullFields(dto);
         const project = await this.ensureProjectExists(projectId);
         await this.quotaService.assertCanCreate(
             project.organizationId,
@@ -41,7 +61,17 @@ export class MonitorsService {
             project.organizationId,
             dto.interval ?? 60,
         );
-        this.validateTarget(dto.type, dto.target);
+        await this.quotaService.assertMonitorTypeAllowed(
+            project.organizationId,
+            dto.type,
+        );
+        const config = validateMonitorConfig(dto.type, dto.config);
+        const sealed = this.secrets.seal(config, {
+            organizationId: project.organizationId,
+            type: dto.type,
+            target: dto.target,
+        });
+        this.validateTarget(dto.type, dto.target, config);
         this.validateSslConfig(dto.type, dto.target, dto.checkSsl ?? false);
 
         const { notificationChannelIds, ...monitorData } = dto;
@@ -55,6 +85,15 @@ export class MonitorsService {
         const monitor = await this.prisma.monitor.create({
             data: {
                 ...monitorData,
+                config: sealed.config,
+                ...(sealed.credentialsEnc
+                    ? { credentialsEnc: sealed.credentialsEnc }
+                    : {}),
+                ...(dto.timeout === undefined &&
+                APPLICATION_MONITOR_TYPES.includes(dto.type)
+                    ? { timeout: 10000 }
+                    : {}),
+                configVersion: CONFIG_VERSION,
                 organizationId: project.organizationId,
                 projectId,
                 state: { create: {} },
@@ -75,7 +114,7 @@ export class MonitorsService {
     }
 
     async findAll(projectId: string) {
-        await this.ensureProjectExists(projectId);
+        const project = await this.ensureProjectExists(projectId);
 
         const monitors = await this.prisma.monitor.findMany({
             where: { projectId, deletedAt: null },
@@ -83,7 +122,10 @@ export class MonitorsService {
             orderBy: { createdAt: 'desc' },
         });
 
-        return monitors.map((m) => this.toEntity(m));
+        const policy = await this.quotaService.getMonitorPolicy(
+            project.organizationId,
+        );
+        return Promise.all(monitors.map((m) => this.toEntity(m, policy)));
     }
 
     /** Cross-project listing used by the developer API. */
@@ -94,7 +136,8 @@ export class MonitorsService {
             orderBy: { createdAt: 'desc' },
         });
 
-        return monitors.map((m) => this.toEntity(m));
+        const policy = await this.quotaService.getMonitorPolicy(orgId);
+        return Promise.all(monitors.map((m) => this.toEntity(m, policy)));
     }
 
     async findOne(projectId: string, monitorId: string) {
@@ -103,16 +146,70 @@ export class MonitorsService {
     }
 
     async update(projectId: string, monitorId: string, dto: UpdateMonitorDto) {
+        this.rejectNullFields(dto);
         const existing = await this.ensureMonitorExists(projectId, monitorId);
         const nextType = dto.type ?? existing.type;
         const nextTarget = dto.target ?? existing.target;
         const nextCheckSsl = dto.checkSsl ?? existing.checkSsl;
+        if (
+            nextTarget !== existing.target &&
+            existing.credentialsEnc &&
+            dto.config === undefined
+        ) {
+            throw new BadRequestException(
+                'Changing a credentialed target requires a complete config with credentials re-entered',
+            );
+        }
+        if (
+            dto.type !== undefined &&
+            dto.type !== existing.type &&
+            dto.config === undefined
+        ) {
+            throw new BadRequestException(
+                'A type change requires a complete config',
+            );
+        }
+        const config = validateMonitorConfig(
+            nextType,
+            dto.config !== undefined ? dto.config : this.secrets.open(existing),
+        );
         const targetChanged =
             nextType !== existing.type || nextTarget !== existing.target;
-        const sslConfigChanged =
+        let configChanged = false;
+        if (dto.config !== undefined) {
+            try {
+                const previousConfig = validateMonitorConfig(
+                    existing.type,
+                    this.secrets.open(existing),
+                );
+                configChanged =
+                    JSON.stringify(config) !== JSON.stringify(previousConfig);
+            } catch {
+                // An explicit replacement can repair invalid persisted config.
+                configChanged = true;
+            }
+        }
+        const definitionChanged =
             targetChanged ||
-            dto.checkSsl !== undefined ||
-            dto.sslExpiryThreshold !== undefined;
+            configChanged ||
+            (
+                [
+                    'timeout',
+                    'expectedStatus',
+                    'failureThreshold',
+                    'interval',
+                    'checkSsl',
+                    'sslExpiryThreshold',
+                    'availabilityEnabled',
+                    'availabilityThreshold',
+                    'availabilityWindow',
+                ] as const
+            ).some(
+                (field) =>
+                    dto[field] !== undefined && dto[field] !== existing[field],
+            );
+        const lifecycleChanged =
+            dto.enabled !== undefined && dto.enabled !== existing.enabled;
 
         if (dto.interval !== undefined && dto.interval !== existing.interval) {
             await this.quotaService.assertIntervalAllowed(
@@ -120,9 +217,33 @@ export class MonitorsService {
                 dto.interval,
             );
         }
+        if (
+            nextType !== existing.type ||
+            (dto.enabled === true && !existing.enabled)
+        ) {
+            await this.quotaService.assertMonitorTypeAllowed(
+                existing.organizationId,
+                nextType,
+            );
+            await this.quotaService.assertIntervalAllowed(
+                existing.organizationId,
+                dto.interval ?? existing.interval,
+            );
+        }
 
-        this.validateTarget(nextType, nextTarget);
+        this.validateTarget(nextType, nextTarget, config);
         this.validateSslConfig(nextType, nextTarget, nextCheckSsl);
+        const sealed =
+            configChanged || targetChanged
+                ? this.secrets.seal(config, {
+                      organizationId: existing.organizationId,
+                      type: nextType,
+                      target: nextTarget,
+                  })
+                : {
+                      config: existing.config as InputJsonValue,
+                      credentialsEnc: existing.credentialsEnc,
+                  };
 
         const { notificationChannelIds, ...monitorData } = dto;
         await this.assertChannelsBelongToOrg(
@@ -131,18 +252,44 @@ export class MonitorsService {
         );
 
         const monitor = await this.prisma.monitor.update({
-            where: { id: monitorId },
+            where: {
+                id: monitorId,
+                revision: existing.revision,
+                deletedAt: null,
+            },
             data: {
                 ...monitorData,
+                config: sealed.config,
+                ...(dto.config !== undefined || existing.credentialsEnc
+                    ? { credentialsEnc: sealed.credentialsEnc }
+                    : {}),
+                ...(definitionChanged || lifecycleChanged
+                    ? {
+                          revision: { increment: 1 },
+                      }
+                    : {}),
                 state:
-                    targetChanged || sslConfigChanged
+                    definitionChanged || lifecycleChanged
                         ? {
                               upsert: {
-                                  create: {},
+                                  create: {
+                                      status:
+                                          (dto.enabled ?? existing.enabled)
+                                              ? 'UNKNOWN'
+                                              : 'PAUSED',
+                                  },
                                   update: {
-                                      status: 'UNKNOWN',
+                                      status:
+                                          (dto.enabled ?? existing.enabled)
+                                              ? 'UNKNOWN'
+                                              : 'PAUSED',
                                       failCount: 0,
+                                      connectivityFailCount: 0,
+                                      lastAppliedObservationAt: null,
+                                      lastAppliedObservationId: null,
                                       lastCheckAt: null,
+                                      lastLocalCheckAt: null,
+                                      executionBlockedReason: null,
                                       lastError: null,
                                       lastLatency: null,
                                       lastNotifiedStatus: null,
@@ -151,6 +298,9 @@ export class MonitorsService {
                                       sslIssuer: null,
                                       sslSubject: null,
                                       sslLastNotifiedAt: null,
+                                      availabilityAlertActive: false,
+                                      availabilityAlertPendingId: null,
+                                      lastAvailabilityAlertAt: null,
                                   },
                               },
                           }
@@ -184,13 +334,17 @@ export class MonitorsService {
         }
 
         const updated = await this.prisma.monitor.update({
-            where: { id: monitorId },
+            where: { id: monitorId, revision: monitor.revision },
             data: {
                 enabled: false,
+                revision: { increment: 1 },
                 state: {
                     upsert: {
                         create: { status: 'PAUSED' },
-                        update: { status: 'PAUSED' },
+                        update: {
+                            status: 'PAUSED',
+                            availabilityAlertPendingId: null,
+                        },
                     },
                 },
             },
@@ -208,14 +362,36 @@ export class MonitorsService {
         if (monitor.enabled) {
             throw new BadRequestException('Monitor is not paused');
         }
+        await this.quotaService.assertMonitorTypeAllowed(
+            monitor.organizationId,
+            monitor.type,
+        );
+        await this.quotaService.assertIntervalAllowed(
+            monitor.organizationId,
+            monitor.interval,
+        );
 
         const updated = await this.prisma.monitor.update({
-            where: { id: monitorId },
+            where: { id: monitorId, revision: monitor.revision },
             data: {
                 enabled: true,
+                revision: { increment: 1 },
                 // The real status is re-derived by the next check.
                 state: {
-                    upsert: { create: {}, update: { status: 'UNKNOWN' } },
+                    upsert: {
+                        create: {},
+                        update: {
+                            status: 'UNKNOWN',
+                            failCount: 0,
+                            connectivityFailCount: 0,
+                            lastAppliedObservationAt: null,
+                            lastAppliedObservationId: null,
+                            lastLocalCheckAt: null,
+                            executionBlockedReason: null,
+                            availabilityAlertActive: false,
+                            availabilityAlertPendingId: null,
+                        },
+                    },
                 },
             },
             include: { state: true, notificationChannels: true },
@@ -227,11 +403,11 @@ export class MonitorsService {
     }
 
     async softDelete(projectId: string, monitorId: string) {
-        await this.ensureMonitorExists(projectId, monitorId);
+        const monitor = await this.ensureMonitorExists(projectId, monitorId);
 
         const updated = await this.prisma.monitor.update({
-            where: { id: monitorId },
-            data: { deletedAt: new Date() },
+            where: { id: monitorId, revision: monitor.revision },
+            data: { deletedAt: new Date(), revision: { increment: 1 } },
             include: { state: true, notificationChannels: true },
         });
 
@@ -255,10 +431,43 @@ export class MonitorsService {
         if (!monitor.deletedAt) {
             throw new BadRequestException('Monitor is not deleted');
         }
+        await this.quotaService.assertCanCreate(
+            monitor.organizationId,
+            'monitors',
+        );
+        await this.quotaService.assertMonitorTypeAllowed(
+            monitor.organizationId,
+            monitor.type,
+        );
+        await this.quotaService.assertIntervalAllowed(
+            monitor.organizationId,
+            monitor.interval,
+        );
 
         const updated = await this.prisma.monitor.update({
-            where: { id: monitorId },
-            data: { deletedAt: null },
+            where: { id: monitorId, revision: monitor.revision },
+            data: {
+                deletedAt: null,
+                revision: { increment: 1 },
+                state: {
+                    upsert: {
+                        create: {
+                            status: monitor.enabled ? 'UNKNOWN' : 'PAUSED',
+                        },
+                        update: {
+                            status: monitor.enabled ? 'UNKNOWN' : 'PAUSED',
+                            failCount: 0,
+                            connectivityFailCount: 0,
+                            lastAppliedObservationAt: null,
+                            lastAppliedObservationId: null,
+                            lastLocalCheckAt: null,
+                            executionBlockedReason: null,
+                            availabilityAlertActive: false,
+                            availabilityAlertPendingId: null,
+                        },
+                    },
+                },
+            },
             include: { state: true, notificationChannels: true },
         });
 
@@ -281,7 +490,7 @@ export class MonitorsService {
         const threshold = monitor.availabilityThreshold ?? 90;
 
         const recent = await this.prisma.checkLog.findMany({
-            where: { monitorId },
+            where: { monitorId, evaluated: true, revision: monitor.revision },
             orderBy: { checkedAt: 'desc' },
             take: window,
             select: { success: true },
@@ -341,7 +550,15 @@ export class MonitorsService {
         return project;
     }
 
-    private validateTarget(type: MonitorType, target: string): void {
+    private validateTarget(
+        type: MonitorType,
+        target: string,
+        config?: MonitorConfig,
+    ): void {
+        if (APPLICATION_MONITOR_TYPES.includes(type)) {
+            validateApplicationMonitorTarget(type, target, config);
+            return;
+        }
         if (type === MonitorType.HTTP) {
             this.validateHttpTarget(target);
             return;
@@ -349,6 +566,21 @@ export class MonitorsService {
 
         if (type === MonitorType.TCP) {
             this.validateTcpTarget(target);
+            return;
+        }
+        if (type === MonitorType.DNS && (!isDomain(target) || isIP(target))) {
+            throw new BadRequestException('DNS target must be a domain name');
+        }
+        if (type === MonitorType.PING && !isIP(target) && !isDomain(target)) {
+            throw new BadRequestException(
+                'PING target must be a hostname or IP',
+            );
+        }
+    }
+
+    private rejectNullFields(dto: CreateMonitorDto | UpdateMonitorDto): void {
+        if (Object.values(dto).some((value) => value === null)) {
+            throw new BadRequestException('Monitor fields cannot be null');
         }
     }
 
@@ -393,18 +625,7 @@ export class MonitorsService {
     }
 
     private validateTcpTarget(target: string): void {
-        const lastColon = target.lastIndexOf(':');
-
-        if (lastColon <= 0 || lastColon === target.length - 1) {
-            throw new BadRequestException(
-                'TCP monitor target must use host:port format',
-            );
-        }
-
-        const host = target.slice(0, lastColon).trim();
-        const port = Number(target.slice(lastColon + 1));
-
-        if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+        if (!parseTcpTarget(target)) {
             throw new BadRequestException(
                 'TCP monitor target must use host:port with port 1-65535',
             );
@@ -447,11 +668,28 @@ export class MonitorsService {
     }
 
     /** Flattens the companion state row into the monitor response. */
-    private toEntity(monitor: MonitorWithState): MonitorEntity {
-        const { state, notificationChannels, ...rest } = monitor;
+    private async toEntity(
+        monitor: MonitorWithState,
+        policy?: MonitorPolicy,
+    ): Promise<MonitorEntity> {
+        const { state, notificationChannels, credentialsEnc, ...rest } =
+            monitor;
+        const eligibility = await this.quotaService.monitorEligibility(
+            monitor.organizationId,
+            monitor.type,
+            monitor.interval,
+            policy,
+        );
+        const reason = !monitor.enabled
+            ? 'PAUSED'
+            : (eligibility.reason ?? state?.executionBlockedReason ?? null);
 
         return new MonitorEntity({
             ...rest,
+            config: this.secrets.publicConfig(monitor.config) as JsonValue,
+            hasCredentials: !!credentialsEnc,
+            executionEligible: reason === null,
+            executionBlockedReason: reason,
             notificationChannelIds:
                 notificationChannels?.map((binding) => binding.channelId) ?? [],
             status: state?.status ?? 'UNKNOWN',

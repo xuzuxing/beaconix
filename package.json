@@ -17,6 +17,9 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:monitor:safety": "tsx --test test/monitor-postgres/safety.spec.ts",
+    "test:monitor:postgres": "tsx --test --test-concurrency=1 test/monitor-postgres/monitor.integration-spec.ts",
+    "test:monitor:applications": "tsx --test --test-concurrency=1 test/application-monitors/database.integration-spec.ts",
     "prepare": "husky",
     "prisma:studio": "npx prisma studio",
     "prisma:generate": "npx prisma generate",
@@ -40,6 +43,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",
     "@aws-sdk/s3-request-presigner": "^3.1146.0",
+    "@grpc/grpc-js": "^1.14.6",
+    "@grpc/proto-loader": "^0.8.1",
     "@js-temporal/polyfill": "^0.5.1",
     "@nestjs-cls/transactional": "^4.0.1",
     "@nestjs-cls/transactional-adapter-prisma": "^2.0.1",
@@ -62,7 +67,9 @@
     "hbs": "^4.3.1",
     "helmet": "^8.3.0",
     "ioredis": "^6.0.0",
+    "mongodb": "^7.7.0",
     "multer": "^2.4.0",
+    "mysql2": "^3.24.5",
     "nestjs-cls": "^7.0.1",
     "nestjs-pino": "^5.3.1",
     "node-cache": "^5.1.2",
@@ -73,7 +80,8 @@
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "resend": "^6.17.1",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.6",
@@ -88,6 +96,7 @@
     "@types/node": "^26.1.1",
     "@types/qrcode": "^1.5.6",
     "@types/supertest": "^7.2.0",
+    "@types/ws": "^8.18.2",
     "dotenv": "^17.4.2",
     "eslint": "^10.7.0",
     "eslint-config-prettier": "^10.1.8",

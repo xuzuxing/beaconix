@@ -660,6 +660,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
                                 ? 'SUCCESS'
                                 : 'FAILURE',
                         });
+                        if (!result) return null;
                         return {
                             monitorId,
                             status: result.transition.status,

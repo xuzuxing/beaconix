@@ -16,6 +16,7 @@ const freePlan = {
     minInterval: 300,
     allowTenantProbe: false,
     allowStatusPage: false,
+    allowedMonitorTypes: ['HTTP', 'TCP', 'PING'],
 };
 
 function createService() {
@@ -120,5 +121,53 @@ describe('QuotaService', () => {
             percent: 80,
         });
         expect(summary.features.allowTenantProbe).toBe(false);
+        expect(summary.allowedMonitorTypes).toEqual(['HTTP', 'TCP', 'PING']);
+    });
+
+    it('denies DNS on FREE and permits it on explicitly entitled plans', async () => {
+        const { service, effectivePlanService } = createService();
+        await expect(
+            service.assertMonitorTypeAllowed('org-1', 'DNS'),
+        ).rejects.toMatchObject({
+            response: { code: 'MONITOR_TYPE_NOT_ALLOWED', type: 'DNS' },
+        });
+        effectivePlanService.getEffectivePlan.mockResolvedValue({
+            ...freePlan,
+            allowedMonitorTypes: ['HTTP', 'TCP', 'PING', 'DNS'],
+        });
+        await expect(
+            service.assertMonitorTypeAllowed('org-1', 'DNS'),
+        ).resolves.toBeUndefined();
+    });
+
+    it('uses an explicit safe type fallback when no FREE plan exists', async () => {
+        const { service, effectivePlanService } = createService();
+        effectivePlanService.getEffectivePlan.mockResolvedValue(null);
+        expect(await service.monitorEligibility('org-1', 'PING', 300)).toEqual({
+            eligible: true,
+            reason: null,
+        });
+        expect(await service.monitorEligibility('org-1', 'DNS', 300)).toEqual({
+            eligible: false,
+            reason: 'MONITOR_TYPE_NOT_ALLOWED',
+        });
+    });
+
+    it('re-evaluates runtime policy after a downgrade without changing monitor intent', async () => {
+        const { service, effectivePlanService } = createService();
+        effectivePlanService.getEffectivePlan.mockResolvedValueOnce({
+            ...freePlan,
+            allowedMonitorTypes: ['HTTP', 'TCP', 'PING', 'DNS'],
+        });
+        expect(
+            (await service.monitorEligibility('org-1', 'DNS', 300)).eligible,
+        ).toBe(true);
+        expect(
+            (await service.monitorEligibility('org-1', 'DNS', 300)).eligible,
+        ).toBe(false);
+        expect(await service.monitorEligibility('org-1', 'HTTP', 60)).toEqual({
+            eligible: false,
+            reason: 'INTERVAL_TOO_SHORT',
+        });
     });
 });

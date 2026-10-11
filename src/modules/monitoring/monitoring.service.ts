@@ -138,6 +138,7 @@ export class MonitoringService {
         const window = {
             monitorId: { in: monitorIds },
             checkedAt: { gte: since },
+            evaluated: true,
         };
 
         const [totalChecks, successfulChecks] = await Promise.all([

@@ -714,6 +714,15 @@ model AuditLog {
 enum MonitorType {
   HTTP
   TCP
+  PING
+  DNS
+  MYSQL
+  POSTGRESQL
+  REDIS
+  MONGODB
+  DOCKER
+  GRPC
+  WEBSOCKET
 }
 
 enum MonitorStatus {
@@ -803,6 +812,10 @@ model Monitor {
   name               String
   type               MonitorType
   target             String
+  config             Json        @default("{}")
+  credentialsEnc     String?
+  configVersion      Int         @default(1)
+  revision           Int         @default(1)
   interval           Int         @default(60)
   timeout            Int         @default(5000)
   expectedStatus     Int         @default(200)
@@ -850,6 +863,7 @@ model MonitorState {
   lastCheckAt        DateTime?
   // 最近一次"本地检测"时间（探针回调不会推进它），调度到期判定只看这一列
   lastLocalCheckAt   DateTime?
+  executionBlockedReason String?
   lastError          String?
   lastLatency        Int?
   lastNotifiedStatus MonitorStatus?
@@ -865,6 +879,7 @@ model MonitorState {
   connectivityFailCount Int          @default(0)
   lastAppliedObservationAt DateTime?
   lastAppliedObservationId String?
+  availabilityAlertPendingId String?
   updatedAt          DateTime       @updatedAt
 
   monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
@@ -1092,6 +1107,10 @@ model CheckLog {
   // 命中的规则组 ID，便于追溯「为什么触发」
   ruleGroupIds   String[]    @default([])
   source         CheckSource @default(LOCAL)
+  revision       Int         @default(1)
+  evaluated      Boolean     @default(true)
+  failureKind    String?
+  meta           Json        @default("{}")
   checkedAt      DateTime    @default(now())
 
   monitor Monitor? @relation(fields: [monitorRefId], references: [id], onDelete: SetNull)
@@ -1315,6 +1334,7 @@ model Plan {
 
   allowTenantProbe Boolean @default(false)
   allowStatusPage  Boolean @default(false)
+  allowedMonitorTypes MonitorType[] @default([HTTP, TCP, PING])
 
   enabled Boolean @default(true)
 
