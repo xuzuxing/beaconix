@@ -10,7 +10,10 @@ import {
     PaymentChannel,
     PaymentStatus,
     SubscriptionStatus,
+    NotificationType,
 } from '../../../generated/prisma/enums';
+import { NotificationsService } from '../../notifications/notifications.service';
+import { ADMIN_ROLES } from '../../notifications/notification-event';
 import type { OrderModel } from '../../../generated/prisma/models';
 import { CreatePaymentDto } from './dto';
 import { PaymentProviderFactory } from './payment-provider.factory';
@@ -32,6 +35,7 @@ export class PaymentService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly paymentProviderFactory: PaymentProviderFactory,
+        private readonly notifications: NotificationsService,
     ) {}
 
     async createPayment(
@@ -148,7 +152,58 @@ export class PaymentService {
                 data: { status: OrderStatus.PAID, paidAt: new Date() },
             });
 
-            await this.activateSubscription(tx, payment.order);
+            // Serialize renewals and expiry sweeps for this tenant.
+            await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${payment.order.organizationId} FOR UPDATE`;
+            const activation = await this.activateSubscription(
+                tx,
+                payment.order,
+            );
+            const recipients = [
+                payment.order.userId,
+                ...(await this.notifications.organizationRecipients(
+                    payment.order.organizationId,
+                    tx,
+                    ADMIN_ROLES,
+                )),
+            ];
+            await this.notifications.publish(
+                {
+                    eventKey: `payment-succeeded:${payment.id}`,
+                    type: NotificationType.PAYMENT_SUCCEEDED,
+                    title: 'Payment received',
+                    body: 'Your subscription payment has been confirmed.',
+                    organizationId: payment.order.organizationId,
+                    recipients,
+                    includeActor: true,
+                    email: true,
+                    resourceType: 'Order',
+                    resourceId: payment.orderId,
+                },
+                tx,
+            );
+            await this.notifications.publish(
+                {
+                    eventKey: `subscription-${activation.renewed ? 'renewed' : 'activated'}:${payment.orderId}`,
+                    type: activation.renewed
+                        ? NotificationType.SUBSCRIPTION_RENEWED
+                        : NotificationType.SUBSCRIPTION_ACTIVATED,
+                    title: activation.renewed
+                        ? 'Subscription renewed'
+                        : 'Subscription activated',
+                    body: `The subscription is valid until ${activation.expiresAt.toISOString()}.`,
+                    organizationId: payment.order.organizationId,
+                    recipients,
+                    includeActor: true,
+                    email: true,
+                    resourceType: 'Subscription',
+                    resourceId: activation.id,
+                    meta: {
+                        expiresAt: activation.expiresAt.toISOString(),
+                        planId: payment.order.planId,
+                    },
+                },
+                tx,
+            );
         });
 
         return { code: 'SUCCESS', message: '成功' };
@@ -202,7 +257,7 @@ export class PaymentService {
     private async activateSubscription(
         tx: Prisma.TransactionClient,
         order: OrderForPayment,
-    ): Promise<void> {
+    ): Promise<{ id: string; expiresAt: Date; renewed: boolean }> {
         const now = new Date();
         const dayMs = 24 * 60 * 60 * 1000;
 
@@ -216,27 +271,27 @@ export class PaymentService {
         });
 
         if (existing) {
+            const expiresAt = new Date(
+                existing.expiresAt.getTime() + order.durationDays * dayMs,
+            );
             await tx.subscription.update({
                 where: { id: existing.id },
-                data: {
-                    expiresAt: new Date(
-                        existing.expiresAt.getTime() +
-                            order.durationDays * dayMs,
-                    ),
-                },
+                data: { expiresAt },
             });
-            return;
+            return { id: existing.id, expiresAt, renewed: true };
         }
 
-        await tx.subscription.create({
+        const expiresAt = new Date(now.getTime() + order.durationDays * dayMs);
+        const subscription = await tx.subscription.create({
             data: {
                 organizationId: order.organizationId,
                 planId: order.planId,
                 status: SubscriptionStatus.ACTIVE,
                 startsAt: now,
-                expiresAt: new Date(now.getTime() + order.durationDays * dayMs),
+                expiresAt,
                 orderId: order.id,
             },
         });
+        return { id: subscription.id, expiresAt, renewed: false };
     }
 }

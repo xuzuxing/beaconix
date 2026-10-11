@@ -68,6 +68,46 @@ enum NotificationType {
   MEMBER_JOINED
   MEMBER_REMOVED
   MENTION
+  INVITATION_RECEIVED
+  INVITATION_ACCEPTED
+  INVITATION_DECLINED
+  INVITATION_REVOKED
+  INVITATION_EXPIRED
+  MEMBER_ROLE_CHANGED
+  MEMBER_LEFT
+  OWNERSHIP_TRANSFERRED
+  ORGANIZATION_DELETED
+  ORGANIZATION_RESTORED
+  TASK_UNASSIGNED
+  TASK_DELETED
+  TASK_RESTORED
+  TASK_SPRINT_CHANGED
+  TASK_DEPENDENCY_CHANGED
+  TASK_UNBLOCKED
+  COMMENT_REPLIED
+  PROJECT_DELETED
+  PROJECT_RESTORED
+  SPRINT_DELETED
+  PASSWORD_CHANGED
+  PASSWORD_RESET_COMPLETED
+  TWO_FACTOR_ENABLED
+  TWO_FACTOR_DISABLED
+  TWO_FACTOR_RECOVERY_CODE_USED
+  TWO_FACTOR_RECOVERY_CODES_REGENERATED
+  PAYMENT_SUCCEEDED
+  SUBSCRIPTION_ACTIVATED
+  SUBSCRIPTION_RENEWED
+  SUBSCRIPTION_EXPIRING
+  SUBSCRIPTION_EXPIRED
+  MONITOR_ALERT
+  MONITOR_RECOVERED
+  API_KEY_CREATED
+  API_KEY_REVOKED
+  PERSONAL_ACCESS_TOKEN_CREATED
+  PERSONAL_ACCESS_TOKEN_REVOKED
+  PROBE_ENROLLED
+  PROBE_SECRET_ROTATED
+  PROBE_CREDENTIAL_REVOKED
 }
 
 enum AuditAction {
@@ -660,6 +700,7 @@ model TaskLabel {
 model Notification {
   id           String           @id @default(cuid())
   userId       String
+  dedupKey     String?          @unique
   type         NotificationType
   title        String
   body         String?
@@ -679,6 +720,27 @@ model Notification {
   @@index([createdAt])
   @@index([resourceType, resourceId])
   @@map("notifications")
+}
+
+// Transactional delivery intents; network delivery never runs in business transactions.
+model NotificationDelivery {
+  id          String    @id @default(cuid())
+  dedupKey    String    @unique
+  channel     String
+  payload     Json
+  status      String    @default("PENDING")
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(now())
+  leaseUntil  DateTime?
+  leaseToken  String?
+  lastError   String?
+  deliveredAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, availableAt])
+  @@index([status, leaseUntil])
+  @@map("notification_deliveries")
 }
 
 // AUDIT LOG (Immutable log of all important actions across the platform)

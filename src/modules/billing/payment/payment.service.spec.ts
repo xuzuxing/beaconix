@@ -39,13 +39,18 @@ function createService() {
     const paymentProviderFactory = {
         get: jest.fn().mockReturnValue(provider),
     };
+    const notifications = {
+        publish: jest.fn().mockResolvedValue(undefined),
+        organizationRecipients: jest.fn().mockResolvedValue(['owner', 'admin']),
+    };
 
     const service = new PaymentService(
         prisma as unknown as PrismaService,
         paymentProviderFactory as unknown as PaymentProviderFactory,
+        notifications as never,
     );
 
-    return { service, prisma, provider, paymentProviderFactory };
+    return { service, prisma, provider, paymentProviderFactory, notifications };
 }
 
 describe('PaymentService', () => {
@@ -83,8 +88,86 @@ describe('PaymentService', () => {
     });
 
     describe('handleWechatCallback', () => {
+        it('publishes a renewal rather than activation for an existing subscription', async () => {
+            const { service, prisma, provider, notifications } =
+                createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: 'transaction',
+                trade_state: 'SUCCESS',
+            });
+            prisma.payment.findFirst.mockResolvedValue({
+                id: 'payment-1',
+                orderId: order.id,
+                status: 'PENDING',
+                order,
+            });
+            const expiresAt = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000);
+            const tx = {
+                $queryRaw: jest.fn(),
+                payment: {
+                    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+                },
+                order: { update: jest.fn() },
+                subscription: {
+                    findFirst: jest
+                        .fn()
+                        .mockResolvedValue({ id: 'sub-1', expiresAt }),
+                    update: jest.fn(),
+                    create: jest.fn(),
+                },
+            };
+            prisma.$transaction.mockImplementation((callback) => callback(tx));
+            await service.handleWechatCallback('{}', 'signature');
+            expect(tx.subscription.create).not.toHaveBeenCalled();
+            expect(
+                notifications.publish.mock.calls.map(([event]) => event.type),
+            ).toEqual(['PAYMENT_SUCCEEDED', 'SUBSCRIPTION_RENEWED']);
+            expect(notifications.publish.mock.calls[1][0].meta.expiresAt).toBe(
+                new Date(
+                    expiresAt.getTime() +
+                        order.durationDays * 24 * 60 * 60 * 1000,
+                ).toISOString(),
+            );
+        });
+
+        it('fails callback persistence when the transactional notification cannot be stored', async () => {
+            const { service, prisma, provider, notifications } =
+                createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: 'transaction',
+                trade_state: 'SUCCESS',
+            });
+            prisma.payment.findFirst.mockResolvedValue({
+                id: 'payment-1',
+                orderId: order.id,
+                status: 'PENDING',
+                order,
+            });
+            const tx = {
+                $queryRaw: jest.fn(),
+                payment: {
+                    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+                },
+                order: { update: jest.fn() },
+                subscription: {
+                    findFirst: jest.fn().mockResolvedValue(null),
+                    create: jest.fn().mockResolvedValue({ id: 'sub-1' }),
+                },
+            };
+            prisma.$transaction.mockImplementation((callback) => callback(tx));
+            notifications.publish.mockRejectedValue(
+                new Error('outbox unavailable'),
+            );
+            await expect(
+                service.handleWechatCallback('{}', 'signature'),
+            ).rejects.toThrow('outbox unavailable');
+        });
+
         it('activates the subscription and marks order/payment as paid', async () => {
-            const { service, prisma, provider } = createService();
+            const { service, prisma, provider, notifications } =
+                createService();
             provider.verifyCallback.mockResolvedValue({
                 out_trade_no: 'BWABC123',
                 transaction_id: 'wx-tx-1',
@@ -98,13 +181,14 @@ describe('PaymentService', () => {
             });
 
             const tx = {
+                $queryRaw: jest.fn(),
                 payment: {
                     updateMany: jest.fn().mockResolvedValue({ count: 1 }),
                 },
                 order: { update: jest.fn() },
                 subscription: {
                     findFirst: jest.fn().mockResolvedValue(null),
-                    create: jest.fn(),
+                    create: jest.fn().mockResolvedValue({ id: 'sub-1' }),
                     update: jest.fn(),
                 },
             };
@@ -142,10 +226,26 @@ describe('PaymentService', () => {
                     }),
                 }),
             );
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'PAYMENT_SUCCEEDED',
+                    recipients: ['user-1', 'owner', 'admin'],
+                    eventKey: 'payment-succeeded:payment-1',
+                }),
+                tx,
+            );
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'SUBSCRIPTION_ACTIVATED',
+                    resourceId: 'sub-1',
+                }),
+                tx,
+            );
         });
 
         it('is idempotent when the payment is already SUCCESS', async () => {
-            const { service, prisma, provider } = createService();
+            const { service, prisma, provider, notifications } =
+                createService();
             provider.verifyCallback.mockResolvedValue({
                 out_trade_no: 'BWABC123',
                 transaction_id: 'wx-tx-1',
@@ -165,10 +265,12 @@ describe('PaymentService', () => {
 
             expect(result).toEqual({ code: 'SUCCESS', message: '成功' });
             expect(prisma.$transaction).not.toHaveBeenCalled();
+            expect(notifications.publish).not.toHaveBeenCalled();
         });
 
         it('skips order/subscription work when a concurrent callback settled the payment', async () => {
-            const { service, prisma, provider } = createService();
+            const { service, prisma, provider, notifications } =
+                createService();
             provider.verifyCallback.mockResolvedValue({
                 out_trade_no: 'BWABC123',
                 transaction_id: 'wx-tx-1',
@@ -204,6 +306,7 @@ describe('PaymentService', () => {
             expect(tx.order.update).not.toHaveBeenCalled();
             expect(tx.subscription.findFirst).not.toHaveBeenCalled();
             expect(tx.subscription.create).not.toHaveBeenCalled();
+            expect(notifications.publish).not.toHaveBeenCalled();
         });
 
         it('normalises an empty transaction_id to null', async () => {
@@ -221,13 +324,14 @@ describe('PaymentService', () => {
             });
 
             const tx = {
+                $queryRaw: jest.fn(),
                 payment: {
                     updateMany: jest.fn().mockResolvedValue({ count: 1 }),
                 },
                 order: { update: jest.fn() },
                 subscription: {
                     findFirst: jest.fn().mockResolvedValue(null),
-                    create: jest.fn(),
+                    create: jest.fn().mockResolvedValue({ id: 'sub-1' }),
                     update: jest.fn(),
                 },
             };

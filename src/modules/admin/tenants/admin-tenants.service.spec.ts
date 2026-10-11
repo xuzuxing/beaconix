@@ -21,10 +21,24 @@ function createService() {
             update: jest.fn(),
         },
     };
+    Object.assign(prisma, {
+        $transaction: jest.fn((callback) => callback(prisma)),
+        $queryRaw: jest.fn(),
+        membership: {
+            findMany: jest.fn().mockResolvedValue([
+                { userId: 'member', role: 'MEMBER' },
+                { userId: 'admin', role: 'ADMIN' },
+            ]),
+        },
+    });
+    const notifications = { publish: jest.fn().mockResolvedValue(undefined) };
 
-    const service = new AdminTenantsService(prisma as unknown as PrismaService);
+    const service = new AdminTenantsService(
+        prisma as unknown as PrismaService,
+        notifications as never,
+    );
 
-    return { service, prisma };
+    return { service, prisma, notifications };
 }
 
 describe('AdminTenantsService', () => {
@@ -71,7 +85,7 @@ describe('AdminTenantsService', () => {
     });
 
     it('soft-deletes an active tenant and restores a deleted one', async () => {
-        const { service, prisma } = createService();
+        const { service, prisma, notifications } = createService();
         prisma.organization.findUnique.mockResolvedValue({
             id: 'org-1',
             deletedAt: null,
@@ -89,6 +103,19 @@ describe('AdminTenantsService', () => {
             }),
         );
         expect(deleted.active).toBe(false);
+        expect(notifications.publish).toHaveBeenCalledWith(
+            expect.objectContaining({
+                type: 'ORGANIZATION_DELETED',
+                allowOutsideOrg: true,
+                includeActor: true,
+                recipients: [
+                    { userId: 'user-1', email: true },
+                    { userId: 'member', email: false },
+                    { userId: 'admin', email: true },
+                ],
+            }),
+            prisma,
+        );
 
         prisma.organization.findUnique.mockResolvedValue({
             id: 'org-1',
@@ -99,5 +126,35 @@ describe('AdminTenantsService', () => {
         const restored = await service.toggle('org-1');
 
         expect(restored.active).toBe(true);
+        expect(notifications.publish).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                type: 'ORGANIZATION_RESTORED',
+                allowOutsideOrg: false,
+            }),
+            prisma,
+        );
+    });
+
+    it('includes the platform actor on deletion and aborts if the notice fails', async () => {
+        const { service, prisma, notifications } = createService();
+        prisma.organization.findUnique.mockResolvedValue(orgRow);
+        prisma.organization.update.mockResolvedValue({
+            ...orgRow,
+            deletedAt: new Date(),
+        });
+        notifications.publish.mockRejectedValue(
+            new Error('outbox unavailable'),
+        );
+        await expect(service.toggle('org-1', 'platform-admin')).rejects.toThrow(
+            'outbox unavailable',
+        );
+        expect(notifications.publish.mock.calls[0][0]).toMatchObject({
+            actorId: 'platform-admin',
+            includeActor: true,
+            allowOutsideOrg: true,
+        });
+        expect(notifications.publish.mock.calls[0][0].recipients).toContain(
+            'platform-admin',
+        );
     });
 });

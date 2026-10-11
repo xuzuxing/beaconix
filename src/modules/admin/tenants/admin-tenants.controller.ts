@@ -18,6 +18,8 @@ import {
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { SuperAdminGuard } from '../../../common/guards';
+import { CurrentUser } from '../../../common/decorators';
+import type { JwtPayload } from '../../../common/interfaces/jwt-payload.interface';
 import { AdminTenantsService } from './admin-tenants.service';
 import { AdminTenantEntity } from './entities';
 
@@ -60,7 +62,7 @@ export class AdminTenantsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })
     @ApiNotFoundResponse({ description: 'Tenant not found' })
-    async toggle(@Param('id') id: string) {
-        return this.adminTenantsService.toggle(id);
+    async toggle(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+        return this.adminTenantsService.toggle(id, user.sub);
     }
 }

@@ -42,8 +42,6 @@ export class EmailService {
             return;
         }
 
-        this.logger.log(`Payload: ${JSON.stringify(payload)}`);
-
         this.logger.log(`Sending "${template}" email to "${masked}"`);
 
         const message = {
@@ -126,6 +124,15 @@ export class EmailService {
         let result: { subject: string; html: string };
 
         switch (template) {
+            case EmailTemplate.NOTIFICATION: {
+                const notice =
+                    payload as EmailPayloadMap[EmailTemplate.NOTIFICATION];
+                result = {
+                    subject: notice.title,
+                    html: `<h2>${escapeHtml(notice.title)}</h2><p>${escapeHtml(notice.body).replace(/\n/g, '<br/>')}</p>`,
+                };
+                break;
+            }
             case EmailTemplate.INVITATION:
                 result = this.buildInvitationEmail(
                     payload as EmailPayloadMap[EmailTemplate.INVITATION],

@@ -9,7 +9,7 @@ import {
     UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { ScheduledJobRegistry } from '../../infra/scheduler/scheduled-job.registry';
 import {
@@ -23,7 +23,11 @@ import {
     ExecutionTrigger,
     ProbeScope,
     ProbeStatus,
+    NotificationType,
 } from '../../generated/prisma/enums';
+import type { Prisma } from '../../generated/prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
+import { ADMIN_ROLES } from '../notifications/notification-event';
 import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { QuotaService } from '../../shared/quota/quota.service';
@@ -105,6 +109,7 @@ export class ProbesService implements OnModuleInit {
         private readonly quotaService: QuotaService,
         private readonly configService: ConfigService,
         private readonly registry: ScheduledJobRegistry,
+        private readonly notifications: NotificationsService,
     ) {}
 
     onModuleInit(): void {
@@ -120,23 +125,39 @@ export class ProbesService implements OnModuleInit {
         });
     }
 
-    async create(orgId: string, dto: CreateProbeDto): Promise<ProbeEntity> {
+    async create(
+        orgId: string,
+        dto: CreateProbeDto,
+        actorId?: string,
+    ): Promise<ProbeEntity> {
         await this.quotaService.assertFeatureAllowed(orgId, 'tenantProbe');
         await this.quotaService.assertCanCreate(orgId, 'probes');
 
         const secret = this.generateSecret('tnt');
 
-        const probe = await this.prisma.probe.create({
-            data: {
-                organizationId: orgId,
-                scope: ProbeScope.TENANT,
-                name: dto.name,
-                provider: dto.provider,
-                region: dto.region,
-                callbackUrl: dto.callbackUrl,
-                enabled: dto.enabled ?? true,
-                secrets: { create: this.secretRecord(secret) },
-            },
+        const probe = await this.prisma.$transaction(async (tx) => {
+            const created = await tx.probe.create({
+                data: {
+                    organizationId: orgId,
+                    scope: ProbeScope.TENANT,
+                    name: dto.name,
+                    provider: dto.provider,
+                    region: dto.region,
+                    callbackUrl: dto.callbackUrl,
+                    enabled: dto.enabled ?? true,
+                    secrets: { create: this.secretRecord(secret) },
+                },
+            });
+            await this.credentialNotice(
+                orgId,
+                created.id,
+                NotificationType.PROBE_ENROLLED,
+                'A probe was enrolled',
+                `probe-enrolled:${created.id}`,
+                tx,
+                actorId,
+            );
+            return created;
         });
 
         // The plaintext secret is handed back exactly once, on this response.
@@ -191,10 +212,25 @@ export class ProbesService implements OnModuleInit {
     }
 
     /** Probes have no soft-delete column: removing one drops its results too. */
-    async remove(orgId: string, probeId: string): Promise<void> {
+    async remove(
+        orgId: string,
+        probeId: string,
+        actorId?: string,
+    ): Promise<void> {
         await this.ensureProbeExists(orgId, probeId);
 
-        await this.prisma.probe.delete({ where: { id: probeId } });
+        await this.prisma.$transaction(async (tx) => {
+            await tx.probe.delete({ where: { id: probeId } });
+            await this.credentialNotice(
+                orgId,
+                probeId,
+                NotificationType.PROBE_CREDENTIAL_REVOKED,
+                'A probe was removed and its credentials revoked',
+                `probe-removed:${probeId}`,
+                tx,
+                actorId,
+            );
+        });
         await this.systemProbeScheduler.rebalance();
     }
 
@@ -203,7 +239,11 @@ export class ProbesService implements OnModuleInit {
      * window (smooth rotation): the probe stays online and picks up the new
      * secret on its own schedule instead of being knocked offline.
      */
-    async rotateSecret(orgId: string, probeId: string): Promise<ProbeEntity> {
+    async rotateSecret(
+        orgId: string,
+        probeId: string,
+        actorId?: string,
+    ): Promise<ProbeEntity> {
         await this.ensureProbeExists(orgId, probeId);
 
         const secret = this.generateSecret('tnt');
@@ -212,6 +252,7 @@ export class ProbesService implements OnModuleInit {
         );
 
         const probe = await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM probes WHERE id = ${probeId} FOR UPDATE`;
             // Give the secrets currently in force an expiry rather than
             // revoking them, so an un-updated probe keeps working meanwhile.
             await tx.probeSecret.updateMany({
@@ -219,7 +260,7 @@ export class ProbesService implements OnModuleInit {
                 data: { expiresAt: graceDeadline },
             });
 
-            return tx.probe.update({
+            const rotated = await tx.probe.update({
                 where: { id: probeId },
                 data: { secrets: { create: this.secretRecord(secret) } },
                 include: {
@@ -229,6 +270,16 @@ export class ProbesService implements OnModuleInit {
                     _count: { select: { results: true } },
                 },
             });
+            await this.credentialNotice(
+                orgId,
+                probeId,
+                NotificationType.PROBE_SECRET_ROTATED,
+                'A probe credential was rotated',
+                `probe-secret-rotated:${probeId}:${randomUUID()}`,
+                tx,
+                actorId,
+            );
+            return rotated;
         });
 
         await this.systemProbeScheduler.rebalance();
@@ -849,43 +900,92 @@ export class ProbesService implements OnModuleInit {
      * Revokes the presented credential. When it was the probe's last usable
      * secret the probe is taken offline so it stops looking healthy.
      */
-    async revokeBySecret(secret: string | undefined) {
+    async revokeBySecret(secret: string | undefined, actorId?: string) {
         if (!secret || secret.trim() === '') {
             throw new UnauthorizedException('Missing probe secret');
         }
 
         const record = await this.prisma.probeSecret.findUnique({
             where: { secretHash: hashSecret(secret.trim()) },
+            include: { probe: true },
         });
         if (!record || record.revokedAt) {
             throw new UnauthorizedException('Unknown probe secret');
         }
 
-        await this.prisma.probeSecret.update({
-            where: { id: record.id },
-            data: { revokedAt: new Date() },
-        });
-
-        const remaining = await this.prisma.probeSecret.count({
-            where: {
-                probeId: record.probeId,
-                revokedAt: null,
-                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-            },
-        });
-
-        if (remaining === 0) {
-            await this.prisma.probe.update({
-                where: { id: record.probeId },
-                data: { status: ProbeStatus.OFFLINE },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM probes WHERE id = ${record.probeId} FOR UPDATE`;
+            await tx.probeSecret.update({
+                where: { id: record.id, revokedAt: null },
+                data: { revokedAt: new Date() },
             });
-        }
+            const remaining = await tx.probeSecret.count({
+                where: {
+                    probeId: record.probeId,
+                    revokedAt: null,
+                    OR: [
+                        { expiresAt: null },
+                        { expiresAt: { gt: new Date() } },
+                    ],
+                },
+            });
+            if (remaining === 0) {
+                await tx.probe.update({
+                    where: { id: record.probeId },
+                    data: { status: ProbeStatus.OFFLINE },
+                });
+            }
+            if (record.probe.organizationId) {
+                await this.credentialNotice(
+                    record.probe.organizationId,
+                    record.probeId,
+                    NotificationType.PROBE_CREDENTIAL_REVOKED,
+                    'A probe credential was revoked',
+                    `probe-credential-revoked:${record.id}`,
+                    tx,
+                    actorId,
+                );
+            }
+        });
 
         return {
             ok: true,
             probeId: record.probeId,
             revokedSecretId: record.id,
         };
+    }
+
+    private async credentialNotice(
+        orgId: string,
+        probeId: string,
+        type: NotificationType,
+        title: string,
+        eventKey: string,
+        tx: Prisma.TransactionClient,
+        actorId?: string,
+    ): Promise<void> {
+        await this.notifications.publish(
+            {
+                eventKey,
+                type,
+                title,
+                organizationId: orgId,
+                resourceType: 'Probe',
+                resourceId: probeId,
+                actorId,
+                includeActor: true,
+                email: true,
+                recipients: [
+                    ...(actorId ? [actorId] : []),
+                    ...(await this.notifications.organizationRecipients(
+                        orgId,
+                        tx,
+                        ADMIN_ROLES,
+                    )),
+                ],
+            },
+            tx,
+        );
     }
 
     /**

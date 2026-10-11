@@ -29,22 +29,37 @@ function createService() {
             update: jest.fn(),
         },
     };
+    const transaction = jest.fn((callback) => callback(prisma));
+    Object.assign(prisma, { $transaction: transaction });
     const jwtService = { signAsync: jest.fn() };
     const quotaService = { assertCanCreate: jest.fn() };
+    const notifications = {
+        publish: jest.fn().mockResolvedValue(undefined),
+        organizationRecipients: jest.fn().mockResolvedValue(['owner', 'admin']),
+    };
 
     const service = new ApiCredentialsService(
         prisma as unknown as PrismaService,
         jwtService as any,
         quotaService as any,
+        notifications as any,
     );
 
-    return { service, prisma, jwtService, quotaService };
+    return {
+        service,
+        prisma,
+        jwtService,
+        quotaService,
+        notifications,
+        transaction,
+    };
 }
 
 describe('ApiCredentialsService', () => {
     describe('createApiKey', () => {
         it('stores only the hash and returns the raw key once', async () => {
-            const { service, prisma, quotaService } = createService();
+            const { service, prisma, quotaService, notifications } =
+                createService();
             quotaService.assertCanCreate.mockResolvedValue(undefined);
             prisma.apiKey.create.mockImplementation(({ data }: any) => ({
                 id: 'key-1',
@@ -78,6 +93,20 @@ describe('ApiCredentialsService', () => {
             expect(created.keyHash).toBe(
                 createHash('sha256').update(result.key!).digest('hex'),
             );
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'API_KEY_CREATED',
+                    organizationId: 'org-1',
+                    recipients: ['user-1', 'owner', 'admin'],
+                    includeActor: true,
+                }),
+                prisma,
+            );
+            const notice = JSON.stringify(
+                notifications.publish.mock.calls[0][0],
+            );
+            expect(notice).not.toContain(result.key);
+            expect(notice).not.toContain(created.keyHash);
         });
 
         it('rejects an expiry in the past', async () => {
@@ -95,8 +124,58 @@ describe('ApiCredentialsService', () => {
     });
 
     describe('revokeApiKey', () => {
+        it('notifies the creator, actor and org administrators transactionally', async () => {
+            const { service, prisma, notifications } = createService();
+            prisma.apiKey.findFirst.mockResolvedValue({
+                id: 'key-1',
+                createdById: 'creator',
+                revokedAt: null,
+                keyHash: 'secret-key-hash',
+            });
+            prisma.apiKey.update.mockResolvedValue({
+                id: 'key-1',
+                createdById: 'creator',
+                revokedAt: new Date(),
+            });
+            await service.revokeApiKey('org-1', 'key-1', 'actor');
+            expect(prisma.apiKey.update).toHaveBeenCalledWith({
+                where: { id: 'key-1', revokedAt: null },
+                data: { revokedAt: expect.any(Date) },
+            });
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'API_KEY_REVOKED',
+                    includeActor: true,
+                    actorId: 'actor',
+                    recipients: ['creator', 'actor', 'owner', 'admin'],
+                }),
+                prisma,
+            );
+            expect(
+                JSON.stringify(notifications.publish.mock.calls[0][0]),
+            ).not.toContain('secret-key-hash');
+        });
+
+        it('filters a missing creator from the revoked-key recipients', async () => {
+            const { service, prisma, notifications } = createService();
+            prisma.apiKey.findFirst.mockResolvedValue({
+                id: 'key-1',
+                createdById: null,
+                revokedAt: null,
+            });
+            prisma.apiKey.update.mockResolvedValue({
+                id: 'key-1',
+                revokedAt: new Date(),
+            });
+            await service.revokeApiKey('org-1', 'key-1');
+            expect(notifications.publish.mock.calls[0][0].recipients).toEqual([
+                'owner',
+                'admin',
+            ]);
+        });
+
         it('rejects revoking an already revoked key', async () => {
-            const { service, prisma } = createService();
+            const { service, prisma, notifications } = createService();
             prisma.apiKey.findFirst.mockResolvedValue({
                 id: 'key-1',
                 revokedAt: new Date(),
@@ -105,6 +184,7 @@ describe('ApiCredentialsService', () => {
             await expect(
                 service.revokeApiKey('org-1', 'key-1'),
             ).rejects.toBeInstanceOf(BadRequestException);
+            expect(notifications.publish).not.toHaveBeenCalled();
         });
 
         it('throws when the key is not in the org', async () => {
@@ -114,6 +194,49 @@ describe('ApiCredentialsService', () => {
             await expect(
                 service.revokeApiKey('org-1', 'missing'),
             ).rejects.toBeInstanceOf(NotFoundException);
+        });
+    });
+
+    describe('personal token revocation', () => {
+        it('notifies only the token owner', async () => {
+            const { service, prisma, notifications } = createService();
+            prisma.personalAccessToken.findFirst.mockResolvedValue({
+                id: 'pat-1',
+                revokedAt: null,
+            });
+            prisma.personalAccessToken.update.mockResolvedValue({
+                id: 'pat-1',
+                revokedAt: new Date(),
+            });
+            await service.revokePersonalAccessToken('user-1', 'pat-1');
+            const event = notifications.publish.mock.calls[0][0];
+            expect(event).toMatchObject({
+                type: 'PERSONAL_ACCESS_TOKEN_REVOKED',
+                recipients: ['user-1'],
+                includeActor: true,
+                email: true,
+            });
+            expect(event.organizationId).toBeUndefined();
+            expect(notifications.publish.mock.calls[0][1]).toBe(prisma);
+            expect(notifications.organizationRecipients).not.toHaveBeenCalled();
+        });
+
+        it('propagates notice failure instead of committing a silent revocation', async () => {
+            const { service, prisma, notifications } = createService();
+            prisma.personalAccessToken.findFirst.mockResolvedValue({
+                id: 'pat-1',
+                revokedAt: null,
+            });
+            prisma.personalAccessToken.update.mockResolvedValue({
+                id: 'pat-1',
+                revokedAt: new Date(),
+            });
+            notifications.publish.mockRejectedValue(
+                new Error('outbox unavailable'),
+            );
+            await expect(
+                service.revokePersonalAccessToken('user-1', 'pat-1'),
+            ).rejects.toThrow('outbox unavailable');
         });
     });
 
@@ -174,7 +297,8 @@ describe('ApiCredentialsService', () => {
 
     describe('createPersonalAccessToken', () => {
         it('signs a revocable JWT containing kind and patId', async () => {
-            const { service, prisma, jwtService } = createService();
+            const { service, prisma, jwtService, notifications } =
+                createService();
             prisma.personalAccessToken.create.mockResolvedValue({
                 id: 'pat-1',
                 userId: user.sub,
@@ -204,6 +328,18 @@ describe('ApiCredentialsService', () => {
             const created =
                 prisma.personalAccessToken.create.mock.calls[0][0].data;
             expect(created.scopes).toEqual([...API_SCOPES]);
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'PERSONAL_ACCESS_TOKEN_CREATED',
+                    recipients: ['user-1'],
+                    includeActor: true,
+                }),
+                prisma,
+            );
+            const notice = notifications.publish.mock.calls[0][0];
+            expect(notice.organizationId).toBeUndefined();
+            expect(JSON.stringify(notice)).not.toContain('signed.jwt');
+            expect(notifications.organizationRecipients).not.toHaveBeenCalled();
         });
 
         it('rejects an expiry more than one year out', async () => {

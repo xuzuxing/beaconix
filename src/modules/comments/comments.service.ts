@@ -8,6 +8,10 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { CreateCommentDto, UpdateCommentDto } from './dto';
 import { CommentEntity } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';
+import type {
+    NotificationDb,
+    NotificationEvent,
+} from '../notifications/notification-event';
 
 const authorSelect = {
     id: true,
@@ -48,70 +52,81 @@ export class CommentsService {
     async create(taskId: string, userId: string, dto: CreateCommentDto) {
         const task = await this.ensureTaskExists(taskId);
 
-        if (dto.parentId) {
-            const parent = await this.prisma.comment.findFirst({
-                where: { id: dto.parentId, taskId, deletedAt: null },
-            });
-            if (!parent) {
+        const comment = await this.prisma.$transaction(async (tx) => {
+            const parent = dto.parentId
+                ? await tx.comment.findFirst({
+                      where: { id: dto.parentId, taskId, deletedAt: null },
+                  })
+                : null;
+            if (dto.parentId && !parent) {
                 throw new BadRequestException('Parent comment not found');
             }
-        }
 
-        const comment = await this.prisma.comment.create({
-            data: {
-                body: dto.body,
-                taskId,
-                authorId: userId,
-                parentId: dto.parentId ?? null,
-            },
-            include: {
-                author: { select: authorSelect },
-            },
-        });
-
-        // Notify task watchers and mentioned members (fire-and-forget).
-        // Mentioned members get a MENTION notification instead of TASK_COMMENTED.
-        const mentionedUserIds = await this.findMentionedUserIds(
-            dto.body,
-            task.projectId,
-            userId,
-        );
-        const mentioned = new Set(mentionedUserIds);
-
-        const watchers = await this.prisma.taskWatcher.findMany({
-            where: { taskId },
-            select: { userId: true },
-        });
-        const watcherIds = watchers
-            .map((w) => w.userId)
-            .filter((id) => id !== userId && !mentioned.has(id));
-
-        const preview = dto.body.replace(/\s+/g, ' ').trim().slice(0, 100);
-
-        if (watcherIds.length > 0) {
-            this.notificationsService
-                .createAndEmitMany(watcherIds, {
-                    type: 'TASK_COMMENTED' as const,
-                    title: `New comment on task #${task.number}`,
-                    body: preview,
-                    resourceType: 'Task',
-                    resourceId: taskId,
-                })
-                .catch(() => {});
-        }
-
-        if (mentionedUserIds.length > 0) {
-            this.notificationsService
-                .createAndEmitMany(mentionedUserIds, {
+            const created = await tx.comment.create({
+                data: {
+                    body: dto.body,
+                    taskId,
+                    authorId: userId,
+                    parentId: dto.parentId ?? null,
+                },
+                include: { author: { select: authorSelect } },
+            });
+            const mentioned = await this.findMentionedUserIds(
+                dto.body,
+                task.organizationId,
+                userId,
+                tx,
+            );
+            const candidates: NotificationEvent['recipients'] = [
+                ...mentioned.map((id) => ({
+                    userId: id,
                     type: 'MENTION' as const,
                     title: `You were mentioned on task #${task.number}`,
-                    body: preview,
+                })),
+                ...(parent?.authorId
+                    ? [
+                          {
+                              userId: parent.authorId,
+                              type: 'COMMENT_REPLIED' as const,
+                              title: `New reply to your comment on task #${task.number}`,
+                          },
+                      ]
+                    : []),
+                ...(await this.notificationsService.taskRecipients(taskId, tx)),
+            ];
+            // First match wins: mention, reply author, then ordinary participants.
+            const recipients = new Map<
+                string,
+                NotificationEvent['recipients'][number]
+            >();
+            for (const recipient of candidates) {
+                const id =
+                    typeof recipient === 'string'
+                        ? recipient
+                        : recipient.userId;
+                if (id !== userId && !recipients.has(id))
+                    recipients.set(id, recipient);
+            }
+            await this.notificationsService.publish(
+                {
+                    eventKey: `comment:${created.id}:created`,
+                    type: 'TASK_COMMENTED',
+                    title: `New comment on task #${task.number}`,
+                    body: dto.body.replace(/\s+/g, ' ').trim().slice(0, 100),
+                    organizationId: task.organizationId,
+                    actorId: userId,
                     resourceType: 'Task',
                     resourceId: taskId,
-                    meta: { commentId: comment.id },
-                })
-                .catch(() => {});
-        }
+                    meta: {
+                        commentId: created.id,
+                        parentId: dto.parentId ?? null,
+                    },
+                    recipients: [...recipients.values()],
+                },
+                tx,
+            );
+            return created;
+        });
 
         return new CommentEntity(comment);
     }
@@ -175,19 +190,14 @@ export class CommentsService {
      */
     private async findMentionedUserIds(
         body: string,
-        projectId: string,
+        organizationId: string,
         authorId: string,
+        tx: NotificationDb,
     ): Promise<string[]> {
         if (!body.includes('@')) return [];
 
-        const project = await this.prisma.project.findUnique({
-            where: { id: projectId },
-            select: { organizationId: true },
-        });
-        if (!project) return [];
-
-        const members = await this.prisma.membership.findMany({
-            where: { organizationId: project.organizationId },
+        const members = await tx.membership.findMany({
+            where: { organizationId },
             select: { userId: true, user: { select: { name: true } } },
         });
 

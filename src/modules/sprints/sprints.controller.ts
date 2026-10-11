@@ -27,8 +27,9 @@ import {
 import { SprintsService } from './sprints.service';
 import { CreateSprintDto, UpdateSprintDto } from './dto';
 import { SprintEntity } from './entities';
-import { Roles, AuditLog } from '../../common/decorators';
+import { Roles, AuditLog, CurrentUser } from '../../common/decorators';
 import { RolesGuard, OrgMemberGuard } from '../../common/guards';
+import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
 @ApiTags('Sprints')
 @ApiBearerAuth('access-token')
@@ -144,8 +145,9 @@ export class SprintsController {
     async start(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.sprintsService.start(projectId, id);
+        return this.sprintsService.start(projectId, id, user.sub);
     }
 
     @Post(':id/complete')
@@ -173,8 +175,9 @@ export class SprintsController {
     async complete(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.sprintsService.complete(projectId, id);
+        return this.sprintsService.complete(projectId, id, user.sub);
     }
 
     @Delete(':id')
@@ -197,7 +200,8 @@ export class SprintsController {
     async remove(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.sprintsService.remove(projectId, id);
+        return this.sprintsService.remove(projectId, id, user.sub);
     }
 }

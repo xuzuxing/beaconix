@@ -8,6 +8,8 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { CreateProjectDto, UpdateProjectDto } from './dto';
 import { ProjectEntity } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';
+import { randomUUID } from 'node:crypto';
+import type { NotificationDb } from '../notifications/notification-event';
 
 @Injectable()
 export class ProjectsService {
@@ -71,57 +73,99 @@ export class ProjectsService {
         return new ProjectEntity(project);
     }
 
-    async archive(orgId: string, projectId: string) {
-        const project = await this.ensureProjectExists(orgId, projectId);
-
-        if (project.status === 'ARCHIVED') {
-            throw new BadRequestException('Project is already archived');
-        }
-
-        const updated = await this.prisma.project.update({
-            where: { id: projectId },
-            data: { status: 'ARCHIVED' },
+    async archive(orgId: string, projectId: string, actorId: string) {
+        const updated = await this.prisma.$transaction(async (tx) => {
+            const project = await this.lockProject(orgId, projectId, tx);
+            if (project.status === 'ARCHIVED') {
+                throw new BadRequestException('Project is already archived');
+            }
+            const updated = await tx.project.update({
+                where: { id: projectId },
+                data: { status: 'ARCHIVED' },
+            });
+            await this.notificationsService.publish(
+                {
+                    eventKey: `project:${projectId}:archived:${randomUUID()}`,
+                    type: 'PROJECT_ARCHIVED',
+                    title: `Project "${updated.name}" has been archived`,
+                    body: 'The project is now read-only. Restore it to make changes again.',
+                    organizationId: orgId,
+                    actorId,
+                    resourceType: 'Project',
+                    resourceId: projectId,
+                    recipients:
+                        await this.notificationsService.projectRecipients(
+                            projectId,
+                            tx,
+                        ),
+                },
+                tx,
+            );
+            return updated;
         });
-
-        // Notify every org member about the archive (fire-and-forget)
-        this.notifyOrgMembers(project.organizationId, {
-            type: 'PROJECT_ARCHIVED',
-            title: `Project "${updated.name}" has been archived`,
-            body: 'The project is now read-only. Restore it to make changes again.',
-            resourceType: 'Project',
-            resourceId: projectId,
-        }).catch(() => {});
 
         return new ProjectEntity(updated);
     }
 
-    async softDelete(orgId: string, projectId: string) {
-        await this.ensureProjectExists(orgId, projectId);
-
-        const updated = await this.prisma.project.update({
-            where: { id: projectId },
-            data: { deletedAt: new Date() },
+    async softDelete(orgId: string, projectId: string, actorId: string) {
+        const updated = await this.prisma.$transaction(async (tx) => {
+            await this.lockProject(orgId, projectId, tx);
+            const recipients =
+                await this.notificationsService.projectRecipients(
+                    projectId,
+                    tx,
+                );
+            const updated = await tx.project.update({
+                where: { id: projectId },
+                data: { deletedAt: new Date() },
+            });
+            await this.notificationsService.publish(
+                {
+                    eventKey: `project:${projectId}:deleted:${randomUUID()}`,
+                    type: 'PROJECT_DELETED',
+                    title: `Project "${updated.name}" was deleted`,
+                    organizationId: orgId,
+                    actorId,
+                    resourceType: 'Project',
+                    resourceId: projectId,
+                    recipients,
+                },
+                tx,
+            );
+            return updated;
         });
 
         return new ProjectEntity(updated);
     }
 
-    async restore(orgId: string, projectId: string) {
-        const project = await this.prisma.project.findFirst({
-            where: { id: projectId, organizationId: orgId },
-        });
-
-        if (!project) {
-            throw new NotFoundException('Project not found');
-        }
-
-        if (!project.deletedAt) {
-            throw new BadRequestException('Project is not deleted');
-        }
-
-        const updated = await this.prisma.project.update({
-            where: { id: projectId },
-            data: { deletedAt: null, status: 'ACTIVE' },
+    async restore(orgId: string, projectId: string, actorId: string) {
+        const updated = await this.prisma.$transaction(async (tx) => {
+            const project = await this.lockProject(orgId, projectId, tx, true);
+            if (!project.deletedAt) {
+                throw new BadRequestException('Project is not deleted');
+            }
+            const updated = await tx.project.update({
+                where: { id: projectId },
+                data: { deletedAt: null, status: 'ACTIVE' },
+            });
+            await this.notificationsService.publish(
+                {
+                    eventKey: `project:${projectId}:restored:${randomUUID()}`,
+                    type: 'PROJECT_RESTORED',
+                    title: `Project "${updated.name}" was restored`,
+                    organizationId: orgId,
+                    actorId,
+                    resourceType: 'Project',
+                    resourceId: projectId,
+                    recipients:
+                        await this.notificationsService.projectRecipients(
+                            projectId,
+                            tx,
+                        ),
+                },
+                tx,
+            );
+            return updated;
         });
 
         return new ProjectEntity(updated);
@@ -129,25 +173,26 @@ export class ProjectsService {
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    private async notifyOrgMembers(
-        organizationId: string,
-        dto: {
-            type: 'PROJECT_ARCHIVED';
-            title: string;
-            body: string;
-            resourceType: string;
-            resourceId: string;
-        },
+    private async lockProject(
+        orgId: string,
+        projectId: string,
+        tx: NotificationDb,
+        includeDeleted = false,
     ) {
-        const members = await this.prisma.membership.findMany({
-            where: { organizationId },
-            select: { userId: true },
+        await tx.$queryRaw`
+            SELECT "id" FROM "projects"
+            WHERE "id" = ${projectId} AND "organizationId" = ${orgId}
+            FOR UPDATE
+        `;
+        const project = await tx.project.findFirst({
+            where: {
+                id: projectId,
+                organizationId: orgId,
+                ...(includeDeleted ? {} : { deletedAt: null }),
+            },
         });
-
-        await this.notificationsService.createAndEmitMany(
-            members.map((m) => m.userId),
-            dto,
-        );
+        if (!project) throw new NotFoundException('Project not found');
+        return project;
     }
 
     private async ensureProjectExists(orgId: string, projectId: string) {

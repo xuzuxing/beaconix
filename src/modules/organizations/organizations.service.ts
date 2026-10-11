@@ -15,6 +15,8 @@ import {
     TransferOwnershipDto,
 } from './dto';
 import { OrganizationEntity } from './entities';
+import { NotificationsService } from '../notifications/notifications.service';
+import { ADMIN_ROLES } from '../notifications/notification-event';
 
 /** Only the delegates onboarding touches — works for the client and a transaction. */
 type OnboardingDb = Pick<
@@ -47,7 +49,10 @@ export interface ProvisionedOrganization {
 export class OrganizationsService {
     private readonly logger = new Logger(OrganizationsService.name);
 
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly notifications: NotificationsService,
+    ) {}
 
     async create(userId: string, dto: CreateOrganizationDto) {
         const existing = await this.prisma.organization.findUnique({
@@ -128,9 +133,34 @@ export class OrganizationsService {
             );
         }
 
-        const updated = await this.prisma.organization.update({
-            where: { id: orgId },
-            data: { deletedAt: new Date() },
+        const updated = await this.prisma.$transaction(async (tx) => {
+            const members = await tx.membership.findMany({
+                where: { organizationId: orgId },
+                select: { userId: true, role: true },
+            });
+            const updated = await tx.organization.update({
+                where: { id: orgId },
+                data: { deletedAt: new Date() },
+            });
+            await this.notifications.publish(
+                {
+                    eventKey: `organization-deleted:${orgId}:${updated.updatedAt.toISOString()}`,
+                    type: 'ORGANIZATION_DELETED',
+                    title: `Organization "${org.name}" was deleted`,
+                    body: 'This organization is no longer accessible.',
+                    resourceType: 'Organization',
+                    resourceId: orgId,
+                    organizationId: orgId,
+                    actorId: userId,
+                    allowOutsideOrg: true,
+                    recipients: members.map((member) => ({
+                        userId: member.userId,
+                        email: ADMIN_ROLES.includes(member.role),
+                    })),
+                },
+                tx,
+            );
+            return updated;
         });
 
         return new OrganizationEntity(updated);
@@ -193,6 +223,34 @@ export class OrganizationsService {
                 data: { role: 'ADMIN' },
             });
 
+            await this.notifications.publish(
+                {
+                    eventKey: `ownership-transferred:${orgId}:${updatedOrg.updatedAt.toISOString()}`,
+                    type: 'OWNERSHIP_TRANSFERRED',
+                    title: `Ownership of "${org.name}" was transferred`,
+                    body: 'Organization ownership and administrator permissions have changed.',
+                    organizationId: orgId,
+                    resourceType: 'Organization',
+                    resourceId: orgId,
+                    actorId: currentUserId,
+                    includeActor: true,
+                    email: true,
+                    recipients: [
+                        currentUserId,
+                        dto.newOwnerId,
+                        ...(await this.notifications.organizationRecipients(
+                            orgId,
+                            tx,
+                            ADMIN_ROLES,
+                        )),
+                    ],
+                    meta: {
+                        previousOwnerId: currentUserId,
+                        newOwnerId: dto.newOwnerId,
+                    },
+                },
+                tx,
+            );
             return updatedOrg;
         });
 

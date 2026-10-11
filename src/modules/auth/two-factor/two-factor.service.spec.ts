@@ -3,7 +3,7 @@ import * as QRCode from 'qrcode';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { TwoFactorConfig } from '../../../config';
-import type { EmailService } from '../../email/email.service';
+import type { NotificationsService } from '../../notifications/notifications.service';
 import { EmailTemplate } from '../../email/email.types';
 import { TwoFactorCryptoService } from './two-factor-crypto.service';
 import {
@@ -32,6 +32,7 @@ function baseUser(overrides: Record<string, unknown> = {}) {
     return {
         id: 'u1',
         email: 'john@example.com',
+        name: 'John',
         password: 'hashed',
         twoFactorEnabled: false,
         twoFactorEnabledAt: null,
@@ -42,12 +43,16 @@ function baseUser(overrides: Record<string, unknown> = {}) {
 
 function createService() {
     const prisma: any = {
-        user: { findUnique: jest.fn(), update: jest.fn() },
+        user: {
+            findUnique: jest.fn().mockResolvedValue(baseUser()),
+            update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
         twoFactorChallenge: {
             create: jest.fn(),
             findUnique: jest.fn(),
             update: jest.fn(),
-            updateMany: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             deleteMany: jest.fn(),
         },
         twoFactorSecret: {
@@ -60,10 +65,12 @@ function createService() {
             count: jest.fn(),
             createMany: jest.fn(),
             update: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             deleteMany: jest.fn(),
         },
         refreshToken: { updateMany: jest.fn() },
         auditLog: { create: jest.fn() },
+        $queryRaw: jest.fn(),
     };
     prisma.$transaction = jest.fn((cb: (tx: any) => unknown) => cb(prisma));
 
@@ -95,18 +102,19 @@ function createService() {
         get: jest.fn().mockReturnValue(config),
     } as unknown as ConfigService;
 
-    const emailService = {
-        send: jest.fn().mockResolvedValue(undefined),
+    const notifications = {
+        publish: jest.fn().mockResolvedValue(undefined),
+        enqueueEmail: jest.fn().mockResolvedValue(undefined),
     };
 
     const service = new TwoFactorService(
         prisma as PrismaService,
         crypto as TwoFactorCryptoService,
         configService,
-        emailService as unknown as EmailService,
+        notifications as unknown as NotificationsService,
     );
 
-    return { service, prisma, crypto, emailService };
+    return { service, prisma, crypto, notifications };
 }
 
 const meta = { ipAddress: '127.0.0.1', userAgent: 'jest' };
@@ -252,7 +260,7 @@ describe('TwoFactorService', () => {
         });
 
         it('persists the secret, recovery codes, enables 2FA and revokes sessions', async () => {
-            const { service, prisma, crypto, emailService } = createService();
+            const { service, prisma, crypto, notifications } = createService();
             prisma.user.findUnique.mockResolvedValue(baseUser());
             prisma.twoFactorChallenge.findUnique.mockResolvedValue({
                 id: 'ch1',
@@ -283,8 +291,8 @@ describe('TwoFactorService', () => {
             ).toHaveBeenCalledWith({
                 data: [{ userId: 'u1', codeHash: 'hash1' }],
             });
-            expect(prisma.user.update).toHaveBeenCalledWith({
-                where: { id: 'u1' },
+            expect(prisma.user.updateMany).toHaveBeenCalledWith({
+                where: { id: 'u1', twoFactorEnabled: false },
                 data: expect.objectContaining({ twoFactorEnabled: true }),
             });
             expect(prisma.refreshToken.updateMany).toHaveBeenCalledWith({
@@ -298,10 +306,25 @@ describe('TwoFactorService', () => {
                     entityId: 'u1',
                 }),
             });
-            expect(emailService.send).toHaveBeenCalledWith(
+            expect(notifications.enqueueEmail).toHaveBeenCalledWith(
                 EmailTemplate.TWO_FACTOR_ENABLED,
                 expect.objectContaining({ to: 'john@example.com' }),
+                'two-factor-enabled:ch1',
+                prisma,
+                { userId: 'u1' },
             );
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'TWO_FACTOR_ENABLED',
+                    recipients: ['u1'],
+                    includeActor: true,
+                    email: false,
+                }),
+                prisma,
+            );
+            expect(
+                JSON.stringify(notifications.publish.mock.calls),
+            ).not.toMatch(/AAAA-BBBB-CCCC|hash1|SECRET|setupToken/);
         });
     });
 
@@ -352,7 +375,7 @@ describe('TwoFactorService', () => {
         });
 
         it('accepts a valid TOTP code and consumes the challenge', async () => {
-            const { service, prisma, crypto, emailService } = createService();
+            const { service, prisma, crypto, notifications } = createService();
             prisma.twoFactorChallenge.findUnique.mockResolvedValue(
                 loginChallenge(),
             );
@@ -370,16 +393,21 @@ describe('TwoFactorService', () => {
 
             expect(result.user.id).toBe('u1');
             expect(result.recoveryCodeUsed).toBe(false);
-            expect(prisma.twoFactorChallenge.update).toHaveBeenCalledWith({
-                where: { id: 'ch1' },
+            expect(prisma.twoFactorChallenge.updateMany).toHaveBeenCalledWith({
+                where: {
+                    id: 'ch1',
+                    consumedAt: null,
+                    expiresAt: { gt: expect.any(Date) },
+                },
                 data: { consumedAt: expect.any(Date) },
             });
             expect(prisma.auditLog.create).not.toHaveBeenCalled();
-            expect(emailService.send).not.toHaveBeenCalled();
+            expect(notifications.enqueueEmail).not.toHaveBeenCalled();
+            expect(notifications.publish).not.toHaveBeenCalled();
         });
 
         it('accepts a recovery code once and audits its use', async () => {
-            const { service, prisma, crypto, emailService } = createService();
+            const { service, prisma, crypto, notifications } = createService();
             prisma.twoFactorChallenge.findUnique.mockResolvedValue(
                 loginChallenge(),
             );
@@ -399,16 +427,21 @@ describe('TwoFactorService', () => {
             );
 
             expect(result.recoveryCodeUsed).toBe(true);
-            expect(prisma.twoFactorRecoveryCode.update).toHaveBeenCalledWith({
-                where: { id: 'rc1' },
+            expect(
+                prisma.twoFactorRecoveryCode.updateMany,
+            ).toHaveBeenCalledWith({
+                where: { id: 'rc1', usedAt: null },
                 data: { usedAt: expect.any(Date) },
             });
             expect(prisma.auditLog.create).toHaveBeenCalledWith({
                 data: expect.objectContaining({ action: 'USE_RECOVERY_CODE' }),
             });
-            expect(emailService.send).toHaveBeenCalledWith(
+            expect(notifications.enqueueEmail).toHaveBeenCalledWith(
                 EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED,
                 expect.objectContaining({ ipAddress: '127.0.0.1' }),
+                'two-factor-recovery-code-used:rc1',
+                prisma,
+                { userId: 'u1' },
             );
         });
 
@@ -456,7 +489,7 @@ describe('TwoFactorService', () => {
         });
 
         it('clears the secret, codes and sessions on success', async () => {
-            const { service, prisma, crypto, emailService } = createService();
+            const { service, prisma, crypto, notifications } = createService();
             prisma.user.findUnique.mockResolvedValue(
                 baseUser({ twoFactorEnabled: true }),
             );
@@ -480,17 +513,20 @@ describe('TwoFactorService', () => {
             expect(
                 prisma.twoFactorRecoveryCode.deleteMany,
             ).toHaveBeenCalledWith({ where: { userId: 'u1' } });
-            expect(prisma.user.update).toHaveBeenCalledWith({
-                where: { id: 'u1' },
+            expect(prisma.user.updateMany).toHaveBeenCalledWith({
+                where: { id: 'u1', twoFactorEnabled: true },
                 data: { twoFactorEnabled: false, twoFactorEnabledAt: null },
             });
             expect(prisma.refreshToken.updateMany).toHaveBeenCalled();
             expect(prisma.auditLog.create).toHaveBeenCalledWith({
                 data: expect.objectContaining({ action: 'DISABLE_2FA' }),
             });
-            expect(emailService.send).toHaveBeenCalledWith(
+            expect(notifications.enqueueEmail).toHaveBeenCalledWith(
                 EmailTemplate.TWO_FACTOR_DISABLED,
                 expect.objectContaining({ to: 'john@example.com' }),
+                expect.stringContaining('two-factor-disabled:u1:'),
+                prisma,
+                { userId: 'u1' },
             );
         });
     });
@@ -523,6 +559,149 @@ describe('TwoFactorService', () => {
             expect(result.enabled).toBe(true);
             expect(result.enabledAt).toBe(FUTURE);
             expect(result.recoveryCodesRemaining).toBe(8);
+        });
+    });
+
+    describe('transactional security coverage', () => {
+        function enabledService() {
+            const context = createService();
+            context.prisma.user.findUnique.mockResolvedValue(
+                baseUser({ twoFactorEnabled: true }),
+            );
+            context.prisma.twoFactorSecret.findUnique.mockResolvedValue({
+                secretEnc: 'enc',
+            });
+            context.crypto.generateRecoveryCodes.mockResolvedValue({
+                plain: ['NEW-RECOVERY-CODE'],
+                hashes: ['new-code-hash'],
+            });
+            compareMock.mockResolvedValue(true);
+            return context;
+        }
+
+        it('notifies both recovery-code use and privileged regeneration without exposing codes', async () => {
+            const { service, prisma, crypto, notifications } = enabledService();
+            crypto.isTotpFormat.mockReturnValue(false);
+            crypto.verifyRecoveryCode.mockResolvedValue(true);
+            prisma.twoFactorRecoveryCode.findMany.mockResolvedValue([
+                { id: 'rc1', codeHash: 'old-code-hash' },
+            ]);
+            await service.regenerateRecoveryCodes(
+                'u1',
+                { currentPassword: 'password', code: 'OLD-RECOVERY-CODE' },
+                meta,
+            );
+            expect(
+                notifications.publish.mock.calls.map(([event]) => event.type),
+            ).toEqual([
+                'TWO_FACTOR_RECOVERY_CODE_USED',
+                'TWO_FACTOR_RECOVERY_CODES_REGENERATED',
+            ]);
+            expect(
+                notifications.publish.mock.calls.every(
+                    ([event, tx]) =>
+                        event.includeActor &&
+                        !event.organizationId &&
+                        tx === prisma,
+                ),
+            ).toBe(true);
+            expect(notifications.enqueueEmail).toHaveBeenCalledTimes(1);
+            expect(notifications.enqueueEmail).toHaveBeenCalledWith(
+                EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED,
+                expect.objectContaining({ to: 'john@example.com' }),
+                'two-factor-recovery-code-used:rc1',
+                prisma,
+                { userId: 'u1' },
+            );
+            expect(notifications.publish.mock.calls[1][0].email).toBe(true);
+            const notices = JSON.stringify(notifications.publish.mock.calls);
+            expect(notices).not.toMatch(
+                /NEW-RECOVERY-CODE|OLD-RECOVERY-CODE|new-code-hash|old-code-hash/,
+            );
+        });
+
+        it('also sends the recovery-use alert when a recovery code disables 2FA', async () => {
+            const { service, prisma, crypto, notifications } = enabledService();
+            crypto.isTotpFormat.mockReturnValue(false);
+            crypto.verifyRecoveryCode.mockResolvedValue(true);
+            prisma.twoFactorRecoveryCode.findMany.mockResolvedValue([
+                { id: 'rc1', codeHash: 'hash' },
+            ]);
+            await service.disable(
+                'u1',
+                { currentPassword: 'password', code: 'OLD-RECOVERY-CODE' },
+                meta,
+            );
+            expect(
+                notifications.publish.mock.calls.map(([event]) => event.type),
+            ).toEqual(['TWO_FACTOR_RECOVERY_CODE_USED', 'TWO_FACTOR_DISABLED']);
+            expect(
+                notifications.enqueueEmail.mock.calls.map(
+                    ([template]) => template,
+                ),
+            ).toEqual([
+                EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED,
+                EmailTemplate.TWO_FACTOR_DISABLED,
+            ]);
+            expect(
+                notifications.enqueueEmail.mock.calls.map(
+                    ([, , , , audience]) => audience,
+                ),
+            ).toEqual([{ userId: 'u1' }, { userId: 'u1' }]);
+        });
+
+        it('rejects a recovery code already claimed concurrently without sending notices', async () => {
+            const { service, prisma, crypto, notifications } = enabledService();
+            crypto.isTotpFormat.mockReturnValue(false);
+            crypto.verifyRecoveryCode.mockResolvedValue(true);
+            prisma.twoFactorRecoveryCode.findMany.mockResolvedValue([
+                { id: 'rc1', codeHash: 'hash' },
+            ]);
+            prisma.twoFactorRecoveryCode.updateMany.mockResolvedValue({
+                count: 0,
+            });
+            await expect(
+                service.disable(
+                    'u1',
+                    { currentPassword: 'password', code: 'OLD-RECOVERY-CODE' },
+                    meta,
+                ),
+            ).rejects.toMatchObject({
+                response: { code: 'INVALID_TWO_FACTOR_CODE' },
+            });
+            expect(notifications.publish).not.toHaveBeenCalled();
+            expect(prisma.twoFactorSecret.deleteMany).not.toHaveBeenCalled();
+        });
+
+        it('propagates durable security-email failure from the mutation transaction', async () => {
+            const { service, crypto, notifications } = enabledService();
+            crypto.verifyTotp.mockResolvedValue(true);
+            notifications.enqueueEmail.mockRejectedValue(
+                new Error('outbox unavailable'),
+            );
+            await expect(
+                service.disable(
+                    'u1',
+                    { currentPassword: 'password', code: '123456' },
+                    meta,
+                ),
+            ).rejects.toThrow('outbox unavailable');
+        });
+
+        it('does not publish when 2FA has already been disabled concurrently', async () => {
+            const { service, prisma, crypto, notifications } = enabledService();
+            crypto.verifyTotp.mockResolvedValue(true);
+            prisma.user.updateMany.mockResolvedValue({ count: 0 });
+            await expect(
+                service.disable(
+                    'u1',
+                    { currentPassword: 'password', code: '123456' },
+                    meta,
+                ),
+            ).rejects.toMatchObject({
+                response: { code: 'TWO_FACTOR_NOT_ENABLED' },
+            });
+            expect(notifications.publish).not.toHaveBeenCalled();
         });
     });
 });

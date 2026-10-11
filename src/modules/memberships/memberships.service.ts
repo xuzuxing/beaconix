@@ -3,12 +3,14 @@ import {
     NotFoundException,
     ForbiddenException,
     BadRequestException,
+    ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { UpdateMemberRoleDto } from './dto';
 import { MembershipEntity } from './entities';
 import { MembershipRole } from '../../generated/prisma/enums';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ADMIN_ROLES } from '../notifications/notification-event';
 
 @Injectable()
 export class MembershipsService {
@@ -63,19 +65,57 @@ export class MembershipsService {
             throw new BadRequestException('Cannot change your own role');
         }
 
-        const updated = await this.prisma.membership.update({
-            where: { id: membership.id },
-            data: { role: dto.role },
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        email: true,
-                        name: true,
-                        avatarUrl: true,
+        if (membership.role === dto.role)
+            return new MembershipEntity(membership);
+        const updated = await this.prisma.$transaction(async (tx) => {
+            const claimed = await tx.membership.updateMany({
+                where: { id: membership.id, role: membership.role },
+                data: { role: dto.role },
+            });
+            const updated = await tx.membership.findUniqueOrThrow({
+                where: { id: membership.id },
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            email: true,
+                            name: true,
+                            avatarUrl: true,
+                        },
                     },
                 },
-            },
+            });
+            if (!claimed.count) {
+                if (updated.role === dto.role) return updated;
+                throw new ConflictException(
+                    'Member role changed; reload and retry',
+                );
+            }
+            await this.notificationsService.publish(
+                {
+                    eventKey: `membership-role:${updated.id}:${updated.updatedAt.toISOString()}`,
+                    type: 'MEMBER_ROLE_CHANGED',
+                    title: 'Organization role changed',
+                    body: `${updated.user.name}'s role changed from ${membership.role} to ${dto.role}.`,
+                    resourceType: 'Organization',
+                    resourceId: orgId,
+                    organizationId: orgId,
+                    actorId: actorUserId,
+                    recipients: [
+                        { userId: targetUserId, email: true },
+                        ...(membership.role === 'ADMIN' || dto.role === 'ADMIN'
+                            ? await this.notificationsService.organizationRecipients(
+                                  orgId,
+                                  tx,
+                                  ADMIN_ROLES,
+                              )
+                            : []),
+                    ],
+                    meta: { oldRole: membership.role, newRole: dto.role },
+                },
+                tx,
+            );
+            return updated;
         });
 
         return new MembershipEntity(updated);
@@ -102,19 +142,42 @@ export class MembershipsService {
             );
         }
 
-        await this.prisma.membership.delete({
-            where: { id: membership.id },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.membership.delete({ where: { id: membership.id } });
+            await this.notificationsService.publish(
+                {
+                    eventKey: `member-removed:${membership.id}`,
+                    type: 'MEMBER_REMOVED',
+                    title: 'You were removed from an organization',
+                    resourceType: 'Organization',
+                    resourceId: orgId,
+                    organizationId: orgId,
+                    actorId: actorUserId,
+                    allowOutsideOrg: true,
+                    recipients: [{ userId: targetUserId, email: true }],
+                },
+                tx,
+            );
+            await this.notificationsService.publish(
+                {
+                    eventKey: `member-removed-admin:${membership.id}`,
+                    type: 'MEMBER_REMOVED',
+                    title: 'A member was removed from the organization',
+                    resourceType: 'Organization',
+                    resourceId: orgId,
+                    organizationId: orgId,
+                    actorId: actorUserId,
+                    recipients:
+                        await this.notificationsService.organizationRecipients(
+                            orgId,
+                            tx,
+                            ADMIN_ROLES,
+                        ),
+                    meta: { memberId: targetUserId },
+                },
+                tx,
+            );
         });
-
-        // Notify removed user (fire-and-forget)
-        this.notificationsService
-            .createAndEmit(targetUserId, {
-                type: 'MEMBER_REMOVED' as const,
-                title: 'You were removed from an organization',
-                resourceType: 'Organization',
-                resourceId: orgId,
-            })
-            .catch(() => {});
     }
 
     async leaveOrganization(orgId: string, userId: string) {
@@ -127,8 +190,27 @@ export class MembershipsService {
             );
         }
 
-        await this.prisma.membership.delete({
-            where: { id: membership.id },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.membership.delete({ where: { id: membership.id } });
+            await this.notificationsService.publish(
+                {
+                    eventKey: `member-left:${membership.id}`,
+                    type: 'MEMBER_LEFT',
+                    title: 'A member left the organization',
+                    resourceType: 'Organization',
+                    resourceId: orgId,
+                    organizationId: orgId,
+                    actorId: userId,
+                    recipients:
+                        await this.notificationsService.organizationRecipients(
+                            orgId,
+                            tx,
+                            ADMIN_ROLES,
+                        ),
+                    meta: { memberId: userId },
+                },
+                tx,
+            );
         });
     }
 
@@ -149,6 +231,16 @@ export class MembershipsService {
 
     private async findMembership(orgId: string, userId: string) {
         const membership = await this.prisma.membership.findUnique({
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        email: true,
+                        name: true,
+                        avatarUrl: true,
+                    },
+                },
+            },
             where: {
                 userId_organizationId: {
                     userId,

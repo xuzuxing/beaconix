@@ -35,7 +35,8 @@ import {
     UpdateProbeDto,
 } from './dto';
 import { ProbeEntity } from './entities';
-import { Roles, AuditLog } from '../../common/decorators';
+import { Roles, AuditLog, CurrentUser } from '../../common/decorators';
+import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 
 @ApiTags('Probes')
@@ -71,8 +72,12 @@ export class ProbesController {
     @ApiBadRequestResponse({ description: 'Validation failed' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
-    async create(@Param('orgId') orgId: string, @Body() dto: CreateProbeDto) {
-        return this.probesService.create(orgId, dto);
+    async create(
+        @Param('orgId') orgId: string,
+        @Body() dto: CreateProbeDto,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.probesService.create(orgId, dto, user.sub);
     }
 
     @Get(':id')
@@ -121,8 +126,12 @@ export class ProbesController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Probe not found' })
-    async remove(@Param('orgId') orgId: string, @Param('id') id: string) {
-        await this.probesService.remove(orgId, id);
+    async remove(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        await this.probesService.remove(orgId, id, user.sub);
         return { id, deleted: true };
     }
 
@@ -138,8 +147,12 @@ export class ProbesController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Probe not found' })
-    async rotateSecret(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.probesService.rotateSecret(orgId, id);
+    async rotateSecret(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.probesService.rotateSecret(orgId, id, user.sub);
     }
 
     @Post(':id/validate')

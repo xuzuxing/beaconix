@@ -1,4 +1,5 @@
 export enum EmailTemplate {
+    NOTIFICATION = 'notification',
     INVITATION = 'invitation',
     WELCOME = 'welcome',
     PASSWORD_RESET = 'password-reset',
@@ -15,6 +16,11 @@ export enum EmailTemplate {
 }
 
 export interface EmailPayloadMap {
+    [EmailTemplate.NOTIFICATION]: {
+        to: string;
+        title: string;
+        body: string;
+    };
     [EmailTemplate.INVITATION]: {
         to: string;
         orgName: string;

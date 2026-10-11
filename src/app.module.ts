@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { join } from 'node:path';
+import { ServeStaticModule } from '@nestjs/serve-static';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -116,6 +118,11 @@ import { LoggerModule } from './infra/logging/logger.module';
                     },
                 ];
             },
+        }),
+        // Serve static files from the views directory
+        ServeStaticModule.forRoot({
+            rootPath: join(__dirname, '..', 'views'),
+            exclude: ['/api/*path'], // 让 API 请求走控制器，不返回 index.html
         }),
         // Recurring work runs through ScheduledJobsModule (BullMQ), so the
         // in-process ScheduleModule is intentionally not registered: a `@Cron`

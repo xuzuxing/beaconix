@@ -2,13 +2,15 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import * as QRCode from 'qrcode';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { BusinessException } from '../../../common/exceptions';
 import type { RequestMeta } from '../../../common/interfaces';
 import type { UserModel } from '../../../generated/prisma/models';
-import { AuditAction } from '../../../generated/prisma/enums';
+import { AuditAction, NotificationType } from '../../../generated/prisma/enums';
+import type { Prisma } from '../../../generated/prisma/client';
 import { TwoFactorConfig } from '../../../config';
-import { EmailService } from '../../email/email.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { EmailTemplate } from '../../email/email.types';
 import type { EmailPayloadMap } from '../../email/email.types';
 import { TwoFactorCryptoService } from './two-factor-crypto.service';
@@ -58,7 +60,7 @@ export class TwoFactorService {
         private readonly prisma: PrismaService,
         private readonly crypto: TwoFactorCryptoService,
         private readonly configService: ConfigService,
-        private readonly emailService: EmailService,
+        private readonly notifications: NotificationsService,
     ) {
         this.config = this.configService.get<TwoFactorConfig>('twoFactor')!;
     }
@@ -179,6 +181,24 @@ export class TwoFactorService {
         const secretEnc = this.crypto.encryptSecret(secret);
 
         await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+            const consumed = await tx.twoFactorChallenge.updateMany({
+                where: {
+                    id: challenge.id,
+                    consumedAt: null,
+                    expiresAt: { gt: new Date() },
+                },
+                data: { consumedAt: new Date() },
+            });
+            if (consumed.count === 0) throw this.invalidChallenge();
+            const enabled = await tx.user.updateMany({
+                where: { id: userId, twoFactorEnabled: false },
+                data: {
+                    twoFactorEnabled: true,
+                    twoFactorEnabledAt: new Date(),
+                },
+            });
+            if (enabled.count === 0) throw this.alreadyEnabled();
             await tx.twoFactorSecret.upsert({
                 where: { userId },
                 update: { secretEnc },
@@ -188,29 +208,22 @@ export class TwoFactorService {
             await tx.twoFactorRecoveryCode.createMany({
                 data: hashes.map((codeHash) => ({ userId, codeHash })),
             });
-            await tx.user.update({
-                where: { id: userId },
-                data: {
-                    twoFactorEnabled: true,
-                    twoFactorEnabledAt: new Date(),
-                },
-            });
-            await tx.twoFactorChallenge.update({
-                where: { id: challenge.id },
-                data: { consumedAt: new Date() },
-            });
             // Every other session must come back through the second factor.
             await tx.refreshToken.updateMany({
                 where: { userId, revokedAt: null },
                 data: { revokedAt: new Date() },
             });
+            await this.securityNotice(
+                user,
+                NotificationType.TWO_FACTOR_ENABLED,
+                'Two-factor authentication enabled',
+                `two-factor-enabled:${challenge.id}`,
+                tx,
+                meta,
+            );
         });
 
         await this.writeAudit(userId, AuditAction.ENABLE_2FA, meta);
-
-        this.sendSecurityEmail(user, EmailTemplate.TWO_FACTOR_ENABLED, {
-            changedAt: new Date().toISOString(),
-        });
 
         return new RecoveryCodesEntity({ recoveryCodes: plain });
     }
@@ -262,47 +275,43 @@ export class TwoFactorService {
 
         let verified = false;
         let recoveryCodeUsed = false;
+        const user = await this.getUser(challenge.userId);
 
         const secret = await this.getSecretPlaintext(challenge.userId);
         if (secret && this.crypto.isTotpFormat(dto.code)) {
             verified = await this.crypto.verifyTotp(secret, dto.code);
         }
-        if (!verified) {
-            recoveryCodeUsed = await this.tryConsumeRecoveryCode(
-                challenge.userId,
-                dto.code,
-            );
-            verified = recoveryCodeUsed;
-        }
+        verified = await this.prisma.$transaction(async (tx) => {
+            if (!verified) {
+                recoveryCodeUsed = await this.tryConsumeRecoveryCode(
+                    user,
+                    dto.code,
+                    tx,
+                    meta,
+                );
+                if (!recoveryCodeUsed) return false;
+            }
+            const consumed = await tx.twoFactorChallenge.updateMany({
+                where: {
+                    id: challenge.id,
+                    consumedAt: null,
+                    expiresAt: { gt: new Date() },
+                },
+                data: { consumedAt: new Date() },
+            });
+            if (consumed.count === 0) throw this.invalidChallenge();
+            return true;
+        });
 
         if (!verified) {
             await this.registerFailedAttempt(challenge.id, challenge.attempts);
             throw this.invalidCode();
         }
-
-        await this.prisma.twoFactorChallenge.update({
-            where: { id: challenge.id },
-            data: { consumedAt: new Date() },
-        });
-
         if (recoveryCodeUsed) {
             await this.writeAudit(
                 challenge.userId,
                 AuditAction.USE_RECOVERY_CODE,
                 meta,
-            );
-        }
-
-        const user = await this.getUser(challenge.userId);
-
-        if (recoveryCodeUsed) {
-            this.sendSecurityEmail(
-                user,
-                EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED,
-                {
-                    usedAt: new Date().toISOString(),
-                    ipAddress: meta.ipAddress ?? 'unknown',
-                },
             );
         }
 
@@ -322,15 +331,24 @@ export class TwoFactorService {
         this.assertEnabled(user);
 
         await this.assertPassword(user, dto.currentPassword);
-        await this.assertSecondFactor(userId, dto.code);
-
         const { plain, hashes } = await this.crypto.generateRecoveryCodes();
 
         await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+            this.assertEnabled(await this.getUser(userId, tx));
+            await this.assertSecondFactor(user, dto.code, tx, meta);
             await tx.twoFactorRecoveryCode.deleteMany({ where: { userId } });
             await tx.twoFactorRecoveryCode.createMany({
                 data: hashes.map((codeHash) => ({ userId, codeHash })),
             });
+            await this.securityNotice(
+                user,
+                NotificationType.TWO_FACTOR_RECOVERY_CODES_REGENERATED,
+                'Two-factor recovery codes regenerated',
+                `two-factor-recovery-codes-regenerated:${userId}:${randomUUID()}`,
+                tx,
+                meta,
+            );
         });
 
         await this.writeAudit(
@@ -353,35 +371,45 @@ export class TwoFactorService {
         this.assertEnabled(user);
 
         await this.assertPassword(user, dto.currentPassword);
-        await this.assertSecondFactor(userId, dto.code);
-
         await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+            this.assertEnabled(await this.getUser(userId, tx));
+            await this.assertSecondFactor(user, dto.code, tx, meta);
+            const disabled = await tx.user.updateMany({
+                where: { id: userId, twoFactorEnabled: true },
+                data: { twoFactorEnabled: false, twoFactorEnabledAt: null },
+            });
+            if (disabled.count === 0)
+                this.assertEnabled({ ...user, twoFactorEnabled: false });
             await tx.twoFactorSecret.deleteMany({ where: { userId } });
             await tx.twoFactorRecoveryCode.deleteMany({ where: { userId } });
             await tx.twoFactorChallenge.deleteMany({ where: { userId } });
-            await tx.user.update({
-                where: { id: userId },
-                data: { twoFactorEnabled: false, twoFactorEnabledAt: null },
-            });
             await tx.refreshToken.updateMany({
                 where: { userId, revokedAt: null },
                 data: { revokedAt: new Date() },
             });
+            await this.securityNotice(
+                user,
+                NotificationType.TWO_FACTOR_DISABLED,
+                'Two-factor authentication disabled',
+                `two-factor-disabled:${userId}:${randomUUID()}`,
+                tx,
+                meta,
+            );
         });
 
         await this.writeAudit(userId, AuditAction.DISABLE_2FA, meta);
-
-        this.sendSecurityEmail(user, EmailTemplate.TWO_FACTOR_DISABLED, {
-            changedAt: new Date().toISOString(),
-        });
 
         return { message: 'Two-factor authentication has been disabled.' };
     }
 
     // ─── Helpers ───────────────────────────────────────────────────────
 
-    private async getUser(userId: string): Promise<UserModel> {
-        const user = await this.prisma.user.findUnique({
+    private async getUser(
+        userId: string,
+        db: Prisma.TransactionClient = this.prisma,
+    ): Promise<UserModel> {
+        const user = await db.user.findUnique({
             where: { id: userId },
         });
         if (!user || user.deletedAt) {
@@ -434,10 +462,12 @@ export class TwoFactorService {
 
     /** Accepts either a valid TOTP code or a valid unused recovery code. */
     private async assertSecondFactor(
-        userId: string,
+        user: UserModel,
         code: string,
+        tx: Prisma.TransactionClient,
+        meta: RequestMeta,
     ): Promise<void> {
-        const secret = await this.getSecretPlaintext(userId);
+        const secret = await this.getSecretPlaintext(user.id, tx);
         if (
             secret &&
             this.crypto.isTotpFormat(code) &&
@@ -445,14 +475,17 @@ export class TwoFactorService {
         ) {
             return;
         }
-        if (await this.tryConsumeRecoveryCode(userId, code)) {
+        if (await this.tryConsumeRecoveryCode(user, code, tx, meta)) {
             return;
         }
         throw this.invalidCode();
     }
 
-    private async getSecretPlaintext(userId: string): Promise<string | null> {
-        const record = await this.prisma.twoFactorSecret.findUnique({
+    private async getSecretPlaintext(
+        userId: string,
+        db: Prisma.TransactionClient = this.prisma,
+    ): Promise<string | null> {
+        const record = await db.twoFactorSecret.findUnique({
             where: { userId },
         });
         if (!record) return null;
@@ -499,14 +532,16 @@ export class TwoFactorService {
 
     /** Finds and burns a matching unused recovery code, if any. */
     private async tryConsumeRecoveryCode(
-        userId: string,
+        user: UserModel,
         code: string,
+        tx: Prisma.TransactionClient,
+        meta: RequestMeta,
     ): Promise<boolean> {
         // A 6-digit token can never be a (grouped) recovery code.
         if (this.crypto.isTotpFormat(code)) return false;
 
-        const candidates = await this.prisma.twoFactorRecoveryCode.findMany({
-            where: { userId, usedAt: null },
+        const candidates = await tx.twoFactorRecoveryCode.findMany({
+            where: { userId: user.id, usedAt: null },
             orderBy: { createdAt: 'asc' },
         });
 
@@ -514,10 +549,19 @@ export class TwoFactorService {
             if (
                 await this.crypto.verifyRecoveryCode(code, candidate.codeHash)
             ) {
-                await this.prisma.twoFactorRecoveryCode.update({
-                    where: { id: candidate.id },
+                const consumed = await tx.twoFactorRecoveryCode.updateMany({
+                    where: { id: candidate.id, usedAt: null },
                     data: { usedAt: new Date() },
                 });
+                if (consumed.count === 0) return false;
+                await this.securityNotice(
+                    user,
+                    NotificationType.TWO_FACTOR_RECOVERY_CODE_USED,
+                    'A two-factor recovery code was used',
+                    `two-factor-recovery-code-used:${candidate.id}`,
+                    tx,
+                    meta,
+                );
                 return true;
             }
         }
@@ -576,26 +620,77 @@ export class TwoFactorService {
         }
     }
 
-    /**
-     * Fire-and-forget security notification. Never blocks or fails the request;
-     * delivery problems are logged only.
-     */
-    private sendSecurityEmail<T extends SecurityEmailTemplate>(
+    private async securityNotice(
+        user: UserModel,
+        type: NotificationType,
+        title: string,
+        eventKey: string,
+        tx: Prisma.TransactionClient,
+        meta: RequestMeta,
+    ): Promise<void> {
+        const templates: Partial<
+            Record<NotificationType, SecurityEmailTemplate>
+        > = {
+            [NotificationType.TWO_FACTOR_ENABLED]:
+                EmailTemplate.TWO_FACTOR_ENABLED,
+            [NotificationType.TWO_FACTOR_DISABLED]:
+                EmailTemplate.TWO_FACTOR_DISABLED,
+            [NotificationType.TWO_FACTOR_RECOVERY_CODE_USED]:
+                EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED,
+        };
+        const template = templates[type];
+        await this.notifications.publish(
+            {
+                eventKey,
+                type,
+                title,
+                body: 'Contact support if you did not perform this security action.',
+                recipients: [user.id],
+                actorId: user.id,
+                includeActor: true,
+                email: !template,
+            },
+            tx,
+        );
+        if (template === EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED) {
+            await this.enqueueSecurityEmail(
+                user,
+                template,
+                {
+                    usedAt: new Date().toISOString(),
+                    ipAddress: meta.ipAddress ?? 'unknown',
+                },
+                eventKey,
+                tx,
+            );
+        } else if (template) {
+            await this.enqueueSecurityEmail(
+                user,
+                template,
+                {
+                    changedAt: new Date().toISOString(),
+                },
+                eventKey,
+                tx,
+            );
+        }
+    }
+
+    private async enqueueSecurityEmail<T extends SecurityEmailTemplate>(
         user: UserModel,
         template: T,
         data: Omit<EmailPayloadMap[T], 'to' | 'name'>,
-    ): void {
+        eventKey: string,
+        tx: Prisma.TransactionClient,
+    ): Promise<void> {
         const payload = {
             to: user.email,
             name: user.name,
             ...data,
         } as EmailPayloadMap[T];
 
-        void this.emailService.send(template, payload).catch((error) => {
-            this.logger.error(
-                `Failed to send 2FA security email "${template}"`,
-                error as Error,
-            );
+        await this.notifications.enqueueEmail(template, payload, eventKey, tx, {
+            userId: user.id,
         });
     }
 

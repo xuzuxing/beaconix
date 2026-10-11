@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { NotificationType } from '../../../generated/prisma/enums';
 
 export class NotificationEntity {
     @ApiProperty({ example: 'uuid-notification' })
@@ -8,20 +9,7 @@ export class NotificationEntity {
     userId: string;
 
     @ApiProperty({
-        enum: [
-            'TASK_ASSIGNED',
-            'TASK_UPDATED',
-            'TASK_COMMENTED',
-            'TASK_STATUS_CHANGED',
-            'TASK_DUE_SOON',
-            'TASK_OVERDUE',
-            'SPRINT_STARTED',
-            'SPRINT_COMPLETED',
-            'PROJECT_ARCHIVED',
-            'MEMBER_JOINED',
-            'MEMBER_REMOVED',
-            'MENTION',
-        ],
+        enum: NotificationType,
         example: 'TASK_ASSIGNED',
     })
     type: string;
@@ -53,6 +41,31 @@ export class NotificationEntity {
     createdAt: Date;
 
     constructor(partial: Partial<NotificationEntity>) {
-        Object.assign(this, partial);
+        const {
+            id,
+            userId,
+            type,
+            title,
+            body,
+            isRead,
+            readAt,
+            resourceType,
+            resourceId,
+            meta,
+            createdAt,
+        } = partial;
+        Object.assign(this, {
+            id,
+            userId,
+            type,
+            title,
+            body,
+            isRead,
+            readAt,
+            resourceType,
+            resourceId,
+            meta,
+            createdAt,
+        });
     }
 }

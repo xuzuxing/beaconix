@@ -110,10 +110,12 @@ function createService() {
             findUnique: jest.fn(),
             update: jest.fn().mockResolvedValue({}),
             updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+            count: jest.fn().mockResolvedValue(0),
         },
         $transaction: jest.fn(),
         $queryRaw: jest.fn(),
     };
+    prisma.$transaction.mockImplementation((callback) => callback(prisma));
     const checkerService = {
         ingestProbeReport: jest.fn(),
         ingestProbeReportForMonitor: jest.fn(),
@@ -129,6 +131,10 @@ function createService() {
     const configService = {
         get: jest.fn().mockReturnValue({ offlineAfterSeconds: 120 }),
     };
+    const notifications = {
+        publish: jest.fn().mockResolvedValue(undefined),
+        organizationRecipients: jest.fn().mockResolvedValue(['owner', 'admin']),
+    };
 
     const service = new ProbesService(
         prisma as unknown as PrismaService,
@@ -137,6 +143,7 @@ function createService() {
         billingService as never,
         configService as never,
         { register: jest.fn() } as never,
+        notifications as never,
     );
 
     return {
@@ -146,13 +153,14 @@ function createService() {
         systemProbeScheduler,
         billingService,
         configService,
+        notifications,
     };
 }
 
 describe('ProbesService', () => {
     describe('create', () => {
         it('generates a shared secret for the new probe', async () => {
-            const { service, prisma } = createService();
+            const { service, prisma, notifications } = createService();
             prisma.probe.create.mockImplementation(
                 ({ data }: { data: Record<string, unknown> }) =>
                     Promise.resolve({ ...probeRow, ...data }),
@@ -177,6 +185,17 @@ describe('ProbesService', () => {
             );
             expect(result.secret).toMatch(/^tnt_[0-9a-f]{64}$/);
             expect(result.monitors).toEqual([]);
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'PROBE_ENROLLED',
+                    recipients: ['owner', 'admin'],
+                    includeActor: true,
+                }),
+                prisma,
+            );
+            expect(
+                JSON.stringify(notifications.publish.mock.calls[0][0]),
+            ).not.toContain(result.secret);
         });
     });
 
@@ -750,6 +769,96 @@ describe('ProbesService', () => {
                     },
                 }),
             );
+        });
+    });
+
+    describe('credential lifecycle notices', () => {
+        it('notifies admins and the actor on rotation without disclosing credential material', async () => {
+            const { service, prisma, notifications } = createService();
+            prisma.probe.findFirst.mockResolvedValue(probeRow);
+            prisma.probe.update.mockResolvedValue(probeRow);
+            const result = await service.rotateSecret(
+                'org-1',
+                'probe-1',
+                'actor',
+            );
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'PROBE_SECRET_ROTATED',
+                    includeActor: true,
+                    recipients: ['actor', 'owner', 'admin'],
+                }),
+                prisma,
+            );
+            const notice = JSON.stringify(
+                notifications.publish.mock.calls[0][0],
+            );
+            expect(notice).not.toContain(result.secret);
+            expect(notice).not.toContain(hashSecret(result.secret!));
+        });
+
+        it('revokes the secret and sends an admin notice in the same transaction', async () => {
+            const { service, prisma, notifications } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
+            await service.revokeBySecret(RAW_SECRET);
+            expect(prisma.probe.update).toHaveBeenCalledWith({
+                where: { id: 'probe-1' },
+                data: { status: 'OFFLINE' },
+            });
+            expect(notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    eventKey: 'probe-credential-revoked:secret-1',
+                    type: 'PROBE_CREDENTIAL_REVOKED',
+                    recipients: ['owner', 'admin'],
+                    includeActor: true,
+                }),
+                prisma,
+            );
+            expect(notifications.publish.mock.calls[0][0]).not.toHaveProperty(
+                'secret',
+            );
+            expect(
+                JSON.stringify(notifications.publish.mock.calls[0][0]),
+            ).not.toContain(hashSecret(RAW_SECRET));
+        });
+
+        it('does not send a tenant notice for a system-probe credential', async () => {
+            const { service, prisma, notifications } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue(
+                secretMatch({
+                    ...probeRow,
+                    scope: 'SYSTEM',
+                    organizationId: null,
+                }),
+            );
+            await service.revokeBySecret(RAW_SECRET);
+            expect(notifications.publish).not.toHaveBeenCalled();
+        });
+
+        it('rejects an already revoked credential without a notice', async () => {
+            const { service, prisma, notifications } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue({
+                ...secretMatch(),
+                revokedAt: new Date(),
+            });
+            await expect(service.revokeBySecret(RAW_SECRET)).rejects.toThrow(
+                UnauthorizedException,
+            );
+            expect(notifications.publish).not.toHaveBeenCalled();
+        });
+
+        it('fails rotation when the notification cannot be persisted', async () => {
+            const { service, prisma, notifications, systemProbeScheduler } =
+                createService();
+            prisma.probe.findFirst.mockResolvedValue(probeRow);
+            prisma.probe.update.mockResolvedValue(probeRow);
+            notifications.publish.mockRejectedValue(
+                new Error('outbox unavailable'),
+            );
+            await expect(
+                service.rotateSecret('org-1', 'probe-1'),
+            ).rejects.toThrow('outbox unavailable');
+            expect(systemProbeScheduler.rebalance).not.toHaveBeenCalled();
         });
     });
 });

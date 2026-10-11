@@ -7,6 +7,7 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { CreateSprintDto, UpdateSprintDto } from './dto';
 import { SprintEntity } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';
+import type { NotificationDb } from '../notifications/notification-event';
 
 @Injectable()
 export class SprintsService {
@@ -79,10 +80,9 @@ export class SprintsService {
      * Start a sprint: PLANNED → ACTIVE.
      * Only one sprint should be ACTIVE per project at a time.
      */
-    async start(projectId: string, sprintId: string) {
-        await this.ensureProjectActive(projectId);
-
+    async start(projectId: string, sprintId: string, actorId: string) {
         const updated = await this.prisma.$transaction(async (tx) => {
+            const project = await this.lockProject(projectId, tx);
             const sprint = await tx.sprint.findFirst({
                 where: { id: sprintId, projectId },
             });
@@ -104,22 +104,33 @@ export class SprintsService {
                 );
             }
 
-            return tx.sprint.update({
+            const updated = await tx.sprint.update({
                 where: { id: sprintId },
                 data: {
                     status: 'ACTIVE',
                     startDate: sprint.startDate ?? new Date(),
                 },
             });
+            await this.notificationsService.publish(
+                {
+                    eventKey: `sprint:${sprintId}:started`,
+                    type: 'SPRINT_STARTED',
+                    title: `Sprint "${updated.name}" has started`,
+                    organizationId: project.organizationId,
+                    actorId,
+                    resourceType: 'Sprint',
+                    resourceId: sprintId,
+                    meta: { projectId },
+                    recipients:
+                        await this.notificationsService.projectRecipients(
+                            projectId,
+                            tx,
+                        ),
+                },
+                tx,
+            );
+            return updated;
         });
-
-        // Notify project org members about sprint start (fire-and-forget)
-        this.notifyProjectMembers(projectId, {
-            type: 'SPRINT_STARTED' as const,
-            title: `Sprint "${updated.name}" has started`,
-            resourceType: 'Sprint',
-            resourceId: sprintId,
-        }).catch(() => {});
 
         return new SprintEntity(updated);
     }
@@ -128,72 +139,120 @@ export class SprintsService {
      * Complete a sprint: ACTIVE → COMPLETED.
      * Tasks still in this sprint with status != DONE get their sprintId set to null (back to backlog).
      */
-    async complete(projectId: string, sprintId: string) {
-        await this.ensureProjectActive(projectId);
-        const sprint = await this.ensureSprintExists(projectId, sprintId);
-
-        if (sprint.status !== 'ACTIVE') {
-            throw new BadRequestException(
-                `Cannot complete sprint with status: ${sprint.status}. Only ACTIVE sprints can be completed.`,
+    async complete(projectId: string, sprintId: string, actorId: string) {
+        const updatedSprint = await this.prisma.$transaction(async (tx) => {
+            const project = await this.lockProject(projectId, tx);
+            const sprint = await this.ensureSprintExists(
+                projectId,
+                sprintId,
+                tx,
             );
-        }
-
-        const [updatedSprint] = await this.prisma.$transaction([
-            this.prisma.sprint.update({
+            if (sprint.status !== 'ACTIVE') {
+                throw new BadRequestException(
+                    `Cannot complete sprint with status: ${sprint.status}. Only ACTIVE sprints can be completed.`,
+                );
+            }
+            const updated = await tx.sprint.update({
                 where: { id: sprintId },
                 data: {
                     status: 'COMPLETED',
                     endDate: sprint.endDate ?? new Date(),
                 },
-            }),
-            // Move incomplete tasks back to backlog
-            this.prisma.task.updateMany({
-                where: {
-                    sprintId,
-                    status: { not: 'DONE' },
-                    deletedAt: null,
+            });
+            await this.moveTasksToBacklog(
+                projectId,
+                sprintId,
+                project.organizationId,
+                actorId,
+                tx,
+                'completed',
+            );
+            await this.notificationsService.publish(
+                {
+                    eventKey: `sprint:${sprintId}:completed`,
+                    type: 'SPRINT_COMPLETED',
+                    title: `Sprint "${sprint.name}" has been completed`,
+                    organizationId: project.organizationId,
+                    actorId,
+                    resourceType: 'Sprint',
+                    resourceId: sprintId,
+                    meta: { projectId },
+                    recipients:
+                        await this.notificationsService.projectRecipients(
+                            projectId,
+                            tx,
+                        ),
                 },
-                data: { sprintId: null },
-            }),
-        ]);
-
-        // Notify project org members about sprint completion (fire-and-forget)
-        this.notifyProjectMembers(projectId, {
-            type: 'SPRINT_COMPLETED' as const,
-            title: `Sprint "${sprint.name}" has been completed`,
-            resourceType: 'Sprint',
-            resourceId: sprintId,
-        }).catch(() => {});
+                tx,
+            );
+            return updated;
+        });
 
         return new SprintEntity(updatedSprint);
     }
 
-    async remove(projectId: string, sprintId: string) {
-        await this.ensureProjectActive(projectId);
-        const sprint = await this.ensureSprintExists(projectId, sprintId);
-
-        if (sprint.status === 'ACTIVE') {
-            throw new BadRequestException(
-                'Cannot delete an active sprint. Complete it first.',
-            );
-        }
-
+    async remove(projectId: string, sprintId: string, actorId: string) {
         // Explicitly move tasks to backlog before deletion
-        await this.prisma.$transaction([
-            this.prisma.task.updateMany({
-                where: { sprintId, deletedAt: null },
-                data: { sprintId: null },
-            }),
-            this.prisma.sprint.delete({
+        await this.prisma.$transaction(async (tx) => {
+            const project = await this.lockProject(projectId, tx);
+            const sprint = await this.ensureSprintExists(
+                projectId,
+                sprintId,
+                tx,
+            );
+            if (sprint.status === 'ACTIVE') {
+                throw new BadRequestException(
+                    'Cannot delete an active sprint. Complete it first.',
+                );
+            }
+            const impacted = await this.moveTasksToBacklog(
+                projectId,
+                sprintId,
+                project.organizationId,
+                actorId,
+                tx,
+                'deleted',
+            );
+            await tx.sprint.delete({
                 where: { id: sprintId },
-            }),
-        ]);
+            });
+            await this.notificationsService.publish(
+                {
+                    eventKey: `sprint:${sprintId}:deleted`,
+                    type: 'SPRINT_DELETED',
+                    title: `Sprint "${sprint.name}" was deleted`,
+                    organizationId: project.organizationId,
+                    actorId,
+                    resourceType: 'Project',
+                    resourceId: projectId,
+                    meta: { sprintId },
+                    recipients: [
+                        ...new Set(
+                            [
+                                ...impacted,
+                                project.createdById,
+                                ...(await this.notificationsService.organizationRecipients(
+                                    project.organizationId,
+                                    tx,
+                                    ['OWNER', 'ADMIN'],
+                                )),
+                            ].filter((id): id is string => id !== null),
+                        ),
+                    ],
+                },
+                tx,
+            );
+        });
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    private async ensureSprintExists(projectId: string, sprintId: string) {
-        const sprint = await this.prisma.sprint.findFirst({
+    private async ensureSprintExists(
+        projectId: string,
+        sprintId: string,
+        db: NotificationDb = this.prisma,
+    ) {
+        const sprint = await db.sprint.findFirst({
             where: { id: sprintId, projectId },
         });
 
@@ -204,8 +263,19 @@ export class SprintsService {
         return sprint;
     }
 
-    private async ensureProjectActive(projectId: string) {
-        const project = await this.prisma.project.findFirst({
+    private async lockProject(projectId: string, tx: NotificationDb) {
+        // Serialize lifecycle operations across every sprint in this project.
+        await tx.$queryRaw`
+            SELECT "id" FROM "projects" WHERE "id" = ${projectId} FOR UPDATE
+        `;
+        return this.ensureProjectActive(projectId, tx);
+    }
+
+    private async ensureProjectActive(
+        projectId: string,
+        db: NotificationDb = this.prisma,
+    ) {
+        const project = await db.project.findFirst({
             where: { id: projectId, deletedAt: null },
         });
 
@@ -222,29 +292,53 @@ export class SprintsService {
         return project;
     }
 
-    private async notifyProjectMembers(
+    private async moveTasksToBacklog(
         projectId: string,
-        dto: {
-            type: 'SPRINT_STARTED' | 'SPRINT_COMPLETED';
-            title: string;
-            resourceType: string;
-            resourceId: string;
-        },
+        sprintId: string,
+        organizationId: string,
+        actorId: string,
+        tx: NotificationDb,
+        reason: 'completed' | 'deleted',
     ) {
-        const project = await this.prisma.project.findUnique({
-            where: { id: projectId },
-            select: { organizationId: true },
+        const where = {
+            projectId,
+            sprintId,
+            deletedAt: null,
+            ...(reason === 'completed'
+                ? { status: { not: 'DONE' as const } }
+                : {}),
+        };
+        const tasks = await tx.task.updateManyAndReturn({
+            where,
+            data: { sprintId: null },
+            select: { id: true, number: true },
         });
-        if (!project) return;
-
-        const members = await this.prisma.membership.findMany({
-            where: { organizationId: project.organizationId },
-            select: { userId: true },
-        });
-
-        await this.notificationsService.createAndEmitMany(
-            members.map((m) => m.userId),
-            dto,
-        );
+        const impacted = new Set<string>();
+        for (const task of tasks) {
+            const recipients = await this.notificationsService.taskRecipients(
+                task.id,
+                tx,
+            );
+            recipients.forEach((id) => impacted.add(id));
+            await this.notificationsService.publish(
+                {
+                    eventKey: `sprint:${sprintId}:${reason}:task:${task.id}:backlog`,
+                    type: 'TASK_SPRINT_CHANGED',
+                    title: `Task #${task.number} moved to backlog`,
+                    organizationId,
+                    actorId,
+                    resourceType: 'Task',
+                    resourceId: task.id,
+                    meta: {
+                        previousSprintId: sprintId,
+                        sprintId: null,
+                        reason,
+                    },
+                    recipients,
+                },
+                tx,
+            );
+        }
+        return [...impacted];
     }
 }

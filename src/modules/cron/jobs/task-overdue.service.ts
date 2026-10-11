@@ -6,7 +6,6 @@ import {
     SCHEDULED_JOB_PATTERNS,
 } from '../../../infra/scheduler/scheduled-jobs.constants';
 import { NotificationsService } from '../../notifications/notifications.service';
-import { EmailService } from '../../email/email.service';
 import { EmailTemplate } from '../../email/email.types';
 
 /**
@@ -22,7 +21,6 @@ export class TaskOverdueService implements OnModuleInit {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
-        private readonly emailService: EmailService,
         private readonly registry: ScheduledJobRegistry,
     ) {}
 
@@ -57,10 +55,6 @@ export class TaskOverdueService implements OnModuleInit {
                 },
                 include: {
                     project: { select: { key: true } },
-                    assignedTo: {
-                        select: { id: true, name: true, email: true },
-                    },
-                    watchers: { select: { userId: true } },
                 },
             });
 
@@ -72,57 +66,82 @@ export class TaskOverdueService implements OnModuleInit {
             for (const task of tasks) {
                 // Claim today's reminder before sending: several replicas (or a
                 // retried job) must not notify the same task twice in one day.
-                const { count } = await this.prisma.task.updateMany({
-                    where: {
-                        id: task.id,
-                        OR: [
-                            { overdueNotifiedAt: null },
-                            { overdueNotifiedAt: { lt: dayStart } },
-                        ],
-                    },
-                    data: { overdueNotifiedAt: new Date() },
-                });
-
-                if (count === 0) continue;
-                remindedCount += 1;
-
-                const watcherIds = task.watchers.map((w) => w.userId);
-
-                // Notify all watchers via SSE
-                if (watcherIds.length > 0) {
-                    this.notificationsService
-                        .createAndEmitMany(watcherIds, {
-                            type: 'TASK_OVERDUE' as const,
+                await this.prisma.$transaction(async (tx) => {
+                    const { count } = await tx.task.updateMany({
+                        where: {
+                            id: task.id,
+                            dueDate: task.dueDate,
+                            assignedToId: task.assignedToId,
+                            deletedAt: null,
+                            status: { notIn: ['DONE', 'CANCELLED'] },
+                            OR: [
+                                { overdueNotifiedAt: null },
+                                { overdueNotifiedAt: { lt: dayStart } },
+                            ],
+                        },
+                        data: { overdueNotifiedAt: now },
+                    });
+                    if (count === 0) return;
+                    const recipients =
+                        await this.notificationsService.taskRecipients(
+                            task.id,
+                            tx,
+                        );
+                    const eventKey = `task:${task.id}:overdue:${task.dueDate!.toISOString()}:${dayStart.toISOString()}`;
+                    await this.notificationsService.publish(
+                        {
+                            eventKey,
+                            type: 'TASK_OVERDUE',
                             title: `Task ${task.project.key}-${task.number} is overdue`,
                             body: `"${task.title}" was due ${task.dueDate!.toISOString()}`,
+                            organizationId: task.organizationId,
                             resourceType: 'Task',
                             resourceId: task.id,
-                        })
-                        .catch((err) => {
-                            this.logger.warn(
-                                `Failed to notify watchers for overdue task ${task.id}: ${err.message}`,
-                            );
-                        });
-                    notifiedCount += watcherIds.length;
-                }
-
-                // Email the assignee
-                if (task.assignedTo) {
-                    this.emailService
-                        .send(EmailTemplate.TASK_OVERDUE, {
-                            to: task.assignedTo.email,
-                            name: task.assignedTo.name,
-                            taskTitle: task.title,
-                            taskNumber: task.number,
-                            dueDate: task.dueDate!.toISOString(),
-                            projectKey: task.project.key,
-                        })
-                        .catch((err) => {
-                            this.logger.warn(
-                                `Failed to send overdue email for task ${task.id}: ${err.message}`,
-                            );
-                        });
-                }
+                            recipients,
+                        },
+                        tx,
+                    );
+                    const assignee =
+                        task.assignedToId &&
+                        recipients.includes(task.assignedToId)
+                            ? await tx.user.findFirst({
+                                  where: {
+                                      id: task.assignedToId,
+                                      isActive: true,
+                                      deletedAt: null,
+                                      emailVerified: true,
+                                      memberships: {
+                                          some: {
+                                              organizationId:
+                                                  task.organizationId,
+                                          },
+                                      },
+                                  },
+                                  select: { id: true, name: true, email: true },
+                              })
+                            : null;
+                    if (assignee) {
+                        await this.notificationsService.enqueueEmail(
+                            EmailTemplate.TASK_OVERDUE,
+                            {
+                                to: assignee.email,
+                                name: assignee.name,
+                                taskTitle: task.title,
+                                taskNumber: task.number,
+                                dueDate: task.dueDate!.toISOString(),
+                                projectKey: task.project.key,
+                            },
+                            `${eventKey}:email:${assignee.id}`,
+                            tx,
+                            {
+                                userId: assignee.id,
+                                organizationId: task.organizationId,
+                            },
+                        );
+                    }
+                    remindedCount += 1;
+                    notifiedCount += recipients.length;
+                });
             }
 
             const duration = Date.now() - jobStart;

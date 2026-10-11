@@ -79,6 +79,24 @@ export class MembershipsController {
         );
     }
 
+    @Delete('me')
+    @HttpCode(HttpStatus.NO_CONTENT)
+    @UseGuards(OrgMemberGuard)
+    @AuditLog({ entity: 'Membership', action: 'LEAVE' })
+    @ApiOperation({ summary: 'Leave the organization' })
+    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
+    @ApiNoContentResponse({ description: 'Left the organization' })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({
+        description: 'Owner cannot leave without transferring ownership',
+    })
+    async leave(
+        @Param('orgId') orgId: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        await this.membershipsService.leaveOrganization(orgId, user.sub);
+    }
+
     @Delete(':userId')
     @HttpCode(HttpStatus.NO_CONTENT)
     @UseGuards(RolesGuard)
@@ -97,23 +115,5 @@ export class MembershipsController {
         @CurrentUser() actor: JwtPayload,
     ) {
         await this.membershipsService.removeMember(orgId, userId, actor.sub);
-    }
-
-    @Delete('me')
-    @HttpCode(HttpStatus.NO_CONTENT)
-    @UseGuards(OrgMemberGuard)
-    @AuditLog({ entity: 'Membership', action: 'LEAVE' })
-    @ApiOperation({ summary: 'Leave the organization' })
-    @ApiParam({ name: 'orgId', description: 'Organization CUID' })
-    @ApiNoContentResponse({ description: 'Left the organization' })
-    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
-    @ApiForbiddenResponse({
-        description: 'Owner cannot leave — transfer first',
-    })
-    async leave(
-        @Param('orgId') orgId: string,
-        @CurrentUser() user: JwtPayload,
-    ) {
-        await this.membershipsService.leaveOrganization(orgId, user.sub);
     }
 }

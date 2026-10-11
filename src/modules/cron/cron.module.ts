@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { InvitationsModule } from '../invitations/invitations.module';
 import {
     TokenCleanupService,
     InvitationExpiryService,
@@ -9,7 +10,7 @@ import {
 } from './jobs';
 
 @Module({
-    imports: [NotificationsModule],
+    imports: [NotificationsModule, InvitationsModule],
     providers: [
         TokenCleanupService,
         InvitationExpiryService,

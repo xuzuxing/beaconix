@@ -24,7 +24,8 @@ import {
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
-import { AuditLog, Public } from '../../../common/decorators';
+import { AuditLog, CurrentUser, Public } from '../../../common/decorators';
+import type { JwtPayload } from '../../../common/interfaces/jwt-payload.interface';
 import {
     BindMonitorsDto,
     CreateProbeDto,
@@ -68,8 +69,12 @@ export class DeveloperProbesController {
     @ApiCreatedResponse({ type: ProbeEntity })
     @ApiUnauthorizedResponse({ description: 'Missing or invalid API key' })
     @ApiForbiddenResponse({ description: 'Missing scope' })
-    async create(@Param('orgId') orgId: string, @Body() dto: CreateProbeDto) {
-        return this.probesService.create(orgId, dto);
+    async create(
+        @Param('orgId') orgId: string,
+        @Body() dto: CreateProbeDto,
+        @CurrentUser() user: JwtPayload | undefined,
+    ) {
+        return this.probesService.create(orgId, dto, user?.sub);
     }
 
     @Get('organizations/:orgId/probes/:id')
@@ -121,8 +126,12 @@ export class DeveloperProbesController {
     @ApiUnauthorizedResponse({ description: 'Missing or invalid API key' })
     @ApiForbiddenResponse({ description: 'Missing scope' })
     @ApiNotFoundResponse({ description: 'Probe not found' })
-    async remove(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.probesService.remove(orgId, id);
+    async remove(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload | undefined,
+    ) {
+        return this.probesService.remove(orgId, id, user?.sub);
     }
 
     @Post('organizations/:orgId/probes/:id/rotate-secret')
@@ -138,8 +147,12 @@ export class DeveloperProbesController {
     @ApiUnauthorizedResponse({ description: 'Missing or invalid API key' })
     @ApiForbiddenResponse({ description: 'Missing scope' })
     @ApiNotFoundResponse({ description: 'Probe not found' })
-    async rotateSecret(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.probesService.rotateSecret(orgId, id);
+    async rotateSecret(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload | undefined,
+    ) {
+        return this.probesService.rotateSecret(orgId, id, user?.sub);
     }
 
     @Post('organizations/:orgId/probes/:id/monitors')

@@ -11,6 +11,8 @@ import type {
 } from '../../generated/prisma/models';
 import type { CheckOutcome, DerivedState } from '../state/state.service';
 import type { NotificationPayload } from '../notifier/notifier.types';
+import { NotificationsService } from '../notifications/notifications.service';
+import { ADMIN_ROLES } from '../notifications/notification-event';
 
 type Tx = Prisma.TransactionClient;
 type Evidence = {
@@ -25,7 +27,10 @@ type Evidence = {
 
 @Injectable()
 export class AlertEventsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly notifications: NotificationsService,
+    ) {}
 
     async retry(projectId: string, deliveryId: string) {
         const project = await this.prisma.project.findFirst({
@@ -263,6 +268,40 @@ export class AlertEventsService {
                   },
               });
         if (active && !notify) return 0;
+        if (event.origin !== 'BASELINE' && notify) {
+            const recipients = active
+                ? await this.notifications.organizationRecipients(
+                      monitor.organizationId,
+                      tx,
+                      ADMIN_ROLES,
+                  )
+                : await this.notifications.eventRecipients(
+                      `monitor-incident:${event.id}:OPEN`,
+                      tx,
+                  );
+            await this.notifications.publish(
+                {
+                    eventKey: `monitor-incident:${event.id}:${active ? 'OPEN' : 'RECOVERY'}`,
+                    recipients,
+                    organizationId: monitor.organizationId,
+                    type: active ? 'MONITOR_ALERT' : 'MONITOR_RECOVERED',
+                    title: active
+                        ? `${monitor.name}: ${kind.toLowerCase()} alert`
+                        : `${monitor.name}: ${kind.toLowerCase()} recovered`,
+                    body: active
+                        ? 'A monitoring condition requires attention. Review the incident details.'
+                        : 'The monitoring condition has recovered.',
+                    resourceType: 'Monitor',
+                    resourceId: monitor.id,
+                    meta: {
+                        alertEventId: event.id,
+                        kind,
+                        projectId: monitor.projectId,
+                    },
+                },
+                tx,
+            );
+        }
         const bindings =
             kind === 'CONNECTIVITY'
                 ? []

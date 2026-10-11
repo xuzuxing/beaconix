@@ -83,7 +83,11 @@ export class ApiCredentialsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'API key not found' })
-    async revoke(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.apiCredentialsService.revokeApiKey(orgId, id);
+    async revoke(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.apiCredentialsService.revokeApiKey(orgId, id, user.sub);
     }
 }

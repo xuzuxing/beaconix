@@ -1,0 +1,1881 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta
+            name="description"
+            content="Beacon，为团队连接服务监控、业务规则、事件通知与项目协作的开源平台。"
+        />
+        <meta name="theme-color" content="#1677ff" />
+        <title>Beacon · 从服务状态，到业务信号</title>
+        <style>
+            :root {
+                color-scheme: light;
+                --ink: #252b35;
+                --muted: #626a76;
+                --green: #1164d8;
+                --green-light: #edf5ff;
+                --blue: #1677ff;
+                --success: #146c48;
+                --amber: #916015;
+                --red: #ae3337;
+                --line: #e3e8f0;
+                --paper: #f6f9fd;
+                --white: #fff;
+                font-family:
+                    Inter,
+                    -apple-system,
+                    BlinkMacSystemFont,
+                    'Segoe UI',
+                    'PingFang SC',
+                    'Microsoft YaHei',
+                    sans-serif;
+                letter-spacing: 0;
+                color: var(--ink);
+                background: var(--white);
+            }
+            * {
+                box-sizing: border-box;
+            }
+            html {
+                scroll-behavior: smooth;
+                scroll-padding-top: 88px;
+            }
+            body {
+                margin: 0;
+                font-size: 16px;
+                line-height: 1.7;
+            }
+            a {
+                color: inherit;
+                text-decoration: none;
+            }
+            button,
+            input {
+                font: inherit;
+            }
+            button,
+            a,
+            input {
+                touch-action: manipulation;
+            }
+            button {
+                cursor: pointer;
+            }
+            a,
+            button {
+                -webkit-tap-highlight-color: transparent;
+            }
+            :focus-visible {
+                outline: 3px solid var(--blue);
+                outline-offset: 5px;
+            }
+            ::selection {
+                background: #cde4ff;
+                color: var(--ink);
+            }
+            h1,
+            h2,
+            h3,
+            p {
+                margin: 0;
+            }
+            h2 {
+                font-size: 40px;
+                line-height: 1.35;
+                font-weight: 650;
+            }
+            h3 {
+                font-size: 21px;
+                line-height: 1.5;
+                font-weight: 650;
+            }
+            svg {
+                width: 20px;
+                height: 20px;
+                flex-shrink: 0;
+            }
+            .wrap {
+                width: min(1216px, calc(100% - 64px));
+                margin-inline: auto;
+            }
+            .skip {
+                position: absolute;
+                top: -80px;
+                left: 16px;
+                z-index: 30;
+                background: white;
+                padding: 12px;
+            }
+            .skip:focus {
+                top: 12px;
+            }
+            .header {
+                border-bottom: 1px solid var(--line);
+                position: sticky;
+                top: 0;
+                z-index: 20;
+                background: rgba(255, 255, 255, 0.97);
+            }
+            .header-inner {
+                min-height: 64px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 24px;
+            }
+            .brand {
+                display: inline-flex;
+                align-items: center;
+                gap: 10px;
+                min-height: 44px;
+                font-size: 21px;
+                font-weight: 700;
+            }
+            .brand-mark {
+                width: 32px;
+                height: 32px;
+                display: grid;
+                place-items: center;
+                background: var(--green);
+                color: white;
+                border-radius: 6px;
+                overflow: hidden;
+                position: relative;
+                font-size: 22px;
+            }
+            .brand-mark img {
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+            }
+            .nav {
+                display: flex;
+                align-items: center;
+                gap: 28px;
+                flex: 1;
+                margin-left: 24px;
+            }
+            .nav a {
+                min-height: 44px;
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 14px;
+                color: var(--muted);
+            }
+            .nav a:hover,
+            .text-link:hover {
+                color: var(--green);
+            }
+            .nav .nav-source {
+                color: var(--ink);
+                margin-left: auto;
+            }
+            .nav .nav-docs {
+                color: white;
+                background: var(--blue);
+                padding: 8px 20px;
+                border-radius: 6px;
+                font-weight: 600;
+            }
+            .nav .nav-docs:hover {
+                background: #095bda;
+                color: white;
+            }
+            .menu-toggle {
+                display: none;
+                width: 44px;
+                height: 44px;
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                background: white;
+                color: var(--ink);
+                place-items: center;
+            }
+            .hero {
+                background: #f8fbff;
+                position: relative;
+                padding-bottom: 32px;
+                overflow: hidden;
+            }
+            .hero-stage {
+                position: relative;
+                min-height: 496px;
+                display: flex;
+                align-items: center;
+            }
+            .hero-copy {
+                position: relative;
+                z-index: 1;
+                width: 600px;
+                padding: 64px 0 48px;
+            }
+            .eyebrow {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--green);
+                background: white;
+                padding: 7px 14px;
+                border: 1px solid #dce8fb;
+                border-radius: 6px;
+            }
+            .eyebrow::before {
+                content: none;
+            }
+            h1 {
+                margin-top: 22px;
+                font-size: 60px;
+                line-height: 1.2;
+                font-weight: 700;
+                font-family:
+                    ui-monospace, 'Cascadia Code', Consolas, sans-serif;
+            }
+            .hero-title {
+                margin-top: 4px;
+                font-size: 40px;
+                line-height: 1.4;
+                font-weight: 700;
+                color: var(--blue);
+            }
+            .hero-description {
+                margin-top: 22px;
+                max-width: 510px;
+                color: var(--muted);
+                font-size: 16px;
+                line-height: 1.9;
+            }
+            .actions {
+                display: flex;
+                justify-content: flex-start;
+                gap: 12px;
+                flex-wrap: wrap;
+                margin-top: 26px;
+            }
+            .button {
+                min-height: 48px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                padding: 10px 20px;
+                border: 1px solid var(--line);
+                border-radius: 6px;
+                background: var(--white);
+                font-size: 14px;
+                font-weight: 600;
+                transition:
+                    background 180ms,
+                    border-color 180ms;
+            }
+            .button:hover {
+                background: #edf1ed;
+                border-color: #bccbc1;
+            }
+            .button-primary {
+                background: var(--blue);
+                color: white;
+                border-color: var(--blue);
+                box-shadow: 0 6px 16px #1677ff24;
+            }
+            .button-primary:hover {
+                background: #095bda;
+                border-color: #095bda;
+            }
+            .signal {
+                position: absolute;
+                inset: 0;
+                margin: 0;
+                height: 100%;
+                z-index: 0;
+            }
+            .signal canvas {
+                display: block;
+                width: 100%;
+                height: 100%;
+            }
+            .signal-caption {
+                position: absolute;
+                inset: auto 0 44px auto;
+                color: var(--muted);
+                font-size: 12px;
+                text-align: center;
+                width: 48%;
+            }
+            .product-grid {
+                display: grid;
+                grid-template-columns: repeat(8, minmax(0, 1fr));
+                gap: 12px;
+                position: relative;
+            }
+            .product-link {
+                background: white;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                min-height: 126px;
+                padding: 18px 14px;
+                transition:
+                    border-color 180ms,
+                    background 180ms;
+            }
+            .product-link:hover {
+                border-color: #9ac4ff;
+                background: #fafdff;
+            }
+            .product-link svg {
+                display: block;
+                color: var(--blue);
+                width: 24px;
+                height: 24px;
+                margin-bottom: 14px;
+            }
+            .product-link strong {
+                display: block;
+                font-size: 14px;
+                line-height: 1.5;
+            }
+            .product-link span {
+                display: block;
+                font-size: 11px;
+                color: var(--muted);
+                line-height: 1.6;
+                margin-top: 4px;
+                overflow-wrap: anywhere;
+            }
+            .stack {
+                padding: 32px 0;
+            }
+            .stack-inner {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 36px;
+                flex-wrap: wrap;
+            }
+            .stack span {
+                color: var(--muted);
+                font-size: 13px;
+            }
+            .stack strong {
+                font-size: 16px;
+                font-weight: 600;
+                color: #56616f;
+                font-family: ui-monospace, Consolas, monospace;
+            }
+            .section {
+                padding: 88px 0;
+            }
+            .section-label {
+                display: block;
+                color: var(--green);
+                font:
+                    600 12px/1.5 ui-monospace,
+                    Consolas,
+                    monospace;
+                margin-bottom: 12px;
+            }
+            .section-heading {
+                text-align: center;
+            }
+            .section-heading p {
+                max-width: 620px;
+                color: var(--muted);
+                font-size: 16px;
+                margin: 18px auto 0;
+            }
+            .features {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                margin-top: 44px;
+                gap: 20px;
+            }
+            .feature {
+                padding: 28px;
+                background: var(--paper);
+                border: 1px solid var(--line);
+                border-radius: 8px;
+            }
+            .feature + .feature {
+                padding-left: 28px;
+            }
+            .feature-icon {
+                display: grid;
+                place-items: center;
+                width: 40px;
+                height: 40px;
+                margin-bottom: 20px;
+                background: transparent;
+                color: var(--blue);
+                border-radius: 6px;
+            }
+            .feature:nth-child(2) .feature-icon {
+                background: transparent;
+                color: var(--blue);
+            }
+            .feature:nth-child(3) .feature-icon {
+                background: transparent;
+                color: var(--blue);
+            }
+            .feature p {
+                margin-top: 10px;
+                color: var(--muted);
+                font-size: 14px;
+                line-height: 1.9;
+            }
+            .feature small {
+                display: block;
+                margin-top: 20px;
+                font:
+                    12px/1.8 ui-monospace,
+                    Consolas,
+                    monospace;
+                color: var(--muted);
+                overflow-wrap: anywhere;
+            }
+            .rule-section {
+                background: #f4f8ff;
+                border-block: 1px solid var(--line);
+            }
+            .rule-layout {
+                display: grid;
+                grid-template-columns: 1fr 1.08fr;
+                align-items: center;
+                gap: 72px;
+            }
+            .rule-copy > p {
+                margin-top: 18px;
+                color: var(--muted);
+                font-size: 15px;
+            }
+            .flow {
+                margin: 26px 0 0;
+                padding: 0;
+                list-style: none;
+            }
+            .flow li {
+                display: flex;
+                align-items: start;
+                gap: 14px;
+                padding: 12px 0;
+            }
+            .step {
+                display: grid;
+                place-items: center;
+                min-width: 24px;
+                height: 24px;
+                margin-top: 2px;
+                border: 1px solid var(--line);
+                border-radius: 50%;
+                font:
+                    12px/1 ui-monospace,
+                    Consolas,
+                    monospace;
+                color: var(--green);
+                background: white;
+            }
+            .flow strong {
+                font-size: 14px;
+                font-weight: 600;
+            }
+            .flow p {
+                font-size: 13px;
+                color: var(--muted);
+                margin-top: 2px;
+            }
+            .rule-tool {
+                min-width: 0;
+                background: white;
+                border: 1px solid #d6e2f3;
+                border-radius: 8px;
+                overflow: hidden;
+                box-shadow: 0 12px 32px #1d292408;
+            }
+            .tool-header {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: space-between;
+                align-items: center;
+                gap: 8px;
+                padding: 18px 24px;
+                border-bottom: 1px solid var(--line);
+                font-size: 13px;
+            }
+            .tool-header span {
+                color: var(--muted);
+                font:
+                    12px/1.6 ui-monospace,
+                    Consolas,
+                    monospace;
+            }
+            .tool-body {
+                padding: 24px;
+            }
+            .tool-meta {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px 24px;
+                color: var(--muted);
+                font-size: 12px;
+            }
+            .tool-meta b {
+                color: var(--ink);
+                font-weight: 600;
+            }
+            .samples {
+                display: grid;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 8px;
+                margin: 24px 0;
+            }
+            .sample {
+                min-height: 68px;
+                text-align: center;
+                background: #eaf4ee;
+                border-radius: 4px;
+                color: var(--success);
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                font-size: 12px;
+            }
+            .sample b {
+                font:
+                    600 17px/1.5 ui-monospace,
+                    Consolas,
+                    monospace;
+            }
+            .sample.failed {
+                color: var(--red);
+                background: #fbeef0;
+            }
+            .range-label {
+                display: flex;
+                justify-content: space-between;
+                gap: 16px;
+                font-size: 13px;
+            }
+            .range-label output {
+                font-weight: 600;
+                flex-shrink: 0;
+            }
+            input[type='range'] {
+                display: block;
+                width: 100%;
+                min-height: 44px;
+                margin: 4px 0 12px;
+                accent-color: var(--blue);
+                cursor: pointer;
+            }
+            .metrics {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                padding: 20px 0;
+                border-block: 1px solid var(--line);
+            }
+            .metric + .metric {
+                padding-left: 24px;
+                border-left: 1px solid var(--line);
+            }
+            .metric span {
+                display: block;
+                color: var(--muted);
+                font-size: 12px;
+            }
+            .metric strong {
+                font:
+                    600 32px/1.4 ui-monospace,
+                    Consolas,
+                    monospace;
+            }
+            .decision {
+                display: flex;
+                align-items: start;
+                gap: 10px;
+                margin-top: 20px;
+                color: var(--success);
+                min-height: 64px;
+            }
+            .decision svg {
+                margin-top: 3px;
+            }
+            .decision strong {
+                display: block;
+                font-size: 14px;
+            }
+            .decision p {
+                color: var(--muted);
+                font-size: 12px;
+                margin-top: 3px;
+            }
+            .decision.alert {
+                color: var(--red);
+            }
+            .tool-foot {
+                padding: 12px 24px;
+                background: var(--paper);
+                color: var(--muted);
+                font-size: 12px;
+                border-top: 1px solid var(--line);
+            }
+            .workspace {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 72px;
+                margin-top: 36px;
+            }
+            .workspace-copy p {
+                color: var(--muted);
+                margin-top: 14px;
+                font-size: 15px;
+            }
+            .capabilities {
+                margin: 0;
+                padding: 0;
+                list-style: none;
+            }
+            .capabilities li {
+                padding: 15px 0;
+                border-bottom: 1px solid var(--line);
+                display: grid;
+                grid-template-columns: 126px 1fr;
+                gap: 20px;
+                font-size: 14px;
+            }
+            .capabilities li:first-child {
+                padding-top: 0;
+            }
+            .capabilities span {
+                color: var(--muted);
+            }
+            .developer {
+                background: var(--paper);
+            }
+            .developer .section-label {
+                color: var(--green);
+            }
+            .developer-layout {
+                display: grid;
+                grid-template-columns: 1fr 1.08fr;
+                gap: 72px;
+                align-items: center;
+            }
+            .developer p {
+                color: var(--muted);
+                font-size: 14px;
+                margin-top: 16px;
+            }
+            .developer .text-link {
+                display: inline-flex;
+                align-items: center;
+                gap: 10px;
+                min-height: 44px;
+                margin-top: 16px;
+                font-size: 14px;
+                color: var(--green);
+            }
+            .code-tool {
+                background: #202935;
+                color: #f3f7fc;
+                padding: 20px 24px;
+                border-radius: 8px;
+                min-width: 0;
+            }
+            .code-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                border-bottom: 1px solid #465367;
+                padding-bottom: 12px;
+                font:
+                    12px/1.5 ui-monospace,
+                    Consolas,
+                    monospace;
+                color: #c4cedd;
+            }
+            .copy {
+                display: grid;
+                place-items: center;
+                width: 44px;
+                height: 44px;
+                padding: 0;
+                border: 1px solid #526279;
+                border-radius: 4px;
+                background: transparent;
+                color: #f3f7f4;
+            }
+            .copy:hover {
+                background: #354253;
+            }
+            pre {
+                margin: 20px 0 0;
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+                font:
+                    13px/1.9 ui-monospace,
+                    SFMono-Regular,
+                    Consolas,
+                    monospace;
+            }
+            .code-green {
+                color: #90c4ff;
+            }
+            .code-muted {
+                color: #c4cedd;
+            }
+            .copy-status {
+                min-height: 24px;
+                font-size: 12px;
+                color: #c4cedd;
+                margin-top: 8px;
+            }
+            .closing {
+                padding: 64px 0;
+                text-align: center;
+            }
+            .closing p {
+                margin-top: 16px;
+                color: var(--muted);
+            }
+            .closing .actions {
+                justify-content: center;
+            }
+            .footer {
+                padding: 28px 0;
+                border-top: 1px solid var(--line);
+            }
+            .footer-inner {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+                color: var(--muted);
+                font-size: 12px;
+            }
+            .footer-links {
+                display: flex;
+                gap: 24px;
+            }
+            .footer a {
+                display: inline-flex;
+                align-items: center;
+                min-height: 44px;
+            }
+            @media (max-width: 1100px) {
+                .nav {
+                    gap: 20px;
+                    margin-left: 8px;
+                }
+                .hero-copy {
+                    width: 52%;
+                }
+                .hero-title {
+                    font-size: 32px;
+                }
+                .product-grid {
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                }
+                .product-link {
+                    min-height: 112px;
+                }
+                .rule-layout,
+                .developer-layout,
+                .workspace {
+                    gap: 36px;
+                }
+            }
+            @media (max-width: 800px) {
+                .wrap {
+                    width: calc(100% - 40px);
+                }
+                .header-inner {
+                    min-height: 64px;
+                    gap: 12px;
+                }
+                .menu-toggle {
+                    display: grid;
+                    margin-left: auto;
+                }
+                .nav {
+                    display: none;
+                    position: absolute;
+                    top: 63px;
+                    left: 0;
+                    right: 0;
+                    padding: 16px 20px;
+                    margin: 0;
+                    background: white;
+                    border-bottom: 1px solid var(--line);
+                    box-shadow: 0 8px 16px #252b3508;
+                }
+                .nav.is-open {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px 24px;
+                }
+                .nav .nav-source {
+                    margin-left: 0;
+                }
+                .nav a {
+                    font-size: 14px;
+                }
+                .hero-stage {
+                    min-height: 520px;
+                    display: block;
+                }
+                .hero-copy {
+                    width: 100%;
+                    padding: 36px 0 220px;
+                }
+                h1 {
+                    font-size: 48px;
+                }
+                .hero-title {
+                    font-size: 30px;
+                    margin-top: 4px;
+                }
+                .hero-description {
+                    font-size: 16px;
+                    margin-top: 16px;
+                    max-width: 540px;
+                }
+                .signal-caption {
+                    inset: auto 0 20px;
+                    width: 100%;
+                }
+                .product-grid {
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                }
+                .stack-inner {
+                    gap: 10px 24px;
+                }
+                .stack span {
+                    width: 100%;
+                    text-align: center;
+                }
+                .stack strong {
+                    font-size: 14px;
+                }
+                .section {
+                    padding: 48px 0;
+                }
+                h2 {
+                    font-size: 30px;
+                }
+                .features {
+                    grid-template-columns: 1fr;
+                    margin-top: 28px;
+                    gap: 16px;
+                }
+                .feature,
+                .feature + .feature {
+                    padding: 24px;
+                }
+                .feature-icon {
+                    float: left;
+                    margin: 2px 16px 0 0;
+                }
+                .feature h3,
+                .feature p,
+                .feature small {
+                    margin-left: 56px;
+                }
+                .feature small {
+                    margin-top: 12px;
+                }
+                .rule-layout,
+                .developer-layout,
+                .workspace {
+                    grid-template-columns: 1fr;
+                    gap: 32px;
+                }
+                .tool-header {
+                    padding: 16px 20px;
+                }
+                .tool-body {
+                    padding: 20px;
+                }
+                .tool-foot {
+                    padding: 12px 20px;
+                }
+                .sample b {
+                    font-size: 16px;
+                }
+                .capabilities li {
+                    grid-template-columns: 100px 1fr;
+                    gap: 12px;
+                }
+            }
+            @media (max-width: 480px) {
+                .hero-title {
+                    font-size: 27px;
+                }
+                .product-grid {
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
+                .product-link {
+                    padding: 14px;
+                    min-height: 106px;
+                }
+                .product-link span {
+                    font-size: 12px;
+                }
+                .eyebrow {
+                    font-size: 11px;
+                    padding-inline: 10px;
+                }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                html {
+                    scroll-behavior: auto;
+                }
+                *,
+                *::before,
+                *::after {
+                    transition: none !important;
+                    animation: none !important;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <svg
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+            style="display: none"
+        >
+            <!-- Lucide icon paths, shared by the product navigation. -->
+            <symbol
+                id="icon-activity"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+            </symbol>
+            <symbol
+                id="icon-network"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <rect x="9" y="2" width="6" height="6" rx="1" />
+                <rect x="2" y="16" width="6" height="6" rx="1" />
+                <rect x="16" y="16" width="6" height="6" rx="1" />
+                <path d="M12 8v4M5 16v-4h14v4" />
+            </symbol>
+            <symbol
+                id="icon-sliders"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <path
+                    d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6"
+                />
+            </symbol>
+            <symbol
+                id="icon-mail"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+            </symbol>
+            <symbol
+                id="icon-globe"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M2 12h20M12 2a18 18 0 0 1 0 20 18 18 0 0 1 0-20" />
+            </symbol>
+            <symbol
+                id="icon-layers"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <path
+                    d="m12 3 10 5-10 5L2 8l10-5m-10 9 10 5 10-5M2 16l10 5 10-5"
+                />
+            </symbol>
+            <symbol
+                id="icon-shield"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <path
+                    d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11m-4-11 3 3 5-5"
+                />
+            </symbol>
+            <symbol
+                id="icon-code"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            >
+                <path d="m16 18 6-6-6-6M8 6l-6 6 6 6" />
+            </symbol>
+        </svg>
+        <a class="skip" href="#main">跳转到主要内容</a>
+        <header class="header">
+            <div class="wrap header-inner">
+                <a class="brand" href="#main" aria-label="Beacon 首页">
+                    <span class="brand-mark" aria-hidden="true"
+                        >B<img
+                            src="data:image/webp;base64,UklGRm4EAABXRUJQVlA4WAoAAAAQAAAAPwAAPwAAQUxQSB8CAAABuS5E9D80dKRtUyQ5y8wrlmwdQD4zekzH4iswMzNacqUbMDNWdVb+VXuAN03BF2lPxhdyVRHjKZYpIiZgAlYn9Re/AlhpFbHQ9IteVwOoiX7Dz5IkgyjklwyikHoNaGpVDX7wvE/I8i7n2Q5cDLZxZRVpNVms8YVnfUaWT3aerYqNKD+p8z1YXFd52cV+0OqfzzhLbeSt7RWX+E6rZ3jOmWpj8d4Ec46z/bfG0uX+XZIy2f9f5kFrfe9ax47v+0nCnEDhVIiToX3k/gkHgB2YZ3IvAUuE7gUKgQX4BYrotohuwxNSz8itQSN0T1Xf8Y0GOa72NLKOZKitlG4bWxVDFTcPMOMWwzN4bGNvGZQmwLmszgx4HNYgLEBAiTALzXCRe4NhRqAM+ee0rpl6w1GKECCm3CKsjgENcUfWouCaQx2wAEeop+sh/aIrQLn2pDXKcXt8xTjAAirgmK7yWACFUWYSix2X7kWpGpcmoaRpTi/U4/Dkpq9JmeA2OQM1pkZVwhXVbTGj9KQaoEmJUSpKMQ3wpAy0iJEqyjEzUKNKTItqPYr4UdRMuBheUvbyD/APe/dlK3wBMHtLyr4EL3/pXRTeV5etTF4+8gYKr+KglfCy6gbMoI/d5kPaq/dc7SYnagJJTZZcASFRPnK3D2ivnneVW+1kmkRr4lykG/O4WxBpvNJjbkCqUqQCMPMr52oUwDMGL3BKpbeQv9BbSAYAVlA4ICgCAAAwDACdASpAAEAAPkkcikQioaEZ9VQoBIS0gGl5pAIpX9s0+F8sf0h/tfVU/wHAAfpWSaHd8q3//rLQ7qyFSF1mhyRz5qpsG4lHBBw3aov28dX1hI4o2S94nrz/GO/rW9f3maIyycuu81L0AP79ELpLud0FIDSR0/QfZN/lDKOaD0ERp7vnjLSCAzo5RtxJtK7qvSi/o3lEMglPkI8f772KSzlYd1vyUlyDBzV5LMQEZK5wDktJs7zZW+W0zrsj/k6v7/pltbRw+GERyPEc7St+gzhoipp9aJIf/3oLlEkLvwVbzmesOnw4ip9yTn6x9G1yT+mlaJzqe4EVh/HC//uUtG0Xr6G1SftPy02oanVM53//V/zQc97b5HZWt/NuHi2n7N2NQmQOarwTWzSnz+9Dy2rUkr6morK+SgzzJcKZV85m0WhXWiendrpYMuHrs5ywowLYEZiHZUbE5buSSVwfaBL/tkf/8WGBF8KUZP0v856DMxiCUJ5fn/IjGRhdfL//W32iTg3uHaFa1/x9b3a558u0Za8aQEwv3NT7y3umnAelMg2NuR3hjgs/kt57nUVzqpvzVbwyiSV7d9SU+Fa864fXyTYxBYrYq5lHkZDr04emgKjOkoQv27WxuurCK3e9y1y1I0QFqgqsPCcoLrf4cC3QQAMdu89Flwbp3P/5DjBQHcm85u9dmyKznMXrAnyI4D9/Gcom4yDYUjicaho/TOUTcfyiDAA="
+                            alt=""
+                            width="32"
+                            height="32"
+                            onerror="this.remove()"
+                    /></span>
+                    Beacon
+                </a>
+                <button
+                    class="menu-toggle"
+                    id="menu-toggle"
+                    type="button"
+                    aria-label="展开导航"
+                    aria-controls="main-nav"
+                    aria-expanded="false"
+                    title="展开导航"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.7"
+                        stroke-linecap="round"
+                        aria-hidden="true"
+                    >
+                        <path d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                </button>
+                <nav class="nav" id="main-nav" aria-label="主导航">
+                    <a class="nav-secondary" href="#features">产品能力</a>
+                    <a class="nav-secondary" href="#rules">规则告警</a>
+                    <a class="nav-secondary" href="#workspace">团队协作</a>
+                    <a class="nav-secondary" href="#developers">开发者</a>
+                    <a
+                        class="nav-source"
+                        href="https://gitee.com/xuzuxing/beacon"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        >源码
+                        <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.7"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                        >
+                            <path d="M7 7h10v10M7 17 17 7" />
+                        </svg>
+                    </a>
+                    <a
+                        class="nav-docs"
+                        data-api-path="/api/docs"
+                        href="http://localhost:3000/api/docs"
+                        >API 文档</a
+                    >
+                </nav>
+            </div>
+        </header>
+        <main id="main">
+            <section class="hero" aria-labelledby="hero-heading">
+                <div class="wrap hero-stage">
+                    <div class="hero-copy">
+                        <span class="eyebrow"
+                            >开源监控平台 · 从服务状态到业务信号</span
+                        >
+                        <h1 id="hero-heading">Beacon</h1>
+                        <p class="hero-title">服务监控与业务告警</p>
+                        <p class="hero-description">
+                            服务有响应，不等于业务正常。连接<strong>探针、规则、事件与通知</strong>，让每一次异常都有迹可循。从多协议检查到团队协作，一个工作空间承接完整链路。
+                        </p>
+                        <div class="actions">
+                            <a
+                                class="button button-primary"
+                                data-api-path="/api/docs"
+                                href="http://localhost:3000/api/docs"
+                                >开始接入
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.7"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <path d="M7 7h10v10M7 17 17 7" />
+                                </svg>
+                            </a>
+                            <a class="button" href="#rules">查看规则示例</a>
+                        </div>
+                    </div>
+                    <div class="signal">
+                        <canvas
+                            id="signal"
+                            role="img"
+                            aria-label="监控链路示意：Beacon 从服务与探针接收检查结果，连接业务规则、业务事件和邮件通知。"
+                            >服务与探针 → Beacon →
+                            业务规则、业务事件、邮件通知</canvas
+                        >
+                        <p class="signal-caption">
+                            从一次检查，到一条可行动的通知。
+                        </p>
+                    </div>
+                </div>
+                <nav class="wrap product-grid" aria-label="Beacon 产品能力">
+                    <a class="product-link" href="#features"
+                        ><svg aria-hidden="true">
+                            <use href="#icon-activity" /></svg
+                        ><strong>服务监控</strong
+                        ><span>HTTP / TCP / PING / DNS</span></a
+                    >
+                    <a class="product-link" href="#features"
+                        ><svg aria-hidden="true">
+                            <use href="#icon-network" /></svg
+                        ><strong>分布式探针</strong
+                        ><span>云端 / 自有节点</span></a
+                    >
+                    <a class="product-link" href="#rules"
+                        ><svg aria-hidden="true">
+                            <use href="#icon-sliders" /></svg
+                        ><strong>业务规则</strong
+                        ><span>响应校验 / 比例阈值</span></a
+                    >
+                    <a class="product-link" href="#rules"
+                        ><svg aria-hidden="true"><use href="#icon-mail" /></svg
+                        ><strong>通知渠道</strong
+                        ><span>邮件 / 团队消息</span></a
+                    >
+                    <a class="product-link" href="#features"
+                        ><svg aria-hidden="true"><use href="#icon-globe" /></svg
+                        ><strong>公开状态页</strong
+                        ><span>服务状态 / 事件记录</span></a
+                    >
+                    <a class="product-link" href="#workspace"
+                        ><svg aria-hidden="true">
+                            <use href="#icon-layers" /></svg
+                        ><strong>团队协作</strong
+                        ><span>项目 / 迭代 / 任务</span></a
+                    >
+                    <a class="product-link" href="#workspace"
+                        ><svg aria-hidden="true">
+                            <use href="#icon-shield" /></svg
+                        ><strong>组织权限</strong
+                        ><span>租户隔离 / 分层权限</span></a
+                    >
+                    <a class="product-link" href="#developers"
+                        ><svg aria-hidden="true"><use href="#icon-code" /></svg
+                        ><strong>开发者 API</strong
+                        ><span>REST / 接口文档</span></a
+                    >
+                </nav>
+            </section>
+            <div class="stack" aria-label="技术栈">
+                <div class="wrap stack-inner">
+                    <span>开放技术栈，连接你的业务系统</span
+                    ><strong>NestJS</strong><strong>TypeScript</strong
+                    ><strong>Prisma</strong><strong>PostgreSQL</strong
+                    ><strong>Redis / BullMQ</strong>
+                </div>
+            </div>
+            <section
+                class="section"
+                id="features"
+                aria-labelledby="features-heading"
+            >
+                <div class="wrap">
+                    <div class="section-heading">
+                        <div>
+                            <span class="section-label"
+                                >服务观测 / OBSERVE</span
+                            >
+                            <h2 id="features-heading">
+                                不仅知道宕机，更理解异常。
+                            </h2>
+                        </div>
+                        <p>
+                            从网络连通性到业务响应，把分散的检查结果，转化成可以行动的信号。
+                        </p>
+                    </div>
+                    <div class="features">
+                        <article class="feature">
+                            <div class="feature-icon">
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.7"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                                </svg>
+                            </div>
+                            <h3>多协议服务监控</h3>
+                            <p>
+                                检查接口、网络与应用服务，通过探针采集状态、响应耗时和检查结果，保留可回溯的监控记录。
+                            </p>
+                            <small
+                                >HTTP / TCP / PING / DNS<br />数据库 / Docker /
+                                gRPC / WebSocket</small
+                            >
+                        </article>
+                        <article class="feature">
+                            <div class="feature-icon">
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.7"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <path
+                                        d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6"
+                                    />
+                                </svg>
+                            </div>
+                            <h3>业务规则校验</h3>
+                            <p>
+                                HTTP 200
+                                不一定代表业务成功。结合响应内容与规则判断业务状态，再用统计窗口和阈值识别异常。
+                            </p>
+                            <small
+                                >连通性 / 响应内容 / 可用率<br />业务事件 /
+                                恢复事件</small
+                            >
+                        </article>
+                        <article class="feature">
+                            <div class="feature-icon">
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.7"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <path
+                                        d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-11.73 12a2 2 0 0 0 3.46 0"
+                                    />
+                                </svg>
+                            </div>
+                            <h3>连接通知渠道</h3>
+                            <p>
+                                将监控事件送达邮件与团队消息渠道，跟踪通知投递结果，让异常信息进入团队已有的工作流程。
+                            </p>
+                            <small
+                                >邮件 / 飞书 / 企业微信 / 钉钉<br />站内通知 /
+                                SSE / 公开状态页</small
+                            >
+                        </article>
+                    </div>
+                </div>
+            </section>
+            <section
+                class="section rule-section"
+                id="rules"
+                aria-labelledby="rules-heading"
+            >
+                <div class="wrap rule-layout">
+                    <div class="rule-copy">
+                        <span class="section-label">业务信号 / EVALUATE</span>
+                        <h2 id="rules-heading">
+                            接口有响应。<br />业务，真的正常吗？
+                        </h2>
+                        <p>
+                            让告警关注业务结果，而不只是状态码。从单次检查，到窗口内的错误比例，再到一次明确的业务事件。
+                        </p>
+                        <ol class="flow">
+                            <li>
+                                <span class="step">1</span>
+                                <div>
+                                    <strong>定义业务成功条件</strong>
+                                    <p>
+                                        检查响应内容，识别 HTTP 200
+                                        中的业务错误。
+                                    </p>
+                                </div>
+                            </li>
+                            <li>
+                                <span class="step">2</span>
+                                <div>
+                                    <strong>设置窗口与阈值</strong>
+                                    <p>
+                                        汇总最近的检查结果，判断可用率是否低于阈值。
+                                    </p>
+                                </div>
+                            </li>
+                            <li>
+                                <span class="step">3</span>
+                                <div>
+                                    <strong>生成事件并通知</strong>
+                                    <p>
+                                        触发告警流程，记录事件与渠道投递状态。
+                                    </p>
+                                </div>
+                            </li>
+                        </ol>
+                    </div>
+                    <div class="rule-tool" aria-label="业务规则计算示例">
+                        <div class="tool-header">
+                            <strong>规则计算示例</strong
+                            ><span>BUSINESS CHECK</span>
+                        </div>
+                        <div class="tool-body">
+                            <div class="tool-meta">
+                                <span>统计窗口 <b>5 次检查</b></span
+                                ><span>可用率阈值 <b>60%</b></span>
+                            </div>
+                            <div
+                                class="samples"
+                                id="samples"
+                                aria-label="最近五次检查的业务结果"
+                            >
+                                <div class="sample">
+                                    <b>200</b><span>业务成功</span>
+                                </div>
+                                <div class="sample">
+                                    <b>200</b><span>业务成功</span>
+                                </div>
+                                <div class="sample failed">
+                                    <b>200</b><span>业务失败</span>
+                                </div>
+                                <div class="sample failed">
+                                    <b>200</b><span>业务失败</span>
+                                </div>
+                                <div class="sample failed">
+                                    <b>200</b><span>业务失败</span>
+                                </div>
+                            </div>
+                            <div class="range-label">
+                                <label for="failures">业务失败数</label
+                                ><output id="failure-count" for="failures"
+                                    >3 / 5</output
+                                >
+                            </div>
+                            <input
+                                id="failures"
+                                type="range"
+                                min="0"
+                                max="5"
+                                step="1"
+                                value="3"
+                            />
+                            <div class="metrics">
+                                <div class="metric">
+                                    <span>业务错误比例</span
+                                    ><strong id="error-ratio">60%</strong>
+                                </div>
+                                <div class="metric">
+                                    <span>业务可用率</span
+                                    ><strong id="availability">40%</strong>
+                                </div>
+                            </div>
+                            <div
+                                class="decision alert"
+                                id="decision"
+                                aria-live="polite"
+                                aria-atomic="true"
+                            >
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.7"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <circle cx="12" cy="12" r="10" />
+                                    <path d="M12 8v4m0 4h.01" />
+                                </svg>
+                                <div>
+                                    <strong id="decision-title"
+                                        >达到告警条件</strong
+                                    >
+                                    <p id="decision-detail">
+                                        可用率 40% &lt;
+                                        60%，进入业务事件与通知流程。
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tool-foot">
+                            示例数据 · 仅计算阈值，不发起请求或发送邮件
+                        </div>
+                    </div>
+                </div>
+            </section>
+            <section
+                class="section"
+                id="workspace"
+                aria-labelledby="workspace-heading"
+            >
+                <div class="wrap">
+                    <span class="section-label">团队空间 / COLLABORATE</span>
+                    <h2 id="workspace-heading">服务背后，是一起工作的团队。</h2>
+                    <div class="workspace">
+                        <div class="workspace-copy">
+                            <h3>从一个组织，到完整的工作空间。</h3>
+                            <p>
+                                用项目、迭代与任务组织工作，通过评论、附件和标签保留上下文。监控告警与团队协作共享组织边界，让工作与服务状态彼此连接。
+                            </p>
+                        </div>
+                        <ul class="capabilities">
+                            <li>
+                                <strong>多租户隔离</strong
+                                ><span>以组织为边界管理资源与成员。</span>
+                            </li>
+                            <li>
+                                <strong>分层权限</strong
+                                ><span>OWNER / ADMIN / MEMBER / VIEWER</span>
+                            </li>
+                            <li>
+                                <strong>审计记录</strong
+                                ><span>追踪关键操作，保留变更上下文。</span>
+                            </li>
+                            <li>
+                                <strong>任务协作</strong
+                                ><span>项目、迭代、任务、评论与附件。</span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+            <section
+                class="section developer"
+                id="developers"
+                aria-labelledby="developers-heading"
+            >
+                <div class="wrap developer-layout">
+                    <div>
+                        <span class="section-label">开发者工具 / BUILD</span>
+                        <h2 id="developers-heading">
+                            API 优先。<br />接入你已有的系统。
+                        </h2>
+                        <p>
+                            基于 NestJS、Prisma 与 PostgreSQL 构建。通过 REST
+                            API
+                            集成业务，通过探针扩展检查，让可靠性成为工作流的一部分。
+                        </p>
+                        <a
+                            class="text-link"
+                            data-api-path="/api/docs"
+                            href="http://localhost:3000/api/docs"
+                            >打开 API 文档
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.7"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <path d="M5 12h14m-7-7 7 7-7 7" />
+                            </svg>
+                        </a>
+                    </div>
+                    <div class="code-tool">
+                        <div class="code-header">
+                            <span>HTTP / 状态码测试</span
+                            ><button
+                                class="copy"
+                                id="copy-command"
+                                type="button"
+                                aria-label="复制测试命令"
+                                title="复制测试命令"
+                            >
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.7"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                >
+                                    <rect
+                                        x="9"
+                                        y="9"
+                                        width="13"
+                                        height="13"
+                                        rx="2"
+                                    />
+                                    <path
+                                        d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                                    />
+                                </svg>
+                            </button>
+                        </div>
+                        <pre
+                            id="command"
+                        ><code><span class="code-muted"># 返回指定的 HTTP 状态码</span>
+<span class="code-green">curl</span> -i <span id="endpoint">http://localhost:3000/api/status/400</span>
+
+<span class="code-muted"># HTTP/1.1 400 Bad Request
+# 省略状态码时默认返回 HTTP 200</span></code></pre>
+                        <div
+                            class="copy-status"
+                            id="copy-status"
+                            role="status"
+                        ></div>
+                    </div>
+                </div>
+            </section>
+            <section class="closing" aria-labelledby="closing-heading">
+                <div class="wrap">
+                    <h2 id="closing-heading">开始使用 Beacon</h2>
+                    <p>连接你的第一个服务，让监控、告警与协作真正串起来。</p>
+                    <div class="actions">
+                        <a
+                            class="button button-primary"
+                            data-api-path="/api/docs"
+                            href="http://localhost:3000/api/docs"
+                            >浏览 API 文档
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.7"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <path d="M5 12h14m-7-7 7 7-7 7" /></svg
+                        ></a>
+                        <a
+                            class="button"
+                            href="https://gitee.com/xuzuxing/beacon"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            >获取源码</a
+                        >
+                    </div>
+                </div>
+            </section>
+        </main>
+        <footer class="footer">
+            <div class="wrap footer-inner">
+                <span
+                    ><strong>Beacon</strong> ·
+                    让服务状态成为团队的共同语言。</span
+                >
+                <div class="footer-links">
+                    <a
+                        href="https://gitee.com/xuzuxing/beacon"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        >Gitee</a
+                    ><a
+                        data-api-path="/api/docs"
+                        href="http://localhost:3000/api/docs"
+                        >API 文档</a
+                    ><a href="#main">回到顶部 ↑</a>
+                </div>
+            </div>
+        </footer>
+        <script>
+            (() => {
+                const base = /^https?:$/.test(location.protocol)
+                    ? location.origin
+                    : 'http://localhost:3000';
+                document.querySelectorAll('[data-api-path]').forEach((link) => {
+                    link.href = base + link.dataset.apiPath;
+                });
+                const endpoint = base + '/api/status/400';
+                document.getElementById('endpoint').textContent = endpoint;
+                const menu = document.getElementById('main-nav');
+                const menuToggle = document.getElementById('menu-toggle');
+                function closeMenu() {
+                    menu.classList.remove('is-open');
+                    menuToggle.setAttribute('aria-expanded', 'false');
+                    menuToggle.setAttribute('aria-label', '展开导航');
+                    menuToggle.title = '展开导航';
+                }
+                menuToggle.addEventListener('click', () => {
+                    const open = menu.classList.toggle('is-open');
+                    menuToggle.setAttribute('aria-expanded', String(open));
+                    menuToggle.setAttribute(
+                        'aria-label',
+                        open ? '收起导航' : '展开导航',
+                    );
+                    menuToggle.title = open ? '收起导航' : '展开导航';
+                });
+                menu.addEventListener('click', (event) => {
+                    if (event.target.closest('a')) closeMenu();
+                });
+                document.addEventListener('keydown', (event) => {
+                    if (
+                        event.key === 'Escape' &&
+                        menu.classList.contains('is-open')
+                    ) {
+                        closeMenu();
+                        menuToggle.focus();
+                    }
+                });
+                const range = document.getElementById('failures');
+                const samples = [...document.querySelectorAll('.sample')];
+                function updateRule() {
+                    const failed = Number(range.value);
+                    const error = failed * 20;
+                    const availability = 100 - error;
+                    const alert = availability < 60;
+                    document.getElementById('failure-count').value =
+                        `${failed} / 5`;
+                    range.setAttribute(
+                        'aria-valuetext',
+                        `最近五次检查中 ${failed} 次业务失败`,
+                    );
+                    document.getElementById('error-ratio').textContent =
+                        `${error}%`;
+                    document.getElementById('availability').textContent =
+                        `${availability}%`;
+                    samples.forEach((sample, index) => {
+                        const isFailure = index >= 5 - failed;
+                        sample.classList.toggle('failed', isFailure);
+                        sample.querySelector('span').textContent = isFailure
+                            ? '业务失败'
+                            : '业务成功';
+                    });
+                    document
+                        .getElementById('decision')
+                        .classList.toggle('alert', alert);
+                    document.getElementById('decision-title').textContent =
+                        alert ? '达到告警条件' : '未达到告警条件';
+                    document.getElementById('decision-detail').textContent =
+                        alert
+                            ? `可用率 ${availability}% < 60%，进入业务事件与通知流程。`
+                            : `可用率 ${availability}% ≥ 60%，本次不触发阈值告警。`;
+                }
+                range.addEventListener('input', updateRule);
+                updateRule();
+                document
+                    .getElementById('copy-command')
+                    .addEventListener('click', async () => {
+                        const status = document.getElementById('copy-status');
+                        try {
+                            await navigator.clipboard.writeText(
+                                `curl -i ${endpoint}`,
+                            );
+                            status.textContent = '测试命令已复制';
+                        } catch {
+                            const selection = window.getSelection();
+                            const textRange = document.createRange();
+                            textRange.selectNodeContents(
+                                document.getElementById('command'),
+                            );
+                            selection.removeAllRanges();
+                            selection.addRange(textRange);
+                            status.textContent = '自动复制不可用，命令已选中';
+                        }
+                    });
+
+                // The canvas visualizes the actual monitoring pipeline, not live telemetry.
+                const canvas = document.getElementById('signal');
+                const context = canvas.getContext('2d');
+                if (!context) return;
+                const motion = matchMedia('(prefers-reduced-motion: reduce)');
+                let width = 0;
+                let height = 0;
+                let frame = 0;
+                let visible = true;
+                const logo = new Image();
+                logo.src = document.querySelector('.brand-mark img').src;
+                logo.addEventListener('load', restart);
+                function draw(time = 0) {
+                    if (!width || !height) return;
+                    const compact = matchMedia('(max-width: 800px)').matches;
+                    const y = compact ? height - 132 : height * 0.48;
+                    const sourceX = compact ? 30 : width * 0.56;
+                    const centerX = compact ? width * 0.49 : width * 0.75;
+                    const endX = compact ? width - 26 : width - 36;
+                    const separation = compact ? 52 : 76;
+                    const radius = compact ? 30 : 42;
+                    context.clearRect(0, 0, width, height);
+                    context.strokeStyle = '#b0d2ff';
+                    context.lineWidth = 1.2;
+                    context.setLineDash([4, 6]);
+                    context.beginPath();
+                    context.moveTo(sourceX, y);
+                    context.lineTo(centerX, y);
+                    context.stroke();
+                    const branches = [
+                        { label: '业务规则', code: 'RULE', color: '#1677ff' },
+                        { label: '业务事件', code: 'EVT', color: '#916015' },
+                        { label: '邮件通知', code: 'MAIL', color: '#146c48' },
+                    ];
+                    branches.forEach((branch, index) => {
+                        const targetY = y + (index - 1) * separation;
+                        context.beginPath();
+                        context.moveTo(centerX, y);
+                        context.lineTo(endX, targetY);
+                        context.stroke();
+                        const progress = motion.matches
+                            ? 0.6
+                            : (time / 4800 + index / 3) % 1;
+                        context.fillStyle = branch.color;
+                        context.beginPath();
+                        context.arc(
+                            centerX + (endX - centerX) * progress,
+                            y + (targetY - y) * progress,
+                            2.5,
+                            0,
+                            Math.PI * 2,
+                        );
+                        context.fill();
+                    });
+                    context.setLineDash([]);
+                    function node(x, nodeY, nodeRadius, stroke) {
+                        context.fillStyle = '#fff';
+                        context.strokeStyle = stroke;
+                        context.lineWidth = 1.5;
+                        context.beginPath();
+                        context.arc(x, nodeY, nodeRadius, 0, Math.PI * 2);
+                        context.fill();
+                        context.stroke();
+                    }
+                    function label(
+                        text,
+                        x,
+                        textY,
+                        color,
+                        font = '12px "Microsoft YaHei", sans-serif',
+                        align = 'center',
+                    ) {
+                        context.font = font;
+                        context.fillStyle = color;
+                        context.textAlign = align;
+                        context.fillText(text, x, textY);
+                    }
+                    node(sourceX, y, compact ? 24 : 30, '#84b7ff');
+                    label(
+                        'HTTP',
+                        sourceX,
+                        y + 4,
+                        '#1677ff',
+                        '12px Consolas, monospace',
+                    );
+                    label(
+                        '服务 / 探针',
+                        compact ? 0 : sourceX,
+                        y + 52,
+                        '#626a76',
+                        undefined,
+                        compact ? 'left' : 'center',
+                    );
+                    node(centerX, y, radius, '#1677ff');
+                    if (logo.complete && logo.naturalWidth) {
+                        const size = compact ? 32 : 44;
+                        context.drawImage(
+                            logo,
+                            centerX - size / 2,
+                            y - size / 2,
+                            size,
+                            size,
+                        );
+                    } else {
+                        label(
+                            'B',
+                            centerX,
+                            y + 10,
+                            '#1677ff',
+                            'bold 32px Consolas, monospace',
+                        );
+                    }
+                    label(
+                        'BEACON',
+                        centerX,
+                        y + radius + 25,
+                        '#1164d8',
+                        '600 12px Consolas, monospace',
+                    );
+                    branches.forEach((branch, index) => {
+                        const targetY = y + (index - 1) * separation;
+                        node(endX, targetY, compact ? 17 : 21, branch.color);
+                        label(
+                            branch.code,
+                            endX,
+                            targetY + 3,
+                            branch.color,
+                            '9px Consolas, monospace',
+                        );
+                        label(
+                            branch.label,
+                            endX,
+                            targetY + (compact ? 31 : 40),
+                            '#626a76',
+                        );
+                    });
+                    if (!motion.matches && visible && !document.hidden)
+                        frame = requestAnimationFrame(draw);
+                }
+                function restart() {
+                    cancelAnimationFrame(frame);
+                    draw();
+                }
+                new ResizeObserver(() => {
+                    width = canvas.clientWidth;
+                    height = canvas.clientHeight;
+                    const ratio = Math.min(devicePixelRatio || 1, 2);
+                    canvas.width = Math.round(width * ratio);
+                    canvas.height = Math.round(height * ratio);
+                    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+                    restart();
+                }).observe(canvas);
+                new IntersectionObserver(([entry]) => {
+                    visible = entry.isIntersecting;
+                    restart();
+                }).observe(canvas);
+                motion.addEventListener('change', restart);
+                document.addEventListener('visibilitychange', restart);
+            })();
+        </script>
+    </body>
+</html>

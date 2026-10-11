@@ -5,6 +5,7 @@ import {
 } from './organizations.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
+import type { NotificationsService } from '../notifications/notifications.service';
 
 const user = { id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com' };
 
@@ -24,6 +25,10 @@ function createService() {
 
     const service = new OrganizationsService(
         prisma as unknown as PrismaService,
+        {
+            publish: jest.fn(),
+            organizationRecipients: jest.fn(),
+        } as unknown as NotificationsService,
     );
 
     return { service, prisma };

@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { PrismaService } from '../../../infra/database/prisma.service';
+import { InvitationsService } from '../../invitations/invitations.service';
 import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
 import {
     SCHEDULED_JOBS,
@@ -17,7 +17,7 @@ export class InvitationExpiryService implements OnModuleInit {
     private readonly logger = new Logger(InvitationExpiryService.name);
 
     constructor(
-        private readonly prisma: PrismaService,
+        private readonly invitations: InvitationsService,
         private readonly registry: ScheduledJobRegistry,
     ) {}
 
@@ -34,15 +34,7 @@ export class InvitationExpiryService implements OnModuleInit {
         this.logger.log('Starting invitation expiry check...');
 
         try {
-            const { count } = await this.prisma.invitation.updateMany({
-                where: {
-                    status: 'PENDING',
-                    expiresAt: { lt: new Date() },
-                },
-                data: {
-                    status: 'EXPIRED',
-                },
-            });
+            const count = await this.invitations.expirePending();
 
             const duration = Date.now() - jobStart;
             this.logger.log(

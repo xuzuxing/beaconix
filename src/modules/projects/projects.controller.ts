@@ -132,8 +132,12 @@ export class ProjectsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Project not found' })
-    async archive(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.projectsService.archive(orgId, id);
+    async archive(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.projectsService.archive(orgId, id, user.sub);
     }
 
     @Delete(':id')
@@ -151,8 +155,12 @@ export class ProjectsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Project not found' })
-    async remove(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.projectsService.softDelete(orgId, id);
+    async remove(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.projectsService.softDelete(orgId, id, user.sub);
     }
 
     @Post(':id/restore')
@@ -171,7 +179,11 @@ export class ProjectsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Project not found' })
-    async restore(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.projectsService.restore(orgId, id);
+    async restore(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.projectsService.restore(orgId, id, user.sub);
     }
 }

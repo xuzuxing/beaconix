@@ -22,6 +22,7 @@ export const SCHEDULED_JOBS = {
     probeOfflineSweep: 'probe-offline-sweep',
     alertOutboxSweep: 'alert-outbox-sweep',
     probeIngestSweep: 'probe-ingest-sweep',
+    workspaceNotificationDelivery: 'workspace-notification-delivery',
 } as const;
 
 export type ScheduledJobName =
@@ -47,4 +48,5 @@ export const SCHEDULED_JOB_PATTERNS: Record<ScheduledJobName, string> = {
     'probe-offline-sweep': '* * * * *',
     'alert-outbox-sweep': '* * * * *',
     'probe-ingest-sweep': '* * * * *',
+    'workspace-notification-delivery': '* * * * *',
 };

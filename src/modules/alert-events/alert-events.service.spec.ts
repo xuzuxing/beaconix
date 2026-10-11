@@ -6,6 +6,7 @@ import type {
     MonitorStateModel,
 } from '../../generated/prisma/models';
 import type { CheckOutcome } from '../state/state.service';
+import type { NotificationsService } from '../notifications/notifications.service';
 
 const monitor = {
     id: 'm',
@@ -49,8 +50,19 @@ function fixture() {
         notificationChannel: {
             findMany: jest.fn().mockResolvedValue([{ id: 'c' }]),
         },
+        notification: {
+            findMany: jest.fn().mockResolvedValue([{ userId: 'owner' }]),
+        },
     };
-    const service = new AlertEventsService({} as PrismaService);
+    const notifications = {
+        publish: jest.fn().mockResolvedValue(undefined),
+        organizationRecipients: jest.fn().mockResolvedValue(['owner']),
+        eventRecipients: jest.fn().mockResolvedValue(['owner']),
+    };
+    const service = new AlertEventsService(
+        {} as PrismaService,
+        notifications as unknown as NotificationsService,
+    );
     const record = (
         outcome: Partial<CheckOutcome>,
         overrides = {},
@@ -72,9 +84,69 @@ function fixture() {
             },
             { status: 'DOWN', failCount: 3, connectivityFailCount: 3 },
         );
-    return { tx, record };
+    return { tx, record, notifications };
 }
 describe('Alert events', () => {
+    it('publishes a private station opening in the incident transaction', async () => {
+        const { tx, record, notifications } = fixture();
+        await record({ serviceVerdict: 'FAILURE', failureReason: 'TIMEOUT' });
+        expect(notifications.publish).toHaveBeenCalledWith(
+            expect.objectContaining({
+                eventKey: 'monitor-incident:event:OPEN',
+                type: 'MONITOR_ALERT',
+                recipients: ['owner'],
+                organizationId: 'o',
+                resourceType: 'Monitor',
+                resourceId: 'm',
+                meta: {
+                    alertEventId: 'event',
+                    kind: 'CONNECTIVITY',
+                    projectId: 'p',
+                },
+            }),
+            tx,
+        );
+        expect(JSON.stringify(notifications.publish.mock.calls)).not.toContain(
+            monitor.target,
+        );
+    });
+
+    it('sends station recovery only to the opening recipients', async () => {
+        const { tx, record, notifications } = fixture();
+        tx.alertEvent.findFirst.mockResolvedValueOnce({
+            id: 'event',
+            startedAt: new Date(0),
+            origin: 'LIVE',
+        });
+        tx.notification.findMany.mockResolvedValue([]);
+        notifications.eventRecipients.mockResolvedValue(['previous-recipient']);
+        await record({ serviceVerdict: 'SUCCESS' });
+        expect(notifications.publish).toHaveBeenCalledWith(
+            expect.objectContaining({
+                type: 'MONITOR_RECOVERED',
+                recipients: ['previous-recipient'],
+                eventKey: 'monitor-incident:event:RECOVERY',
+            }),
+            tx,
+        );
+        expect(notifications.organizationRecipients).not.toHaveBeenCalled();
+        expect(notifications.eventRecipients).toHaveBeenCalledWith(
+            'monitor-incident:event:OPEN',
+            tx,
+        );
+    });
+
+    it('does not turn a baseline incident into a station opening', async () => {
+        const { tx, record, notifications } = fixture();
+        tx.alertEvent.findFirst.mockResolvedValueOnce({
+            id: 'baseline',
+            origin: 'BASELINE',
+            startedAt: new Date(0),
+        });
+        await record({ serviceVerdict: 'FAILURE' });
+        expect(notifications.publish).not.toHaveBeenCalled();
+    });
+
     it('opens connectivity independently of an existing SSL DOWN state', async () => {
         const { tx, record } = fixture();
         await record(

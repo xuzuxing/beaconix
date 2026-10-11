@@ -5,8 +5,10 @@ import { AdminTenantsService } from './admin-tenants.service';
 
 describe('AdminTenantsController', () => {
     let controller: AdminTenantsController;
+    let toggle: jest.Mock;
 
     beforeEach(async () => {
+        toggle = jest.fn();
         const module: TestingModule = await Test.createTestingModule({
             controllers: [AdminTenantsController],
             providers: [
@@ -15,7 +17,7 @@ describe('AdminTenantsController', () => {
                     useValue: {
                         findAll: jest.fn(),
                         findOne: jest.fn(),
-                        toggle: jest.fn(),
+                        toggle,
                     },
                 },
             ],
@@ -29,5 +31,14 @@ describe('AdminTenantsController', () => {
 
     it('should be defined', () => {
         expect(controller).toBeDefined();
+    });
+
+    it('passes the platform administrator to lifecycle notifications', async () => {
+        await controller.toggle('org', {
+            sub: 'platform-admin',
+            email: 'admin@example.com',
+            globalRole: 'SUPER_ADMIN',
+        });
+        expect(toggle).toHaveBeenCalledWith('org', 'platform-admin');
     });
 });

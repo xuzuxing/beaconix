@@ -21,6 +21,9 @@ import {
 } from '../common/credentials.util';
 import { QuotaService } from '../../../shared/quota/quota.service';
 import { API_SCOPES } from '../common/scopes';
+import { NotificationsService } from '../../notifications/notifications.service';
+import { ADMIN_ROLES } from '../../notifications/notification-event';
+import { NotificationType } from '../../../generated/prisma/enums';
 
 /** Default PAT lifetime when no expiry is provided. */
 const DEFAULT_PAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -33,6 +36,7 @@ export class ApiCredentialsService {
         private readonly prisma: PrismaService,
         private readonly jwtService: JwtService,
         private readonly quotaService: QuotaService,
+        private readonly notifications: NotificationsService,
     ) {}
 
     // -- Organization API keys -------------------------------------------
@@ -49,16 +53,41 @@ export class ApiCredentialsService {
         }
 
         const rawKey = generateToken(API_KEY_PREFIX);
-        const record = await this.prisma.apiKey.create({
-            data: {
-                organizationId: orgId,
-                name: dto.name,
-                keyPrefix: toKeyPrefix(rawKey),
-                keyHash: hashToken(rawKey),
-                scopes: dto.scopes,
-                expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
-                createdById,
-            },
+        const record = await this.prisma.$transaction(async (tx) => {
+            const key = await tx.apiKey.create({
+                data: {
+                    organizationId: orgId,
+                    name: dto.name,
+                    keyPrefix: toKeyPrefix(rawKey),
+                    keyHash: hashToken(rawKey),
+                    scopes: dto.scopes,
+                    expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+                    createdById,
+                },
+            });
+            await this.notifications.publish(
+                {
+                    eventKey: `api-key-created:${key.id}`,
+                    type: NotificationType.API_KEY_CREATED,
+                    title: 'An organization API key was created',
+                    organizationId: orgId,
+                    actorId: createdById,
+                    includeActor: true,
+                    email: true,
+                    resourceType: 'ApiKey',
+                    resourceId: key.id,
+                    recipients: [
+                        createdById,
+                        ...(await this.notifications.organizationRecipients(
+                            orgId,
+                            tx,
+                            ADMIN_ROLES,
+                        )),
+                    ],
+                },
+                tx,
+            );
+            return key;
         });
 
         return new ApiKeyEntity({
@@ -76,7 +105,11 @@ export class ApiCredentialsService {
         return keys.map((key) => this.toApiKeyEntity(key));
     }
 
-    async revokeApiKey(orgId: string, id: string): Promise<ApiKeyEntity> {
+    async revokeApiKey(
+        orgId: string,
+        id: string,
+        actorId?: string,
+    ): Promise<ApiKeyEntity> {
         const key = await this.prisma.apiKey.findFirst({
             where: { id, organizationId: orgId },
         });
@@ -85,9 +118,35 @@ export class ApiCredentialsService {
             throw new BadRequestException('API key is already revoked');
         }
 
-        const revoked = await this.prisma.apiKey.update({
-            where: { id },
-            data: { revokedAt: new Date() },
+        const revoked = await this.prisma.$transaction(async (tx) => {
+            const revokedKey = await tx.apiKey.update({
+                where: { id, revokedAt: null },
+                data: { revokedAt: new Date() },
+            });
+            await this.notifications.publish(
+                {
+                    eventKey: `api-key-revoked:${id}`,
+                    type: NotificationType.API_KEY_REVOKED,
+                    title: 'An organization API key was revoked',
+                    organizationId: orgId,
+                    actorId,
+                    includeActor: true,
+                    email: true,
+                    resourceType: 'ApiKey',
+                    resourceId: id,
+                    recipients: [
+                        ...(key.createdById ? [key.createdById] : []),
+                        ...(actorId ? [actorId] : []),
+                        ...(await this.notifications.organizationRecipients(
+                            orgId,
+                            tx,
+                            ADMIN_ROLES,
+                        )),
+                    ],
+                },
+                tx,
+            );
+            return revokedKey;
         });
 
         return this.toApiKeyEntity(revoked);
@@ -151,15 +210,32 @@ export class ApiCredentialsService {
         }
 
         const rawToken = generateToken(PAT_PREFIX);
-        const record = await this.prisma.personalAccessToken.create({
-            data: {
-                userId: user.sub,
-                name: dto.name,
-                tokenHash: hashToken(rawToken),
-                // Omitted scopes mean full access on the developer API.
-                scopes: dto.scopes ?? [...API_SCOPES],
-                expiresAt,
-            },
+        const record = await this.prisma.$transaction(async (tx) => {
+            const token = await tx.personalAccessToken.create({
+                data: {
+                    userId: user.sub,
+                    name: dto.name,
+                    tokenHash: hashToken(rawToken),
+                    // Omitted scopes mean full access on the developer API.
+                    scopes: dto.scopes ?? [...API_SCOPES],
+                    expiresAt,
+                },
+            });
+            await this.notifications.publish(
+                {
+                    eventKey: `pat-created:${token.id}`,
+                    type: NotificationType.PERSONAL_ACCESS_TOKEN_CREATED,
+                    title: 'A personal access token was created',
+                    recipients: [user.sub],
+                    actorId: user.sub,
+                    includeActor: true,
+                    email: true,
+                    resourceType: 'PersonalAccessToken',
+                    resourceId: token.id,
+                },
+                tx,
+            );
+            return token;
         });
 
         // PATs are revocable user JWTs. Existing JWT-protected endpoints keep
@@ -211,9 +287,26 @@ export class ApiCredentialsService {
             );
         }
 
-        const revoked = await this.prisma.personalAccessToken.update({
-            where: { id },
-            data: { revokedAt: new Date() },
+        const revoked = await this.prisma.$transaction(async (tx) => {
+            const revokedToken = await tx.personalAccessToken.update({
+                where: { id, revokedAt: null },
+                data: { revokedAt: new Date() },
+            });
+            await this.notifications.publish(
+                {
+                    eventKey: `pat-revoked:${id}`,
+                    type: NotificationType.PERSONAL_ACCESS_TOKEN_REVOKED,
+                    title: 'A personal access token was revoked',
+                    recipients: [userId],
+                    actorId: userId,
+                    includeActor: true,
+                    email: true,
+                    resourceType: 'PersonalAccessToken',
+                    resourceId: id,
+                },
+                tx,
+            );
+            return revokedToken;
         });
 
         return this.toPatEntity(revoked);

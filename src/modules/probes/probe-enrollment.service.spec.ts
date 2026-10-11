@@ -184,6 +184,7 @@ describe('ProbeEnrollmentService', () => {
                     name: expect.stringContaining('host-01'),
                     provider: ProbeProvider.CUSTOM,
                 }),
+                'user-1',
             );
             expect(redis.setJson).toHaveBeenCalledWith(
                 expect.stringContaining('probe:enroll:cred:'),
@@ -284,6 +285,7 @@ describe('ProbeEnrollmentService', () => {
                 expect.objectContaining({
                     name: expect.stringContaining('host-9'),
                 }),
+                'user-1',
             );
         });
 

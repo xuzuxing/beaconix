@@ -19,10 +19,11 @@ import {
     TaskActivityEntity,
 } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';
-import { EmailService } from '../email/email.service';
-import { EmailTemplate } from '../email/email.types';
-import type { AppConfig } from '../../config';
-import { ConfigService } from '@nestjs/config';
+import type {
+    NotificationDb,
+    NotificationEvent,
+} from '../notifications/notification-event';
+import { randomUUID } from 'node:crypto';
 
 // Shared select for user relations
 const userSelect = {
@@ -59,8 +60,6 @@ export class TasksService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
-        private readonly emailService: EmailService,
-        private readonly configService: ConfigService,
     ) {}
 
     // ── CRUD ────────────────────────────────────────────────────────────
@@ -139,6 +138,21 @@ export class TasksService {
                     newValue: null,
                 },
             });
+
+            if (created.assignedToId) {
+                await this.publishTaskEvent(created, userId, tx, {
+                    eventKey: `task:${created.id}:created`,
+                    type: 'TASK_ASSIGNED',
+                    title: `Task #${created.number} was assigned`,
+                    recipients: [
+                        {
+                            userId: created.assignedToId,
+                            title: `You were assigned to task #${created.number}`,
+                            email: true,
+                        },
+                    ],
+                });
+            }
 
             return created;
         });
@@ -279,7 +293,7 @@ export class TasksService {
         userId: string,
         dto: UpdateTaskDto,
     ) {
-        const existing = await this.ensureTaskExists(projectId, taskId);
+        await this.ensureTaskExists(projectId, taskId);
 
         // Validate parent task if changing
         if (dto.parentTaskId !== undefined) {
@@ -296,32 +310,35 @@ export class TasksService {
             }
         }
 
-        // Handle status change → auto-set completedAt
-        const data: any = { ...dto };
-        if (dto.dueDate !== undefined) {
-            const nextDueDate = dto.dueDate ? new Date(dto.dueDate) : null;
-
-            data.dueDate = nextDueDate;
-
-            // A changed due date starts a fresh reminder cycle.
-            if (dueDateChanged(existing.dueDate, nextDueDate)) {
-                data.dueSoonNotifiedAt = null;
-                data.overdueNotifiedAt = null;
-            }
-        }
-        if (dto.status === 'DONE' && existing.status !== 'DONE') {
-            data.completedAt = new Date();
-        } else if (
-            dto.status &&
-            dto.status !== 'DONE' &&
-            existing.completedAt
-        ) {
-            data.completedAt = null;
-        }
-
-        let changedFields: string[] = [];
-
         const task = await this.prisma.$transaction(async (tx) => {
+            if (dto.status === 'DONE') {
+                // Two blockers completing together must observe each other's
+                // committed state before deciding whether a task is unblocked.
+                await tx.$queryRaw`
+                    SELECT "id" FROM "projects" WHERE "id" = ${projectId}
+                    FOR NO KEY UPDATE
+                `;
+            }
+            const existing = await this.lockTask(projectId, taskId, tx);
+            // Compute the transition from the locked, current task snapshot.
+            const data: any = { ...dto };
+            if (dto.dueDate !== undefined) {
+                const nextDueDate = dto.dueDate ? new Date(dto.dueDate) : null;
+                data.dueDate = nextDueDate;
+                if (dueDateChanged(existing.dueDate, nextDueDate)) {
+                    data.dueSoonNotifiedAt = null;
+                    data.overdueNotifiedAt = null;
+                }
+            }
+            if (dto.status === 'DONE' && existing.status !== 'DONE') {
+                data.completedAt = new Date();
+            } else if (
+                dto.status &&
+                dto.status !== 'DONE' &&
+                existing.completedAt
+            ) {
+                data.completedAt = null;
+            }
             const updated = await tx.task.update({
                 where: { id: taskId },
                 data,
@@ -342,47 +359,56 @@ export class TasksService {
                 await tx.taskActivity.createMany({ data: activities });
             }
 
-            changedFields = activities.map((a) => a.field);
-
-            return updated;
-        });
-
-        // Notify watchers about the change (fire-and-forget).
-        // Status changes get their own type; any other field change is TASK_UPDATED.
-        const statusChanged = !!dto.status && dto.status !== existing.status;
-        const otherChangedFields = changedFields.filter(
-            (field) => field !== 'status',
-        );
-
-        if (statusChanged || otherChangedFields.length > 0) {
-            const watchers = await this.prisma.taskWatcher.findMany({
-                where: { taskId },
-                select: { userId: true },
-            });
-            const watcherIds = watchers
-                .map((w) => w.userId)
-                .filter((id) => id !== userId);
-
-            const labels = otherChangedFields.map(
-                (field) => TRACKED_FIELD_LABELS[field] ?? field,
-            );
-
-            this.notificationsService
-                .createAndEmitMany(watcherIds, {
+            const statusChanged =
+                !!dto.status && dto.status !== existing.status;
+            const meaningfulFields = activities
+                .map((a) => a.field)
+                .filter((field) => ['priority', 'dueDate'].includes(field));
+            const transitionKey = `task:${taskId}:updated:${randomUUID()}`;
+            if (statusChanged || meaningfulFields.length > 0) {
+                await this.publishTaskEvent(updated, userId, tx, {
+                    eventKey: transitionKey,
                     type: statusChanged
-                        ? ('TASK_STATUS_CHANGED' as const)
-                        : ('TASK_UPDATED' as const),
+                        ? 'TASK_STATUS_CHANGED'
+                        : 'TASK_UPDATED',
                     title: statusChanged
                         ? `Task #${existing.number} status changed to ${dto.status}`
                         : `Task #${existing.number} was updated`,
                     body: statusChanged
-                        ? `"${existing.title}" was moved to ${dto.status}`
-                        : `"${existing.title}" - changed: ${labels.join(', ')}`,
-                    resourceType: 'Task',
-                    resourceId: taskId,
-                })
-                .catch(() => {});
-        }
+                        ? `"${updated.title}" was moved to ${dto.status}`
+                        : `"${updated.title}" - changed: ${meaningfulFields.map((field) => TRACKED_FIELD_LABELS[field]).join(', ')}`,
+                });
+            }
+
+            if (statusChanged && dto.status === 'DONE') {
+                const dependents = await tx.task.findMany({
+                    where: {
+                        projectId,
+                        deletedAt: null,
+                        status: { notIn: ['DONE', 'CANCELLED'] },
+                        dependencies: {
+                            some: { dependencyTaskId: taskId },
+                            none: {
+                                dependencyTask: {
+                                    deletedAt: null,
+                                    status: { not: 'DONE' },
+                                },
+                            },
+                        },
+                    },
+                });
+                for (const dependent of dependents) {
+                    await this.publishTaskEvent(dependent, userId, tx, {
+                        eventKey: `${transitionKey}:unblocked:${dependent.id}`,
+                        type: 'TASK_UNBLOCKED',
+                        title: `Task #${dependent.number} is no longer blocked`,
+                        meta: { dependencyTaskId: taskId },
+                    });
+                }
+            }
+
+            return updated;
+        });
 
         return new TaskEntity(task);
     }
@@ -391,6 +417,11 @@ export class TasksService {
         await this.ensureTaskExists(projectId, taskId);
 
         const task = await this.prisma.$transaction(async (tx) => {
+            await this.lockTask(projectId, taskId, tx);
+            const recipients = await this.notificationsService.taskRecipients(
+                taskId,
+                tx,
+            );
             const deleted = await tx.task.update({
                 where: { id: taskId },
                 data: { deletedAt: new Date() },
@@ -404,6 +435,19 @@ export class TasksService {
                 },
             });
 
+            await this.publishTaskEvent(
+                deleted,
+                userId,
+                tx,
+                {
+                    eventKey: `task:${taskId}:deleted:${randomUUID()}`,
+                    type: 'TASK_DELETED',
+                    title: `Task #${deleted.number} was deleted`,
+                    recipients,
+                },
+                false,
+            );
+
             return deleted;
         });
 
@@ -411,16 +455,11 @@ export class TasksService {
     }
 
     async restore(projectId: string, taskId: string, userId: string) {
-        const task = await this.prisma.task.findFirst({
-            where: { id: taskId, projectId },
-        });
-
-        if (!task) throw new NotFoundException('Task not found');
-        if (!task.deletedAt) {
-            throw new BadRequestException('Task is not deleted');
-        }
-
         const restored = await this.prisma.$transaction(async (tx) => {
+            const task = await this.lockTask(projectId, taskId, tx, true);
+            if (!task.deletedAt) {
+                throw new BadRequestException('Task is not deleted');
+            }
             const updated = await tx.task.update({
                 where: { id: taskId },
                 data: { deletedAt: null },
@@ -432,6 +471,12 @@ export class TasksService {
                     actorId: userId,
                     action: 'restored task',
                 },
+            });
+
+            await this.publishTaskEvent(updated, userId, tx, {
+                eventKey: `task:${taskId}:restored:${randomUUID()}`,
+                type: 'TASK_RESTORED',
+                title: `Task #${updated.number} was restored`,
             });
 
             return updated;
@@ -448,7 +493,7 @@ export class TasksService {
         userId: string,
         dto: AssignTaskDto,
     ) {
-        const existing = await this.ensureTaskExists(projectId, taskId);
+        await this.ensureTaskExists(projectId, taskId);
         const project = await this.ensureProjectActive(projectId);
 
         if (dto.assignedToId) {
@@ -459,6 +504,7 @@ export class TasksService {
         }
 
         const task = await this.prisma.$transaction(async (tx) => {
+            const existing = await this.lockTask(projectId, taskId, tx);
             const updated = await tx.task.update({
                 where: { id: taskId },
                 data: { assignedToId: dto.assignedToId },
@@ -493,33 +539,46 @@ export class TasksService {
                 },
             });
 
+            if (
+                dto.assignedToId !== undefined &&
+                existing.assignedToId !== dto.assignedToId
+            ) {
+                await this.publishTaskEvent(updated, userId, tx, {
+                    eventKey: `task:${taskId}:assignment:${randomUUID()}`,
+                    type: dto.assignedToId
+                        ? 'TASK_ASSIGNED'
+                        : 'TASK_UNASSIGNED',
+                    title: `Task #${existing.number} assignment changed`,
+                    recipients: [
+                        ...(dto.assignedToId
+                            ? [
+                                  {
+                                      userId: dto.assignedToId,
+                                      type: 'TASK_ASSIGNED' as const,
+                                      title: `You were assigned to task #${existing.number}`,
+                                      email: true,
+                                  },
+                              ]
+                            : []),
+                        ...(existing.assignedToId
+                            ? [
+                                  {
+                                      userId: existing.assignedToId,
+                                      type: 'TASK_UNASSIGNED' as const,
+                                      title: `You are no longer assigned to task #${existing.number}`,
+                                  },
+                              ]
+                            : []),
+                    ],
+                    meta: {
+                        previousAssigneeId: existing.assignedToId,
+                        assignedToId: dto.assignedToId,
+                    },
+                });
+            }
+
             return updated;
         });
-
-        // Notify assignee (fire-and-forget): in-app notification + email
-        if (dto.assignedToId && dto.assignedToId !== userId) {
-            this.notificationsService
-                .createAndEmit(dto.assignedToId, {
-                    type: 'TASK_ASSIGNED' as const,
-                    title: `You were assigned to task #${existing.number}`,
-                    body: `"${existing.title}" was assigned to you`,
-                    resourceType: 'Task',
-                    resourceId: taskId,
-                })
-                .catch(() => {});
-
-            if (task.assignedTo) {
-                const { webUrl } = this.configService.get<AppConfig>('app')!;
-                this.emailService
-                    .send(EmailTemplate.TASK_ASSIGNED, {
-                        to: task.assignedTo.email,
-                        name: task.assignedTo.name,
-                        taskTitle: existing.title,
-                        taskUrl: `${webUrl}/tasks/${taskId}`,
-                    })
-                    .catch(() => {});
-            }
-        }
 
         return new TaskEntity(task);
     }
@@ -532,13 +591,14 @@ export class TasksService {
         userId: string,
         dto: MoveTaskToSprintDto,
     ) {
-        const existing = await this.ensureTaskExists(projectId, taskId);
+        await this.ensureTaskExists(projectId, taskId);
 
         if (dto.sprintId) {
             await this.ensureSprintBelongsToProject(dto.sprintId, projectId);
         }
 
         const task = await this.prisma.$transaction(async (tx) => {
+            const existing = await this.lockTask(projectId, taskId, tx);
             const updated = await tx.task.update({
                 where: { id: taskId },
                 data: { sprintId: dto.sprintId },
@@ -560,6 +620,23 @@ export class TasksService {
                     newValue: dto.sprintId,
                 },
             });
+
+            if (
+                dto.sprintId !== undefined &&
+                existing.sprintId !== dto.sprintId
+            ) {
+                await this.publishTaskEvent(updated, userId, tx, {
+                    eventKey: `task:${taskId}:sprint:${randomUUID()}`,
+                    type: 'TASK_SPRINT_CHANGED',
+                    title: dto.sprintId
+                        ? `Task #${existing.number} moved to a sprint`
+                        : `Task #${existing.number} moved to backlog`,
+                    meta: {
+                        previousSprintId: existing.sprintId,
+                        sprintId: dto.sprintId,
+                    },
+                });
+            }
 
             return updated;
         });
@@ -609,7 +686,7 @@ export class TasksService {
         userId: string,
         dto: AddDependencyDto,
     ) {
-        await this.ensureTaskExists(projectId, taskId);
+        const task = await this.ensureTaskExists(projectId, taskId);
         await this.ensureTaskBelongsToProject(dto.dependencyTaskId, projectId);
 
         if (dto.dependencyTaskId === taskId) {
@@ -661,6 +738,16 @@ export class TasksService {
                 },
             });
 
+            await this.publishTaskEvent(task, userId, tx, {
+                eventKey: `task:${taskId}:dependency:${dep.id}:added`,
+                type: 'TASK_DEPENDENCY_CHANGED',
+                title: `A dependency was added to task #${task.number}`,
+                meta: {
+                    dependencyTaskId: dto.dependencyTaskId,
+                    action: 'added',
+                },
+            });
+
             return dep;
         });
 
@@ -673,7 +760,7 @@ export class TasksService {
         depId: string,
         userId: string,
     ) {
-        await this.ensureTaskExists(projectId, taskId);
+        const task = await this.ensureTaskExists(projectId, taskId);
 
         const dependency = await this.prisma.taskDependency.findFirst({
             where: { id: depId, dependentTaskId: taskId },
@@ -693,6 +780,16 @@ export class TasksService {
                     action: 'removed dependency',
                     field: 'dependencies',
                     oldValue: dependency.dependencyTaskId,
+                },
+            });
+
+            await this.publishTaskEvent(task, userId, tx, {
+                eventKey: `task:${taskId}:dependency:${depId}:removed`,
+                type: 'TASK_DEPENDENCY_CHANGED',
+                title: `A dependency was removed from task #${task.number}`,
+                meta: {
+                    dependencyTaskId: dependency.dependencyTaskId,
+                    action: 'removed',
                 },
             });
         });
@@ -715,6 +812,68 @@ export class TasksService {
     }
 
     // ── PRIVATE HELPERS ─────────────────────────────────────────────────
+
+    private async lockTask(
+        projectId: string,
+        taskId: string,
+        tx: NotificationDb,
+        includeDeleted = false,
+    ) {
+        // Serialize transitions so previous assignee/status and no-op detection
+        // cannot race another mutation of this task.
+        await tx.$queryRaw`
+            SELECT "id" FROM "tasks"
+            WHERE "id" = ${taskId} AND "projectId" = ${projectId}
+            FOR UPDATE
+        `;
+        const task = await tx.task.findFirst({
+            where: {
+                id: taskId,
+                projectId,
+                ...(includeDeleted ? {} : { deletedAt: null }),
+            },
+        });
+        if (!task) throw new NotFoundException('Task not found');
+        return task;
+    }
+
+    private async publishTaskEvent(
+        task: { id: string; organizationId: string; number: number },
+        actorId: string,
+        tx: NotificationDb,
+        event: Omit<NotificationEvent, 'recipients'> & {
+            recipients?: NotificationEvent['recipients'];
+        },
+        resolveRecipients = true,
+    ) {
+        const candidates = [
+            ...(event.recipients ?? []),
+            ...(resolveRecipients
+                ? await this.notificationsService.taskRecipients(task.id, tx)
+                : []),
+        ];
+        const recipients = new Map<
+            string,
+            NotificationEvent['recipients'][number]
+        >();
+        for (const recipient of candidates) {
+            const id =
+                typeof recipient === 'string' ? recipient : recipient.userId;
+            if (id !== actorId && !recipients.has(id))
+                recipients.set(id, recipient);
+        }
+        await this.notificationsService.publish(
+            {
+                ...event,
+                organizationId: task.organizationId,
+                actorId,
+                resourceType: 'Task',
+                resourceId: task.id,
+                recipients: [...recipients.values()],
+            },
+            tx,
+        );
+    }
 
     private async ensureTaskExists(projectId: string, taskId: string) {
         const task = await this.prisma.task.findFirst({
@@ -861,7 +1020,14 @@ export class TasksService {
                 const newVal = dto[key];
 
                 // Only log if actually changed
-                if (String(oldVal ?? '') !== String(newVal ?? '')) {
+                const changed =
+                    key === 'dueDate'
+                        ? dueDateChanged(
+                              oldVal,
+                              newVal ? new Date(newVal) : null,
+                          )
+                        : String(oldVal ?? '') !== String(newVal ?? '');
+                if (changed) {
                     activities.push({
                         taskId,
                         actorId,

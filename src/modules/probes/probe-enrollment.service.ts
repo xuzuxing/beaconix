@@ -220,6 +220,7 @@ export class ProbeEnrollmentService {
                 region: dto.region,
                 client: state.client,
             }),
+            userId,
         );
 
         if (!probe.secret) {
@@ -317,6 +318,7 @@ export class ProbeEnrollmentService {
                     runtime: dto.runtime,
                 },
             }),
+            grant.createdById,
         );
 
         if (!probe.secret) {

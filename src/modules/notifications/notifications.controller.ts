@@ -24,7 +24,7 @@ import { Observable } from 'rxjs';
 import { NotificationsService } from './notifications.service';
 import { QueryNotificationsDto } from './dto';
 import { NotificationEntity } from './entities';
-import { CurrentUser } from '../../common/decorators';
+import { CurrentUser, SkipTransform } from '../../common/decorators';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
 interface MessageEvent {
@@ -90,6 +90,7 @@ export class NotificationsController {
 
     @Get('stream')
     @Sse()
+    @SkipTransform()
     @ApiOperation({
         summary: 'Subscribe to real-time SSE notification stream',
         description:
@@ -98,6 +99,19 @@ export class NotificationsController {
     @ApiProduces('text/event-stream')
     stream(@CurrentUser() user: JwtPayload): Observable<MessageEvent> {
         return this.notificationsService.getStream(user.sub);
+    }
+
+    @Get(':id')
+    @ApiOperation({ summary: 'Get a notification owned by the current user' })
+    @ApiParam({ name: 'id', description: 'Notification CUID' })
+    @ApiOkResponse({
+        type: NotificationEntity,
+        description: 'Notification details',
+    })
+    @ApiNotFoundResponse({ description: 'Notification not found' })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+        return this.notificationsService.findOne(user.sub, id);
     }
 
     @Patch('read-all')

@@ -98,11 +98,88 @@ export class InvitationsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role (requires ADMIN)' })
     @ApiNotFoundResponse({ description: 'Invitation not found' })
-    async revoke(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.invitationsService.revoke(orgId, id);
+    async revoke(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.invitationsService.revoke(orgId, id, user.sub);
     }
 
     // ── Token-based endpoints (public / JWT) ───────────────────────────
+
+    @Get('invitations/pending')
+    @ApiBearerAuth('access-token')
+    @ApiOperation({
+        summary: 'List pending invitations for the verified current email',
+    })
+    @ApiOkResponse({ type: [InvitationEntity] })
+    @ApiUnauthorizedResponse({ description: 'Authentication required' })
+    @ApiForbiddenResponse({ description: 'Verified email required' })
+    async pending(@CurrentUser() user: JwtPayload) {
+        return this.invitationsService.findPendingForUser(user.sub);
+    }
+
+    @Get('invitations/by-id/:id')
+    @ApiBearerAuth('access-token')
+    @ApiOperation({
+        summary: 'Get an invitation addressed to the verified current email',
+    })
+    @ApiParam({ name: 'id', description: 'Invitation CUID' })
+    @ApiOkResponse({ type: InvitationEntity })
+    @ApiUnauthorizedResponse({ description: 'Authentication required' })
+    @ApiForbiddenResponse({
+        description: 'Invitation belongs to another email',
+    })
+    @ApiNotFoundResponse({ description: 'Invitation not found' })
+    async byId(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+        return this.invitationsService.getById(id, user.sub);
+    }
+
+    @Post('invitations/by-id/:id/accept')
+    @HttpCode(HttpStatus.OK)
+    @AuditLog({ entity: 'Invitation', action: 'JOIN' })
+    @ApiBearerAuth('access-token')
+    @ApiOperation({
+        summary: 'Accept an invitation addressed to the verified current email',
+    })
+    @ApiParam({ name: 'id', description: 'Invitation CUID' })
+    @ApiOkResponse({ type: InvitationEntity })
+    @ApiBadRequestResponse({
+        description: 'Invitation expired or no longer pending',
+    })
+    @ApiUnauthorizedResponse({ description: 'Authentication required' })
+    @ApiForbiddenResponse({ description: 'Verified matching email required' })
+    @ApiNotFoundResponse({ description: 'Invitation not found' })
+    @ApiConflictResponse({
+        description: 'Invitation already processed or user already a member',
+    })
+    async acceptById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+        return this.invitationsService.acceptById(id, user.sub);
+    }
+
+    @Post('invitations/by-id/:id/decline')
+    @HttpCode(HttpStatus.OK)
+    @ApiBearerAuth('access-token')
+    @ApiOperation({
+        summary:
+            'Decline an invitation addressed to the verified current email',
+    })
+    @ApiParam({ name: 'id', description: 'Invitation CUID' })
+    @ApiOkResponse({ type: InvitationEntity })
+    @ApiBadRequestResponse({
+        description: 'Invitation expired or no longer pending',
+    })
+    @ApiUnauthorizedResponse({ description: 'Authentication required' })
+    @ApiForbiddenResponse({ description: 'Verified matching email required' })
+    @ApiNotFoundResponse({ description: 'Invitation not found' })
+    @ApiConflictResponse({ description: 'Invitation already processed' })
+    async declineById(
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.invitationsService.declineById(id, user.sub);
+    }
 
     @Get('invitations/:token')
     @Public()
@@ -158,7 +235,10 @@ export class InvitationsController {
     @ApiBadRequestResponse({ description: 'Invitation is not pending' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiNotFoundResponse({ description: 'Invitation not found' })
-    async decline(@Param('token') token: string) {
-        return this.invitationsService.decline(token);
+    async decline(
+        @Param('token') token: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.invitationsService.decline(token, user.sub);
     }
 }

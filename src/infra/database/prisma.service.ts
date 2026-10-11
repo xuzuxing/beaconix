@@ -10,14 +10,6 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { AppConfig, DatabaseConfig } from '../../config';
 
-interface QueryEvent {
-    timestamp: Date;
-    query: string;
-    params: string;
-    duration: number;
-    target: string;
-}
-
 interface LogEvent {
     timestamp: Date;
     message: string;
@@ -50,10 +42,10 @@ export class PrismaService
 
         // Log Prisma queries in development
         if (isDevelopment) {
-            this.$on('query' as never, (e: QueryEvent) => {
-                this.logger.debug(`Query: ${e.query}`);
-                this.logger.debug(`Duration: ${e.duration}ms`);
-            });
+            // this.$on('query' as never, (e: QueryEvent) => {
+            //     this.logger.debug(`Query: ${e.query}`);
+            //     this.logger.debug(`Duration: ${e.duration}ms`);
+            // });
         }
 
         // Log Prisma errors

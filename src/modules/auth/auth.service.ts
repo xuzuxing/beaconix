@@ -14,6 +14,8 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { EmailService } from '../email/email.service';
 import { EmailTemplate } from '../email/email.types';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../../generated/prisma/enums';
 import type { UserModel } from '../../generated/prisma/models';
 import { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { JwtConfig } from '../../config';
@@ -52,6 +54,7 @@ export class AuthService {
         private readonly emailService: EmailService,
         private readonly organizationsService: OrganizationsService,
         private readonly twoFactorService: TwoFactorService,
+        private readonly notifications: NotificationsService,
     ) {
         this.jwtConfig = this.configService.get<JwtConfig>('jwt')!;
     }
@@ -205,18 +208,32 @@ export class AuthService {
         if (!passwordValid) {
             throw new UnauthorizedException('Current password is incorrect');
         }
+        if (await bcrypt.compare(dto.newPassword, user.password)) return;
 
         const hashedPassword = await bcrypt.hash(dto.newPassword, 12);
 
-        await this.prisma.user.update({
-            where: { id: userId },
-            data: { password: hashedPassword },
-        });
-
-        // Revoke all refresh tokens on password change
-        await this.prisma.refreshToken.updateMany({
-            where: { userId, revokedAt: null },
-            data: { revokedAt: new Date() },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: userId, password: user.password },
+                data: { password: hashedPassword },
+            });
+            await tx.refreshToken.updateMany({
+                where: { userId, revokedAt: null },
+                data: { revokedAt: new Date() },
+            });
+            await this.notifications.publish(
+                {
+                    eventKey: `password-changed:${userId}:${crypto.randomUUID()}`,
+                    type: NotificationType.PASSWORD_CHANGED,
+                    title: 'Your password was changed',
+                    body: 'Your sessions have been revoked. Contact support if you did not make this change.',
+                    recipients: [userId],
+                    actorId: userId,
+                    includeActor: true,
+                    email: true,
+                },
+                tx,
+            );
         });
     }
 
@@ -233,18 +250,33 @@ export class AuthService {
             throw new BadRequestException('Email is already verified');
         }
 
-        await this.verifyOtpCode(user.id, dto.code, 'EMAIL_VERIFICATION');
+        const otpId = await this.verifyOtpCode(
+            user.id,
+            dto.code,
+            'EMAIL_VERIFICATION',
+        );
 
         // Mark the account verified and provision the starter organization in a
         // single transaction: either the user ends up with an organization and
         // a project, or nothing is written and they can request a fresh code.
         await this.prisma.$transaction(async (tx) => {
+            const consumed = await tx.otpCode.updateMany({
+                where: {
+                    id: otpId,
+                    usedAt: null,
+                    expiresAt: { gt: new Date() },
+                },
+                data: { usedAt: new Date() },
+            });
+            if (consumed.count === 0)
+                throw new BadRequestException('Invalid or expired code.');
             await tx.user.update({
                 where: { id: user.id },
                 data: { emailVerified: true },
             });
 
             await this.organizationsService.provisionForUser(user, tx);
+            await this.notifications.syncPendingInvitations(user.id, tx);
         });
 
         // Generate tokens so user is logged in after verification
@@ -328,19 +360,47 @@ export class AuthService {
             throw new BadRequestException('Invalid email or code');
         }
 
-        await this.verifyOtpCode(user.id, dto.code, 'PASSWORD_RESET');
+        const otpId = await this.verifyOtpCode(
+            user.id,
+            dto.code,
+            'PASSWORD_RESET',
+        );
 
         const hashedPassword = await bcrypt.hash(dto.newPassword, 12);
 
-        await this.prisma.user.update({
-            where: { id: user.id },
-            data: { password: hashedPassword },
-        });
-
-        // Revoke all refresh tokens on password reset
-        await this.prisma.refreshToken.updateMany({
-            where: { userId: user.id, revokedAt: null },
-            data: { revokedAt: new Date() },
+        await this.prisma.$transaction(async (tx) => {
+            const consumed = await tx.otpCode.updateMany({
+                where: {
+                    id: otpId,
+                    usedAt: null,
+                    expiresAt: { gt: new Date() },
+                },
+                data: { usedAt: new Date() },
+            });
+            if (consumed.count === 0) {
+                throw new BadRequestException('Invalid or expired code.');
+            }
+            await tx.user.update({
+                where: { id: user.id },
+                data: { password: hashedPassword },
+            });
+            await tx.refreshToken.updateMany({
+                where: { userId: user.id, revokedAt: null },
+                data: { revokedAt: new Date() },
+            });
+            await this.notifications.publish(
+                {
+                    eventKey: `password-reset:${otpId}`,
+                    type: NotificationType.PASSWORD_RESET_COMPLETED,
+                    title: 'Your password was reset',
+                    body: 'Your sessions have been revoked. Contact support if you did not request this reset.',
+                    recipients: [user.id],
+                    actorId: user.id,
+                    includeActor: true,
+                    email: true,
+                },
+                tx,
+            );
         });
 
         this.logger.log(
@@ -493,7 +553,7 @@ export class AuthService {
         userId: string,
         code: string,
         purpose: 'EMAIL_VERIFICATION' | 'PASSWORD_RESET',
-    ): Promise<void> {
+    ): Promise<string> {
         // Get the latest unused, non-expired OTP for this user + purpose
         const otpRecord = await this.prisma.otpCode.findFirst({
             where: {
@@ -533,10 +593,7 @@ export class AuthService {
             throw new BadRequestException('Invalid or expired code.');
         }
 
-        // Mark OTP as used
-        await this.prisma.otpCode.update({
-            where: { id: otpRecord.id },
-            data: { usedAt: new Date() },
-        });
+        // Consume successful claims in the caller's mutation transaction.
+        return otpRecord.id;
     }
 }
