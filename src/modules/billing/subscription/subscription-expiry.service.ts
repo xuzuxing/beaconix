@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { toIsoString } from '../../../common/utils/date.util';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
 import {
@@ -81,7 +82,7 @@ export class SubscriptionExpiryService implements OnModuleInit {
                             : []),
                         ...admins,
                     ];
-                    const expiry = subscription.expiresAt.toISOString();
+                    const expiry = toIsoString(subscription.expiresAt);
                     if (subscription.expiresAt <= now) {
                         const updated = await tx.subscription.updateMany({
                             where: {

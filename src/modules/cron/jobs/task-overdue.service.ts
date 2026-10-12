@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { toIsoString } from '../../../common/utils/date.util';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
 import {
@@ -87,13 +88,13 @@ export class TaskOverdueService implements OnModuleInit {
                             task.id,
                             tx,
                         );
-                    const eventKey = `task:${task.id}:overdue:${task.dueDate!.toISOString()}:${dayStart.toISOString()}`;
+                    const eventKey = `task:${task.id}:overdue:${toIsoString(task.dueDate!)}:${toIsoString(dayStart)}`;
                     await this.notificationsService.publish(
                         {
                             eventKey,
                             type: 'TASK_OVERDUE',
                             title: `Task ${task.project.key}-${task.number} is overdue`,
-                            body: `"${task.title}" was due ${task.dueDate!.toISOString()}`,
+                            body: `"${task.title}" was due ${toIsoString(task.dueDate!)}`,
                             organizationId: task.organizationId,
                             resourceType: 'Task',
                             resourceId: task.id,
@@ -128,7 +129,7 @@ export class TaskOverdueService implements OnModuleInit {
                                 name: assignee.name,
                                 taskTitle: task.title,
                                 taskNumber: task.number,
-                                dueDate: task.dueDate!.toISOString(),
+                                dueDate: toIsoString(task.dueDate!),
                                 projectKey: task.project.key,
                             },
                             `${eventKey}:email:${assignee.id}`,

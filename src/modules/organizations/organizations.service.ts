@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { toIsoString } from '../../common/utils/date.util';
 import type { Prisma } from '../../generated/prisma/client';
 import {
     CreateOrganizationDto,
@@ -144,7 +145,7 @@ export class OrganizationsService {
             });
             await this.notifications.publish(
                 {
-                    eventKey: `organization-deleted:${orgId}:${updated.updatedAt.toISOString()}`,
+                    eventKey: `organization-deleted:${orgId}:${toIsoString(updated.updatedAt)}`,
                     type: 'ORGANIZATION_DELETED',
                     title: `Organization "${org.name}" was deleted`,
                     body: 'This organization is no longer accessible.',
@@ -225,7 +226,7 @@ export class OrganizationsService {
 
             await this.notifications.publish(
                 {
-                    eventKey: `ownership-transferred:${orgId}:${updatedOrg.updatedAt.toISOString()}`,
+                    eventKey: `ownership-transferred:${orgId}:${toIsoString(updatedOrg.updatedAt)}`,
                     type: 'OWNERSHIP_TRANSFERRED',
                     title: `Ownership of "${org.name}" was transferred`,
                     body: 'Organization ownership and administrator permissions have changed.',

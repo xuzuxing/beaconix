@@ -1,4 +1,5 @@
 import type { Params } from 'nestjs-pino';
+import { toIsoString } from '../../common/utils/date.util';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -307,7 +308,7 @@ function createTransport(
         options: {
             destination: path.join(
                 absoluteLogDir,
-                `app-${env}-${new Date().toISOString().split('T')[0]}.log`,
+                `app-${env}-${toIsoString(Date.now()).split('T')[0]}.log`,
             ),
             mkdir: true,
         },

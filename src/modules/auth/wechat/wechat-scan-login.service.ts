@@ -5,6 +5,7 @@ import {
     ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { toIsoString } from '../../../common/utils/date.util';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { RedisService } from '../../../infra/redis/redis.service';
@@ -63,8 +64,8 @@ export class WechatScanLoginService {
             key,
             {
                 status: 'PENDING',
-                createdAt: new Date().toISOString(),
-                expiresAt: expiresAt.toISOString(),
+                createdAt: toIsoString(Date.now()),
+                expiresAt: toIsoString(expiresAt),
             },
             config.ttlSeconds,
         );
@@ -84,7 +85,7 @@ export class WechatScanLoginService {
             return {
                 ticket,
                 qrCodeDataUrl: `data:${contentType};base64,${buffer.toString('base64')}`,
-                expiresAt: expiresAt.toISOString(),
+                expiresAt: toIsoString(expiresAt),
                 pollUrl: `/api/auth/wechat/miniprogram/qrcode/status?ticket=${ticket}`,
             };
         } catch (error) {

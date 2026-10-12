@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { toIsoString } from '../../../common/utils/date.util';
 import { EmailService } from '../../email/email.service';
 import { EmailTemplate } from '../../email/email.types';
 import { parseEmailConfig } from '../channel-config';
@@ -40,7 +41,7 @@ export class EmailSender implements NotificationChannelSender {
                             payload.latency === null
                                 ? '-'
                                 : `${payload.latency}ms`,
-                        checkedAt: payload.checkedAt.toISOString(),
+                        checkedAt: toIsoString(payload.checkedAt),
                     },
                     payload.idempotencyKey
                         ? `${payload.idempotencyKey}:${to}`

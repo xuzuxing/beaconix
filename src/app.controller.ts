@@ -24,6 +24,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AppService, HealthStatus } from './app.service';
 import { Public } from './common/decorators';
+import { toIsoString } from './common/utils/date.util';
 import { StatusPagesService } from './modules/status-pages/status-pages.service';
 
 class DatabaseHealthDto {
@@ -216,7 +217,7 @@ export class AppController {
         return {
             title: 'Beacon Monitor Test',
             apiBase: '/api',
-            renderedAt: new Date().toISOString(),
+            renderedAt: toIsoString(Date.now()),
         };
     }
 
@@ -227,7 +228,7 @@ export class AppController {
         return {
             title: 'Beacon Monitoring Test',
             apiBase: '/api',
-            renderedAt: new Date().toISOString(),
+            renderedAt: toIsoString(Date.now()),
         };
     }
 
@@ -238,7 +239,7 @@ export class AppController {
         return {
             title: 'Beacon Billing Test',
             apiBase: '/api',
-            renderedAt: new Date().toISOString(),
+            renderedAt: toIsoString(Date.now()),
         };
     }
 
@@ -249,7 +250,7 @@ export class AppController {
         return {
             title: 'Beacon Upload Test',
             apiBase: '/api',
-            renderedAt: new Date().toISOString(),
+            renderedAt: toIsoString(Date.now()),
         };
     }
 
@@ -260,7 +261,7 @@ export class AppController {
         return {
             title: 'Beacon Rule Engine Test',
             apiBase: '/api',
-            renderedAt: new Date().toISOString(),
+            renderedAt: toIsoString(Date.now()),
         };
     }
 

@@ -4,6 +4,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../infra/database/prisma.service';
+import { toIsoString } from '../../../common/utils/date.util';
 import type { Prisma } from '../../../generated/prisma/client';
 import {
     OrderStatus,
@@ -190,7 +191,7 @@ export class PaymentService {
                     title: activation.renewed
                         ? 'Subscription renewed'
                         : 'Subscription activated',
-                    body: `The subscription is valid until ${activation.expiresAt.toISOString()}.`,
+                    body: `The subscription is valid until ${toIsoString(activation.expiresAt)}.`,
                     organizationId: payment.order.organizationId,
                     recipients,
                     includeActor: true,
@@ -198,7 +199,7 @@ export class PaymentService {
                     resourceType: 'Subscription',
                     resourceId: activation.id,
                     meta: {
-                        expiresAt: activation.expiresAt.toISOString(),
+                        expiresAt: toIsoString(activation.expiresAt),
                         planId: payment.order.planId,
                     },
                 },

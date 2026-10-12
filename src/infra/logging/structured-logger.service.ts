@@ -1,5 +1,6 @@
 import { Injectable, Logger, Optional, Scope } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
+import { toIsoString } from '../../common/utils/date.util';
 import {
     CLS_KEY_IP,
     CLS_KEY_METHOD,
@@ -59,7 +60,7 @@ export class StructuredLoggerService {
         return {
             ...this.getRequestContext(),
             ...context,
-            timestamp: new Date().toISOString(),
+            timestamp: toIsoString(Date.now()),
         };
     }
 

@@ -349,7 +349,6 @@ export class NotifierService {
         if (!row) return;
         const { delivery, channel } = row;
         const payload = delivery.payload as unknown as NotificationPayload;
-        payload.checkedAt = new Date(payload.checkedAt);
         payload.idempotencyKey = deliveryId;
         const renewal = setInterval(() => {
             void this.prisma.alertDelivery

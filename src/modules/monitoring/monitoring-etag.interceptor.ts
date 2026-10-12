@@ -6,6 +6,7 @@ import {
     NestInterceptor,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { toIsoString } from '../../common/utils/date.util';
 import type { Request, Response } from 'express';
 import { map } from 'rxjs/operators';
 import type { Observable } from 'rxjs';
@@ -63,7 +64,7 @@ export class MonitoringEtagInterceptor implements NestInterceptor {
                 return {
                     data: body,
                     meta: {
-                        timestamp: new Date().toISOString(),
+                        timestamp: toIsoString(Date.now()),
                         requestId: request.id,
                     },
                 };

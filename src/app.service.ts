@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { toIsoString } from './common/utils/date.util';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from './infra/database/prisma.service';
 import { AppConfig } from './config';
@@ -51,7 +52,7 @@ export class AppService {
         return {
             status: overallStatus,
             uptime: process.uptime(),
-            timestamp: new Date().toISOString(),
+            timestamp: toIsoString(Date.now()),
             appName: this.appConfig.name,
             environment: this.appConfig.env,
             services: {

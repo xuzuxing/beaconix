@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { toIsoString } from '../../../common/utils/date.util';
 import { connect } from 'node:tls';
 import { describeCheckError } from './check-result';
 import type {
@@ -508,11 +509,11 @@ export class HttpChecker implements CheckerStrategy {
         expiryThresholdDays: number,
     ): string | null {
         if (ssl.daysRemaining < 0) {
-            return `SSL certificate expired on ${ssl.expiresAt.toISOString()}`;
+            return `SSL certificate expired on ${toIsoString(ssl.expiresAt)}`;
         }
 
         if (ssl.daysRemaining <= expiryThresholdDays) {
-            return `SSL certificate expires in ${ssl.daysRemaining} day(s) on ${ssl.expiresAt.toISOString()}`;
+            return `SSL certificate expires in ${ssl.daysRemaining} day(s) on ${toIsoString(ssl.expiresAt)}`;
         }
 
         return null;
