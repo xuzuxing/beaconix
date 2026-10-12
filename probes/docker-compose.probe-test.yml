@@ -1,0 +1,30 @@
+# Preserve the original project and credential volume after moving this file.
+name: nest-beacon
+
+services:
+  probe-fleet:
+    build:
+      context: ..
+      dockerfile: probes/Dockerfile.probe-test
+    init: true
+    environment:
+      BEACON_API_URL: ${BEACON_API_URL:-http://host.docker.internal:9009/api}
+      BEACON_ADMIN_EMAIL: ${BEACON_ADMIN_EMAIL:-admin@beacon.dev}
+      BEACON_ADMIN_PASSWORD: ${BEACON_ADMIN_PASSWORD:-Qwer1234}
+      PROBE_FLEET_COUNT: ${PROBE_FLEET_COUNT:-100}
+      PROBE_FLEET_PREFIX: ${PROBE_FLEET_PREFIX:-dst}
+      PROBE_FLEET_STATE_DIR: /data
+      PROBE_ALLOW_INSECURE: ${PROBE_ALLOW_INSECURE:-true}
+      PROBE_INTERVAL_SECONDS: ${PROBE_INTERVAL_SECONDS:-60}
+      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-3}
+      PROBE_TIMEOUT_MS: ${PROBE_TIMEOUT_MS:-5000}
+      PROBE_FLEET_STARTUP_DELAY_MS: ${PROBE_FLEET_STARTUP_DELAY_MS:-250}
+      PROBE_FLEET_READY_TIMEOUT_SECONDS: ${PROBE_FLEET_READY_TIMEOUT_SECONDS:-180}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - probe_fleet_data:/data
+    stop_grace_period: 30s
+
+volumes:
+  probe_fleet_data:

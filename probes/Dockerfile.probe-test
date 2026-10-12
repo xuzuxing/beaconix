@@ -1,0 +1,20 @@
+# Build with the repository root as the context.
+FROM node:22-alpine
+
+ENV NODE_ENV=production \
+    PROBE_FLEET_COUNT=100 \
+    PROBE_FLEET_STATE_DIR=/data \
+    PROBE_INTERVAL_SECONDS=60 \
+    PROBE_TIMEOUT_MS=5000 \
+    PROBE_ALLOW_INSECURE=false
+
+WORKDIR /app
+COPY probes/agent/bin probes/agent/bin
+COPY probes/agent/src probes/agent/src
+COPY probes/test-fleet/*.js probes/test-fleet/
+
+RUN mkdir -p /data && chown node:node /data
+USER node
+
+ENTRYPOINT ["node", "probes/test-fleet/index.js"]
+CMD ["run"]

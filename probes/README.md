@@ -39,6 +39,12 @@ probes/agent/
 | 容器 | `Dockerfile.probe` | `docker run` 即常驻 `run` |
 | 云函数 | `functions/scf.js` | 每次触发执行**一轮**；无本地调度，见下方文档 |
 
+本地批量测试可使用 [系统探针测试容器](test-fleet/README.md)：启动时通过管理员账号登录，
+自动补齐默认 100 个专用系统探针，并在一个容器里运行独立 Agent 进程。
+创建返回的凭据保存在持久卷中供重启复用；需要在测试后端显式提高同 IP 限流额度。
+测试容器配置集中在本目录的 `Dockerfile.probe-test` 和 `docker-compose.probe-test.yml`，
+从仓库根目录运行 `docker compose -f probes/docker-compose.probe-test.yml up --build -d`。
+
 > 云函数与常驻模型有本质差异（无本地调度、凭据靠环境变量、心跳周期必须等于触发器周期），
 > 部署前请阅读 [云函数（SCF）部署指南](../docs/probe-scf-deploy.md)。
 
