@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { toIsoString } from '../../common/utils/date.util';
 import { NotificationChannelType } from '../../generated/prisma/enums';
 import type { NotificationPayload } from './notifier.types';
 
@@ -254,7 +255,7 @@ const FIELD_RESOLVERS: Record<
     latency: (payload) =>
         payload.latency === null ? '-' : `${payload.latency}ms`,
     error: (payload) => payload.error ?? '-',
-    checkedAt: (payload) => payload.checkedAt.toISOString(),
+    checkedAt: (payload) => toIsoString(payload.checkedAt),
 };
 
 /**

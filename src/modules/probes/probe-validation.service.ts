@@ -12,6 +12,7 @@ import {
     timingSafeEqual,
 } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { toIsoString } from '../../common/utils/date.util';
 import { RedisService } from '../../infra/redis/redis.service';
 import { hashSecret } from './probe-secret.util';
 import {
@@ -157,7 +158,7 @@ export class ProbeValidationService {
             validationId,
             ok: true,
             status: 'SUCCESS',
-            checkedAt: new Date().toISOString(),
+            checkedAt: toIsoString(Date.now()),
         };
     }
 
@@ -170,14 +171,14 @@ export class ProbeValidationService {
      */
     private async createChallenge(probeId: string) {
         const nonce = randomBytes(32).toString('hex');
-        const issuedAt = new Date().toISOString();
+        const issuedAt = toIsoString(Date.now());
         const expiresAt = new Date(Date.now() + VALIDATION_TTL_SECONDS * 1000);
 
         const stored: StoredValidation = {
             probeId,
             nonce,
             issuedAt,
-            expiresAt: expiresAt.toISOString(),
+            expiresAt: toIsoString(expiresAt),
         };
 
         await this.redis.setJson(

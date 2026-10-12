@@ -7,6 +7,7 @@ import {
     Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { toIsoString } from '../utils/date.util';
 import {
     WechatApiError,
     WechatConfigurationError,
@@ -48,7 +49,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         const errorResponse = {
             statusCode: status,
             ...(code ? { code } : {}),
-            timestamp: new Date().toISOString(),
+            timestamp: toIsoString(Date.now()),
             method: request.method,
             message:
                 typeof rawResponse === 'string'

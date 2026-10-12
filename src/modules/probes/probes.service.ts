@@ -9,6 +9,7 @@ import {
     UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { toIsoString } from '../../common/utils/date.util';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { ScheduledJobRegistry } from '../../infra/scheduler/scheduled-job.registry';
@@ -513,7 +514,7 @@ export class ProbesService implements OnModuleInit {
                 expectedStatus: monitor.expectedStatus,
                 configRevision: monitor.configRevision,
             })),
-            serverTime: new Date().toISOString(),
+            serverTime: toIsoString(Date.now()),
         };
     }
 
@@ -552,7 +553,7 @@ export class ProbesService implements OnModuleInit {
                 statusCode: result.statusCode ?? null,
                 error: result.error ?? null,
                 checkedAt: result.checkedAt
-                    ? new Date(result.checkedAt).toISOString()
+                    ? toIsoString(result.checkedAt)
                     : null,
             };
             const hash = createHash('sha256')
@@ -631,7 +632,7 @@ export class ProbesService implements OnModuleInit {
                 latency: result.latency,
                 statusCode: result.statusCode ?? null,
                 error: result.error ?? null,
-                checkedAt: checkedAt.toISOString(),
+                checkedAt: toIsoString(checkedAt),
             };
             const payloadHash = createHash('sha256')
                 .update(JSON.stringify(canonical))

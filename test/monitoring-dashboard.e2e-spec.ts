@@ -14,6 +14,7 @@ import { MonitoringDashboardService } from '../src/modules/monitoring/monitoring
 import { MonitoringEtagInterceptor } from '../src/modules/monitoring/monitoring-etag.interceptor';
 import { SystemProbeScheduler } from '../src/modules/admin/system-probes/system-probe-scheduler';
 import { AlertEventsService } from '../src/modules/alert-events/alert-events.service';
+import type { NotificationsService } from '../src/modules/notifications/notifications.service';
 import { StateService } from '../src/modules/state/state.service';
 import { NotifierService } from '../src/modules/notifier/notifier.service';
 import { AlertOutboxService } from '../src/modules/notifier/alert-outbox.service';
@@ -47,6 +48,14 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
     const origin = Date.now();
     const ago = (days: number) => new Date(origin - days * 86400000);
     const send = jest.fn().mockResolvedValue(undefined);
+    const notifications: Pick<
+        NotificationsService,
+        'publish' | 'organizationRecipients' | 'eventRecipients'
+    > = {
+        publish: () => Promise.resolve(),
+        organizationRecipients: () => Promise.resolve([]),
+        eventRecipients: () => Promise.resolve([]),
+    };
     const channels: string[] = [];
     const api = async (path: string, jwt = token, headers = {}) => {
         const response = await fetch(`${base}/api/projects/${path}`, {
@@ -235,7 +244,13 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
         const jwt = app.get(JwtService);
         token = jwt.sign({ sub: user, globalRole: 'USER' });
         adminToken = jwt.sign({ sub: user, globalRole: 'SUPER_ADMIN' });
-        state = new StateService(prisma, new AlertEventsService(prisma));
+        state = new StateService(
+            prisma,
+            new AlertEventsService(
+                prisma,
+                notifications as NotificationsService,
+            ),
+        );
     }, 30000);
 
     afterAll(async () => {
@@ -677,6 +692,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
                 {} as never,
                 {} as never,
                 { register: jest.fn() } as never,
+                notifications as NotificationsService,
             );
             const current = await prisma.monitor.findUniqueOrThrow({
                 where: { id: monitor },
@@ -881,9 +897,15 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
         await notifier.deliverAlertDelivery(delivery.id);
         expect(failing).toHaveBeenCalledTimes(3);
         await expect(
-            new AlertEventsService(prisma).retry(otherProject, delivery.id),
+            new AlertEventsService(
+                prisma,
+                notifications as NotificationsService,
+            ).retry(otherProject, delivery.id),
         ).rejects.toThrow();
-        await new AlertEventsService(prisma).retry(project, delivery.id);
+        await new AlertEventsService(
+            prisma,
+            notifications as NotificationsService,
+        ).retry(project, delivery.id);
         expect(
             (
                 await prisma.alertDelivery.findUniqueOrThrow({
@@ -1143,6 +1165,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             {} as never,
             {} as never,
             {} as never,
+            notifications as NotificationsService,
         );
         await probes.recordResults(raw, [
             {

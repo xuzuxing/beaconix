@@ -1,3 +1,4 @@
+import { toIsoString } from '../../common/utils/date.util';
 import type { NotificationPayload } from './notifier.types';
 
 /** Short headline, e.g. "[DOWN] Production API". */
@@ -46,7 +47,7 @@ function detailLines(payload: NotificationPayload): string[] {
         lines.push(`Status: ${payload.previousStatus} -> ${payload.status}`);
     }
 
-    lines.push(`Checked at: ${payload.checkedAt.toISOString()}`);
+    lines.push(`Checked at: ${toIsoString(payload.checkedAt)}`);
 
     if (payload.latency !== null) {
         lines.push(`Latency: ${payload.latency}ms`);
@@ -95,7 +96,7 @@ export function renderMarkdown(payload: NotificationPayload): string {
         lines.push(`**Consecutive failures:** ${payload.failCount}`);
     }
 
-    lines.push(`**Checked at:** ${payload.checkedAt.toISOString()}`);
+    lines.push(`**Checked at:** ${toIsoString(payload.checkedAt)}`);
 
     return lines.join('\n');
 }

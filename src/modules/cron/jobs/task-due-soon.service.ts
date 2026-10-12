@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { toIsoString } from '../../../common/utils/date.util';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
 import {
@@ -83,13 +84,13 @@ export class TaskDueSoonService implements OnModuleInit {
                             task.id,
                             tx,
                         );
-                    const eventKey = `task:${task.id}:due-soon:${task.dueDate!.toISOString()}`;
+                    const eventKey = `task:${task.id}:due-soon:${toIsoString(task.dueDate!)}`;
                     await this.notificationsService.publish(
                         {
                             eventKey,
                             type: 'TASK_DUE_SOON',
                             title: `Task ${task.project.key}-${task.number} is due soon`,
-                            body: `"${task.title}" is due ${task.dueDate!.toISOString()}`,
+                            body: `"${task.title}" is due ${toIsoString(task.dueDate!)}`,
                             organizationId: task.organizationId,
                             resourceType: 'Task',
                             resourceId: task.id,
@@ -124,7 +125,7 @@ export class TaskDueSoonService implements OnModuleInit {
                                 name: assignee.name,
                                 taskTitle: task.title,
                                 taskNumber: task.number,
-                                dueDate: task.dueDate!.toISOString(),
+                                dueDate: toIsoString(task.dueDate!),
                                 projectKey: task.project.key,
                             },
                             `${eventKey}:email:${assignee.id}`,

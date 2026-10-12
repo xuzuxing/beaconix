@@ -10,6 +10,7 @@ import { PrismaService } from '../../src/infra/database/prisma.service';
 import { MonitorStatus, MonitorType } from '../../src/generated/prisma/enums';
 import { StateService } from '../../src/modules/state/state.service';
 import { AlertEventsService } from '../../src/modules/alert-events/alert-events.service';
+import type { NotificationsService } from '../../src/modules/notifications/notifications.service';
 import type { CheckMetadata } from '../../src/modules/checker/checkers/check-result';
 import {
     addLocalMigrations,
@@ -170,7 +171,18 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
         );
         await prisma.$connect();
         const db = prisma;
-        const state = new StateService(db, new AlertEventsService(db));
+        const notifications: Pick<
+            NotificationsService,
+            'publish' | 'organizationRecipients' | 'eventRecipients'
+        > = {
+            publish: () => Promise.resolve(),
+            organizationRecipients: () => Promise.resolve([]),
+            eventRecipients: () => Promise.resolve([]),
+        };
+        const state = new StateService(
+            db,
+            new AlertEventsService(db, notifications as NotificationsService),
+        );
         const createMonitor = (type: MonitorType = MonitorType.HTTP) =>
             db.monitor.create({
                 data: {
@@ -488,7 +500,10 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
                 assert.ok(token);
                 const restarted = new StateService(
                     db,
-                    new AlertEventsService(db),
+                    new AlertEventsService(
+                        db,
+                        notifications as NotificationsService,
+                    ),
                 );
                 assert.equal(
                     await restarted.claimAvailabilityAlert(

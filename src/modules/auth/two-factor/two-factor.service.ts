@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { toIsoString } from '../../../common/utils/date.util';
 import * as bcrypt from 'bcrypt';
 import * as QRCode from 'qrcode';
 import { randomUUID } from 'node:crypto';
@@ -657,7 +658,7 @@ export class TwoFactorService {
                 user,
                 template,
                 {
-                    usedAt: new Date().toISOString(),
+                    usedAt: toIsoString(Date.now()),
                     ipAddress: meta.ipAddress ?? 'unknown',
                 },
                 eventKey,
@@ -668,7 +669,7 @@ export class TwoFactorService {
                 user,
                 template,
                 {
-                    changedAt: new Date().toISOString(),
+                    changedAt: toIsoString(Date.now()),
                 },
                 eventKey,
                 tx,

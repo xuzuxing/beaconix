@@ -10,6 +10,7 @@ import { ClsService } from 'nestjs-cls';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { SKIP_TRANSFORM_KEY } from '../decorators/skip-transform.decorator';
+import { toIsoString } from '../utils/date.util';
 
 export interface ApiResponse<T> {
     data: T;
@@ -50,7 +51,7 @@ export class TransformInterceptor<T> implements NestInterceptor<
             map((data) => ({
                 data,
                 meta: {
-                    timestamp: new Date().toISOString(),
+                    timestamp: toIsoString(Date.now()),
                     requestId:
                         this.cls?.get<string>('requestId') ||
                         httpContext.getRequest().id,

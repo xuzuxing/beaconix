@@ -6,6 +6,7 @@ import {
     ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { toIsoString } from '../../common/utils/date.util';
 import { QuotaService } from '../../shared/quota/quota.service';
 import { Prisma } from '../../generated/prisma/client';
 import { InvitationStatus } from '../../generated/prisma/enums';
@@ -126,8 +127,9 @@ export class InvitationsService {
                             resourceId: created.id,
                             meta: {
                                 invitationStatus: 'PENDING',
-                                invitationExpiresAt:
-                                    created.expiresAt.toISOString(),
+                                invitationExpiresAt: toIsoString(
+                                    created.expiresAt,
+                                ),
                                 actionable: true,
                             },
                         },
@@ -459,7 +461,7 @@ export class InvitationsService {
         const meta = {
             organizationId: invitation.organizationId,
             invitationStatus: status,
-            invitationExpiresAt: invitation.expiresAt.toISOString(),
+            invitationExpiresAt: toIsoString(invitation.expiresAt),
             actionable: false,
         };
         await tx.notification.updateMany({

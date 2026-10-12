@@ -26,7 +26,8 @@ export interface NotificationPayload {
     failCount: number;
     latency: number | null;
     error: string | null;
-    checkedAt: Date;
+    /** Queue and JSON payloads carry ISO strings instead of Date objects. */
+    checkedAt: Date | string;
     /** Availability-alert only: recent availability percentage. */
     availabilityPercent?: number;
     /** Availability-alert only: configured threshold percentage. */

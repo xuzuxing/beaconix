@@ -4,6 +4,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { toIsoString } from '../../common/utils/date.util';
 import type { Prisma } from '../../generated/prisma/client';
 import type {
     MonitorModel,
@@ -213,7 +214,7 @@ export class AlertEventsService {
         if (!active && !existing) return 0;
         const at = new Date();
         const latestEvidence = {
-            checkedAt: (outcome.checkedAt ?? at).toISOString(),
+            checkedAt: toIsoString(outcome.checkedAt ?? at),
             actual: evidence.actual ?? null,
             details: evidence.details ?? {},
         } satisfies Prisma.InputJsonValue;

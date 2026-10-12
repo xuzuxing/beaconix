@@ -6,6 +6,7 @@ import {
     UnauthorizedException,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
+import { toIsoString } from '../../common/utils/date.util';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { RedisService } from '../../infra/redis/redis.service';
 import {
@@ -122,7 +123,7 @@ export class ProbeEnrollmentService {
                 platform: dto.platform,
                 runtime: dto.runtime,
             },
-            createdAt: new Date().toISOString(),
+            createdAt: toIsoString(Date.now()),
         };
 
         await this.redis.setJson(
@@ -287,9 +288,9 @@ export class ProbeEnrollmentService {
 
         return {
             token,
-            expiresAt: new Date(
+            expiresAt: toIsoString(
                 Date.now() + ENROLL_TOKEN_TTL_SECONDS * 1000,
-            ).toISOString(),
+            ),
             command,
             apiUrl: this.publicApiUrl(),
         };

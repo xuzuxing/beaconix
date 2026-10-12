@@ -6,6 +6,7 @@ import {
     ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { toIsoString } from '../../common/utils/date.util';
 import { UpdateMemberRoleDto } from './dto';
 import { MembershipEntity } from './entities';
 import { MembershipRole } from '../../generated/prisma/enums';
@@ -93,7 +94,7 @@ export class MembershipsService {
             }
             await this.notificationsService.publish(
                 {
-                    eventKey: `membership-role:${updated.id}:${updated.updatedAt.toISOString()}`,
+                    eventKey: `membership-role:${updated.id}:${toIsoString(updated.updatedAt)}`,
                     type: 'MEMBER_ROLE_CHANGED',
                     title: 'Organization role changed',
                     body: `${updated.user.name}'s role changed from ${membership.role} to ${dto.role}.`,

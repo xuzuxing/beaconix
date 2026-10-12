@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { toIsoString } from '../../common/utils/date.util';
 import { createHash, randomUUID } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import type { MembershipRole } from '../../generated/prisma/enums';
@@ -367,7 +368,7 @@ export class NotificationsService {
                     resourceId: invitation.id,
                     meta: {
                         invitationStatus: 'PENDING',
-                        invitationExpiresAt: invitation.expiresAt.toISOString(),
+                        invitationExpiresAt: toIsoString(invitation.expiresAt),
                         actionable: true,
                     },
                 },

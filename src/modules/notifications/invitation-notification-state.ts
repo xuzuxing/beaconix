@@ -1,4 +1,5 @@
 import { NotificationDb } from './notification-event';
+import { toIsoString } from '../../common/utils/date.util';
 import { NotificationEntity } from './entities';
 
 export async function projectInvitationState(
@@ -48,8 +49,9 @@ export async function projectInvitationState(
         notice.meta = {
             ...meta,
             invitationStatus: status,
-            invitationExpiresAt:
-                invitation?.expiresAt.toISOString() ?? meta.invitationExpiresAt,
+            invitationExpiresAt: invitation
+                ? toIsoString(invitation.expiresAt)
+                : meta.invitationExpiresAt,
             actionable:
                 !!invitation &&
                 status === 'PENDING' &&
