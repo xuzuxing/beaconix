@@ -5,6 +5,8 @@ import { AdminAuditLogsController } from './audit-logs/admin-audit-logs.controll
 import { AdminAuditLogsService } from './audit-logs/admin-audit-logs.service';
 import { AdminMetricsController } from './metrics/admin-metrics.controller';
 import { AdminMetricsService } from './metrics/admin-metrics.service';
+import { AdminOrdersController } from './orders/admin-orders.controller';
+import { AdminOrdersService } from './orders/admin-orders.service';
 import { SystemProbesController } from './system-probes/system-probes.controller';
 import { SystemProbeAssignmentStore } from './system-probes/system-probe-assignment.store';
 import { SystemProbeScheduler } from './system-probes/system-probe-scheduler';
@@ -19,6 +21,7 @@ import { AdminTenantsService } from './tenants/admin-tenants.service';
         AdminTenantsController,
         AdminMetricsController,
         AdminAuditLogsController,
+        AdminOrdersController,
     ],
     providers: [
         SystemProbesService,
@@ -27,6 +30,7 @@ import { AdminTenantsService } from './tenants/admin-tenants.service';
         AdminTenantsService,
         AdminMetricsService,
         AdminAuditLogsService,
+        AdminOrdersService,
     ],
     exports: [SystemProbeScheduler],
 })

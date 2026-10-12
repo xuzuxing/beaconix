@@ -121,7 +121,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         }),
         // Serve static files from the views directory
         ServeStaticModule.forRoot({
-            rootPath: join(__dirname, '..', 'views'),
+            rootPath: join(__dirname, '..', 'web'),
             exclude: ['/api/*path'], // 让 API 请求走控制器，不返回 index.html
         }),
         // Recurring work runs through ScheduledJobsModule (BullMQ), so the
