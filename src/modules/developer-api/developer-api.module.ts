@@ -11,9 +11,11 @@ import { DeveloperOverviewController } from './v1/developer-overview.controller'
 import { DeveloperProbesController } from './v1/developer-probes.controller';
 import { DeveloperStatusPagesController } from './v1/developer-status-pages.controller';
 import { PersonalAccessTokensController } from './credentials/personal-access-tokens.controller';
+import { AuthorizationModule } from '../../common/authorization/authorization.module';
 
 @Module({
     imports: [
+        AuthorizationModule,
         MonitorsModule,
         ProbesModule,
         StatusPagesModule,

@@ -18,12 +18,29 @@ import {
     NotificationDb,
 } from '../notifications/notification-event';
 import { EmailTemplate } from '../email/email.types';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import {
+    lockIdentities,
+    lockMemberships,
+    lockOrganization,
+    lockProjects,
+    lockOrganizationMembers,
+    type AccessDb,
+} from '../../common/authorization/access-locks';
+import {
+    assertGrantProjects,
+    validateProjectGrants,
+} from '../../common/authorization/project-grants';
 
 const invitationInclude = {
     organization: {
         select: { id: true, name: true, slug: true, deletedAt: true },
     },
     sentBy: { select: { id: true, name: true, email: true } },
+    projectGrants: {
+        include: { project: { select: { name: true } } },
+        orderBy: { projectId: 'asc' },
+    },
 } as const;
 type Invitation = Prisma.InvitationGetPayload<{
     include: typeof invitationInclude;
@@ -35,14 +52,49 @@ export class InvitationsService {
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
         private readonly quotaService: QuotaService,
+        private readonly access: ProjectAccessService,
     ) {}
 
     async send(orgId: string, senderId: string, dto: CreateInvitationDto) {
         if (dto.role === 'OWNER')
             throw new BadRequestException('An invitation cannot assign OWNER');
+        const role = dto.role ?? 'MEMBER';
+        const grants = validateProjectGrants(role, dto.projects, true);
         const email = dto.email.trim().toLowerCase();
         try {
             const invitation = await this.prisma.$transaction(async (tx) => {
+                await lockIdentities(tx, [{ type: 'USER', userId: senderId }]);
+                await lockOrganization(tx, orgId, 'UPDATE');
+                const senderMembership = await tx.membership.findUnique({
+                    where: {
+                        userId_organizationId: {
+                            userId: senderId,
+                            organizationId: orgId,
+                        },
+                    },
+                });
+                await lockMemberships(
+                    tx,
+                    senderMembership ? [{ id: senderMembership.id }] : [],
+                );
+                const sender = await this.access.organization(
+                    { type: 'USER', userId: senderId },
+                    orgId,
+                    tx,
+                );
+                if (
+                    !sender.canManageOrganization ||
+                    (role === 'ADMIN' && !sender.canGrantOrganizationAdmin)
+                ) {
+                    throw new ForbiddenException(
+                        'Insufficient invitation authority',
+                    );
+                }
+                await lockProjects(
+                    tx,
+                    grants.map((grant) => grant.projectId),
+                );
+                await assertGrantProjects(tx, orgId, grants);
                 const org = await tx.organization.findFirst({
                     where: { id: orgId, deletedAt: null },
                 });
@@ -97,11 +149,46 @@ export class InvitationsService {
                     data: {
                         email,
                         organizationId: orgId,
-                        role: dto.role ?? 'MEMBER',
+                        role,
                         sentById: senderId,
+                        issuerType:
+                            sender.globalRole === 'SUPER_ADMIN'
+                                ? 'PLATFORM'
+                                : 'ORGANIZATION',
+                        issuerMembershipId:
+                            sender.globalRole === 'SUPER_ADMIN'
+                                ? null
+                                : sender.membershipId,
+                        issuerAuthorityVersion:
+                            sender.globalRole === 'SUPER_ADMIN'
+                                ? sender.platformAuthorityVersion
+                                : null,
+                        projectGrants: {
+                            create: grants.map((grant) => ({
+                                ...grant,
+                                organizationId: orgId,
+                            })),
+                        },
                         expiresAt: new Date(Date.now() + 7 * 86400_000),
                     },
                     include: invitationInclude,
+                });
+                await tx.auditLog.create({
+                    data: {
+                        actorId: senderId,
+                        organizationId: orgId,
+                        action: 'INVITE',
+                        entity: 'Invitation',
+                        entityId: created.id,
+                        after: {
+                            role,
+                            email,
+                            projects: grants.map((grant) => ({
+                                projectId: grant.projectId,
+                                role: grant.role,
+                            })),
+                        },
+                    },
                 });
                 const user = await tx.user.findFirst({
                     where: {
@@ -145,6 +232,12 @@ export class InvitationsService {
                     },
                     `invitation:${created.id}`,
                     tx,
+                    {
+                        accessScope: 'INVITATION',
+                        invitationId: created.id,
+                        organizationId: orgId,
+                        email,
+                    },
                 );
                 return created;
             });
@@ -205,21 +298,52 @@ export class InvitationsService {
     async getByToken(token: string) {
         const invitation = await this.prisma.invitation.findUnique({
             where: { token },
-            include: invitationInclude,
+            select: {
+                status: true,
+                expiresAt: true,
+                organization: { select: { name: true, deletedAt: true } },
+            },
         });
         if (!invitation || invitation.organization.deletedAt)
             throw new NotFoundException('Invitation not found');
-        return new InvitationEntity(invitation);
+        return {
+            organizationName: invitation.organization.name,
+            status:
+                invitation.status === 'PENDING' &&
+                invitation.expiresAt <= new Date()
+                    ? 'EXPIRED'
+                    : invitation.status,
+            requiresLogin: true,
+        };
     }
 
-    async revoke(orgId: string, invitationId: string, actorId?: string) {
+    async revoke(orgId: string, invitationId: string, actorId: string) {
         const updated = await this.prisma.$transaction(async (tx) => {
+            await lockOrganizationMembers(tx, orgId, [actorId]);
+            const actor = await this.access.organization(
+                { type: 'USER', userId: actorId },
+                orgId,
+                tx,
+            );
+            if (!actor.canManageOrganization)
+                throw new ForbiddenException(
+                    'Organization administration required',
+                );
+            await tx.$queryRaw`SELECT "id" FROM "invitations" WHERE "id" = ${invitationId} AND "organizationId" = ${orgId} FOR UPDATE`;
             const invitation = await tx.invitation.findFirst({
                 where: { id: invitationId, organizationId: orgId },
                 include: invitationInclude,
             });
             if (!invitation)
                 throw new NotFoundException('Invitation not found');
+            if (
+                invitation.role === 'ADMIN' &&
+                !actor.canGrantOrganizationAdmin
+            ) {
+                throw new ForbiddenException(
+                    'Owner authority required for administrator invitations',
+                );
+            }
             const claimed = await tx.invitation.updateMany({
                 where: { id: invitationId, status: 'PENDING' },
                 data: { status: 'REVOKED' },
@@ -229,6 +353,17 @@ export class InvitationsService {
                     'Invitation is no longer pending',
                 );
             const result = { ...invitation, status: 'REVOKED' as const };
+            await tx.auditLog.create({
+                data: {
+                    actorId,
+                    organizationId: orgId,
+                    action: 'DELETE',
+                    entity: 'Invitation',
+                    entityId: invitationId,
+                    before: { status: invitation.status },
+                    after: { status: result.status },
+                },
+            });
             await this.notifyTransition(result, tx, actorId);
             return result;
         });
@@ -245,13 +380,45 @@ export class InvitationsService {
     }
 
     async acceptById(id: string, userId: string) {
+        const locator = await this.prisma.invitation.findUnique({
+            where: { id },
+            include: invitationInclude,
+        });
+        if (!locator) throw new NotFoundException('Invitation not found');
         const updated = await this.prisma.$transaction(async (tx) => {
+            await lockIdentities(tx, [
+                { type: 'USER', userId },
+                { type: 'USER', userId: locator.sentById },
+            ]);
+            await lockOrganization(tx, locator.organizationId, 'UPDATE');
+            const participants = await tx.membership.findMany({
+                where: {
+                    organizationId: locator.organizationId,
+                    userId: { in: [userId, locator.sentById] },
+                },
+                select: { id: true },
+            });
+            await lockMemberships(tx, participants);
+            await lockProjects(
+                tx,
+                locator.projectGrants.map((grant) => grant.projectId),
+            );
+            await tx.$queryRaw`SELECT "id" FROM "invitations" WHERE "id" = ${id} FOR UPDATE`;
             const invitation = await tx.invitation.findUnique({
                 where: { id },
                 include: invitationInclude,
             });
             if (!invitation || invitation.organization.deletedAt)
                 throw new NotFoundException('Invitation not found');
+            if (
+                invitation.organizationId !== locator.organizationId ||
+                invitation.sentById !== locator.sentById ||
+                JSON.stringify(invitation.projectGrants) !==
+                    JSON.stringify(locator.projectGrants)
+            )
+                throw new ConflictException(
+                    'Invitation changed; reload and retry',
+                );
             const user = await this.assertInvitee(invitation, userId, tx);
             if (invitation.status !== 'PENDING')
                 throw new BadRequestException(
@@ -280,6 +447,35 @@ export class InvitationsService {
                 );
                 return null;
             }
+            await this.assertIssuer(invitation, tx);
+            let grants;
+            try {
+                grants = validateProjectGrants(
+                    invitation.role,
+                    invitation.role === 'ADMIN'
+                        ? undefined
+                        : invitation.projectGrants,
+                    true,
+                );
+            } catch {
+                throw new ConflictException(
+                    'Invitation grants are no longer valid',
+                );
+            }
+            if (
+                invitation.role === 'ADMIN' &&
+                invitation.projectGrants.length
+            ) {
+                throw new ConflictException(
+                    'Administrator invitation cannot contain project grants',
+                );
+            }
+            await assertGrantProjects(
+                tx,
+                invitation.organizationId,
+                grants,
+                true,
+            );
             const membership = await tx.membership.findUnique({
                 where: {
                     userId_organizationId: {
@@ -292,9 +488,9 @@ export class InvitationsService {
                 throw new ConflictException(
                     'You are already a member of this organization',
                 );
-            await this.quotaService.assertCanCreate(
+            await this.quotaService.assertCanAddMember(
                 invitation.organizationId,
-                'members',
+                tx,
             );
             const claimed = await tx.invitation.updateMany({
                 where: { id, status: 'PENDING', expiresAt: { gt: new Date() } },
@@ -302,12 +498,42 @@ export class InvitationsService {
             });
             if (!claimed.count)
                 throw new ConflictException('Invitation was already processed');
-            await tx.membership.create({
+            const joined = await tx.membership.create({
                 data: {
                     userId,
                     organizationId: invitation.organizationId,
                     role: invitation.role,
                     invitedById: invitation.sentById,
+                },
+            });
+            if (grants.length) {
+                await tx.projectMembership.createMany({
+                    data: grants.map((grant) => ({
+                        projectId: grant.projectId,
+                        role: grant.role,
+                        organizationId: invitation.organizationId,
+                        membershipId: joined.id,
+                        grantedById: invitation.sentById,
+                    })),
+                });
+            }
+            await tx.auditLog.create({
+                data: {
+                    actorId: userId,
+                    organizationId: invitation.organizationId,
+                    action: 'JOIN',
+                    entity: 'Membership',
+                    entityId: joined.id,
+                    after: {
+                        invitationId: id,
+                        membershipId: joined.id,
+                        userId,
+                        role: invitation.role,
+                        projects: grants.map((grant) => ({
+                            projectId: grant.projectId,
+                            role: grant.role,
+                        })),
+                    },
                 },
             });
             const result = await tx.invitation.findUniqueOrThrow({
@@ -324,7 +550,11 @@ export class InvitationsService {
                 },
                 `invitation-welcome:${id}`,
                 tx,
-                { userId, organizationId: invitation.organizationId },
+                {
+                    accessScope: 'ORGANIZATION',
+                    userId,
+                    organizationId: invitation.organizationId,
+                },
             );
             return result;
         });
@@ -342,13 +572,26 @@ export class InvitationsService {
     }
 
     async declineById(id: string, userId: string) {
+        const locator = await this.prisma.invitation.findUnique({
+            where: { id },
+            select: { organizationId: true },
+        });
+        if (!locator) throw new NotFoundException('Invitation not found');
         const updated = await this.prisma.$transaction(async (tx) => {
+            await lockIdentities(tx, [{ type: 'USER', userId }]);
+            await lockOrganization(tx, locator.organizationId);
+            await tx.$queryRaw`SELECT "id" FROM "invitations" WHERE "id" = ${id} FOR UPDATE`;
             const invitation = await tx.invitation.findUnique({
                 where: { id },
                 include: invitationInclude,
             });
             if (!invitation || invitation.organization.deletedAt)
                 throw new NotFoundException('Invitation not found');
+            if (invitation.organizationId !== locator.organizationId) {
+                throw new ConflictException(
+                    'Invitation changed; reload and retry',
+                );
+            }
             await this.assertInvitee(invitation, userId, tx);
             if (invitation.status !== 'PENDING')
                 throw new BadRequestException(
@@ -388,6 +631,7 @@ export class InvitationsService {
             });
             for (const invitation of invitations) {
                 count += await this.prisma.$transaction(async (tx) => {
+                    await lockOrganization(tx, invitation.organizationId);
                     const claimed = await tx.invitation.updateMany({
                         where: {
                             id: invitation.id,
@@ -425,6 +669,55 @@ export class InvitationsService {
                 'A verified email address is required',
             );
         return user;
+    }
+
+    private async assertIssuer(invitation: Invitation, tx: AccessDb) {
+        const issuer = await tx.user.findFirst({
+            where: { id: invitation.sentById, isActive: true, deletedAt: null },
+            select: { globalRole: true, platformAuthorityVersion: true },
+        });
+        if (!issuer)
+            throw new ConflictException(
+                'Invitation issuer is no longer active',
+            );
+        if (invitation.issuerType === 'PLATFORM') {
+            if (
+                invitation.issuerMembershipId !== null ||
+                invitation.issuerAuthorityVersion === null ||
+                issuer.globalRole !== 'SUPER_ADMIN' ||
+                invitation.issuerAuthorityVersion !==
+                    issuer.platformAuthorityVersion
+            )
+                throw new ConflictException(
+                    'Platform invitation authority changed',
+                );
+            return;
+        }
+        if (
+            invitation.issuerType !== 'ORGANIZATION' ||
+            !invitation.issuerMembershipId ||
+            invitation.issuerAuthorityVersion !== null
+        ) {
+            throw new ConflictException(
+                'Legacy invitation must be revoked and reissued',
+            );
+        }
+        const membership = await tx.membership.findFirst({
+            where: {
+                id: invitation.issuerMembershipId,
+                userId: invitation.sentById,
+                organizationId: invitation.organizationId,
+            },
+            select: { role: true },
+        });
+        if (
+            !membership ||
+            !['OWNER', 'ADMIN'].includes(membership.role) ||
+            (invitation.role === 'ADMIN' && membership.role !== 'OWNER')
+        )
+            throw new ConflictException(
+                'Organization invitation authority changed',
+            );
     }
 
     private async assertInvitee(

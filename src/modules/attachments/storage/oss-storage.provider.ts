@@ -15,6 +15,7 @@ import {
     DownloadResult,
     PutObjectInput,
     PutObjectResult,
+    StorageVisibility,
 } from './storage.types';
 import { buildObjectKey, buildPublicObjectKey } from './filename.util';
 
@@ -44,9 +45,11 @@ export class OssStorageProvider implements AttachmentStorageProvider {
     }
 
     async putObject(input: PutObjectInput): Promise<PutObjectResult> {
-        const bucket = this.bucket();
         const objectId = randomUUID();
-        const key = input.publicUpload
+        const publicUpload =
+            input.visibility === 'PUBLIC' && input.publicUpload === true;
+        const bucket = publicUpload ? this.bucket() : this.privateBucket();
+        const key = publicUpload
             ? buildPublicObjectKey({
                   userId: input.uploadedById ?? 'unknown',
                   directory: input.directory,
@@ -70,6 +73,7 @@ export class OssStorageProvider implements AttachmentStorageProvider {
                 Body: input.buffer,
                 ContentLength: input.size,
                 ContentType: input.mimeType,
+                ACL: publicUpload ? undefined : 'private',
                 Metadata: {
                     checksum,
                     taskId: input.taskId,
@@ -85,7 +89,7 @@ export class OssStorageProvider implements AttachmentStorageProvider {
             provider: 'OSS',
             bucket,
             key,
-            url: await this.publicUrl(key),
+            url: publicUpload ? await this.publicUrl(key) : '',
             checksum,
         };
     }
@@ -102,8 +106,20 @@ export class OssStorageProvider implements AttachmentStorageProvider {
     async getDownload(
         key: string,
         bucket?: string | null,
+        visibility: StorageVisibility = 'PRIVATE',
     ): Promise<DownloadResult> {
-        const publicUrl = await this.publicUrl(key);
+        const publicUrl =
+            visibility === 'PUBLIC' ? await this.publicUrl(key) : '';
+        if (visibility === 'PRIVATE' && bucket !== this.privateBucket()) {
+            throw new BadRequestException(
+                'Private attachment bucket is not trusted',
+            );
+        }
+        if (visibility === 'PUBLIC' && bucket && bucket !== this.bucket()) {
+            throw new BadRequestException(
+                'Public attachment bucket is not trusted',
+            );
+        }
         if (publicUrl) {
             return { type: 'redirect', url: publicUrl };
         }
@@ -119,7 +135,7 @@ export class OssStorageProvider implements AttachmentStorageProvider {
                 Bucket: bucket || this.bucket(),
                 Key: key,
             }),
-            { expiresIn: signedUrlTtlSeconds },
+            { expiresIn: Math.max(1, Math.min(300, signedUrlTtlSeconds)) },
         );
 
         return { type: 'redirect', url };
@@ -129,6 +145,16 @@ export class OssStorageProvider implements AttachmentStorageProvider {
         const bucket = this.config.oss.bucket;
         if (!bucket) {
             throw new BadRequestException('STORAGE_OSS_BUCKET is required');
+        }
+        return bucket;
+    }
+
+    private privateBucket(): string {
+        const bucket = this.config.oss.privateBucket;
+        if (!bucket || bucket === this.config.oss.bucket) {
+            throw new BadRequestException(
+                'A separate STORAGE_OSS_PRIVATE_BUCKET with private access is required',
+            );
         }
         return bucket;
     }

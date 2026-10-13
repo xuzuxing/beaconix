@@ -26,7 +26,7 @@ export class LabelEntity {
     updatedAt: Date;
 
     // Optional relations
-    createdBy?: { id: string; name: string; email: string } | null;
+    createdBy?: { id: string; name: string } | null;
     _count?: { tasks: number };
 
     constructor(partial: Partial<LabelEntity>) {

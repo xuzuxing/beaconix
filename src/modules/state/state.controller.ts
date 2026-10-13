@@ -11,7 +11,10 @@ import {
 } from '@nestjs/swagger';
 import { StateService } from './state.service';
 import { MonitorStateEntity } from './entities';
-import { OrgMemberGuard } from '../../common/guards';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
+import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 
 @ApiTags('Monitor State')
 @ApiBearerAuth('access-token')
@@ -20,7 +23,11 @@ export class StateController {
     constructor(private readonly stateService: StateService) {}
 
     @Get()
-    @UseGuards(OrgMemberGuard)
+    @UseGuards(ProjectAccessGuard)
+    @ProjectPermission('monitor.read', {
+        resourceType: 'MONITOR',
+        idParam: 'monitorId',
+    })
     @ApiOperation({
         summary: 'Get the current state of a monitor (with a 24h summary)',
     })
@@ -36,7 +43,8 @@ export class StateController {
     async getState(
         @Param('projectId') projectId: string,
         @Param('monitorId') monitorId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.stateService.getSummary(projectId, monitorId);
+        return this.stateService.getSummary(projectId, monitorId, principal);
     }
 }

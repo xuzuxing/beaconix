@@ -9,6 +9,9 @@ import {
     iso,
     roundPercent,
 } from './monitoring-window.util';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
+import { monitoringProjection } from '../../common/authorization/monitoring-projection';
 
 type Metrics = {
     checks: number;
@@ -47,14 +50,23 @@ const later = (...dates: Date[]) =>
 
 @Injectable()
 export class MonitorInsightsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly access: ProjectAccessService,
+    ) {}
 
     async get(
         projectId: string,
         monitorId: string,
         query: QueryMonitorInsightsDto,
+        principal: AccessPrincipal,
     ) {
-        return this.prisma.$transaction(
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'monitoring.read',
+        );
+        const snapshot = await this.prisma.$transaction(
             async (tx) => {
                 await tx.$executeRaw`SET TRANSACTION READ ONLY`;
                 const [clock] = await tx.$queryRaw<
@@ -311,5 +323,6 @@ export class MonitorInsightsService {
             },
             { isolationLevel: 'RepeatableRead', timeout: 15000 },
         );
+        return monitoringProjection(snapshot, access.effectiveRole);
     }
 }

@@ -21,7 +21,32 @@ export interface NotificationEvent extends CreateNotificationDto {
     includeActor?: boolean;
     allowOutsideOrg?: boolean;
     email?: boolean;
+    accessScope?: NotificationAudience['accessScope'];
+    projectId?: string;
+}
+
+export interface NotificationAudience {
+    accessScope: 'ACCOUNT' | 'INVITATION' | 'ORGANIZATION' | 'PROJECT';
+    userId?: string;
+    organizationId?: string;
+    projectId?: string;
+    invitationId?: string;
+    email?: string;
+    minimumRole?: 'MEMBER';
+    organizationRoles?: MembershipRole[];
 }
 
 export type NotificationDb = Prisma.TransactionClient;
 export const ADMIN_ROLES: MembershipRole[] = ['OWNER', 'ADMIN'];
+export const ADMIN_NOTIFICATION_TYPES: NotificationType[] = [
+    'API_KEY_CREATED',
+    'API_KEY_REVOKED',
+    'PROBE_ENROLLED',
+    'PROBE_SECRET_ROTATED',
+    'PROBE_CREDENTIAL_REVOKED',
+    'PAYMENT_SUCCEEDED',
+    'SUBSCRIPTION_ACTIVATED',
+    'SUBSCRIPTION_RENEWED',
+    'SUBSCRIPTION_EXPIRING',
+    'SUBSCRIPTION_EXPIRED',
+];

@@ -29,6 +29,8 @@ import { MonitorEntity } from '../../monitors/entities';
 import { MonitorsService } from '../../monitors/monitors.service';
 import { DeveloperAuthGuard } from '../auth/developer-auth.guard';
 import { RequireScopes } from '../auth/require-scopes.decorator';
+import { CurrentPrincipal } from '../../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../../common/authorization/access.types';
 
 @ApiTags('Developer API - Monitors')
 @ApiBearerAuth('developer-api-key')
@@ -46,8 +48,11 @@ export class DeveloperMonitorsController {
     @ApiOkResponse({ type: [MonitorEntity] })
     @ApiUnauthorizedResponse({ description: 'Missing or invalid API key' })
     @ApiForbiddenResponse({ description: 'Missing scope' })
-    async findAllByOrg(@Param('orgId') orgId: string) {
-        return this.monitorsService.findAllByOrg(orgId);
+    async findAllByOrg(
+        @Param('orgId') orgId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.monitorsService.findAllByOrg(orgId, principal);
     }
 
     @Get('projects/:projectId/monitors')
@@ -59,8 +64,11 @@ export class DeveloperMonitorsController {
     @ApiOkResponse({ type: [MonitorEntity] })
     @ApiUnauthorizedResponse({ description: 'Missing or invalid API key' })
     @ApiForbiddenResponse({ description: 'Missing scope' })
-    async findAll(@Param('projectId') projectId: string) {
-        return this.monitorsService.findAll(projectId);
+    async findAll(
+        @Param('projectId') projectId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.monitorsService.findAll(projectId, principal);
     }
 
     @Post('projects/:projectId/monitors')
@@ -77,8 +85,9 @@ export class DeveloperMonitorsController {
     async create(
         @Param('projectId') projectId: string,
         @Body() dto: CreateMonitorDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.create(projectId, dto);
+        return this.monitorsService.create(projectId, dto, principal);
     }
 
     @Get('projects/:projectId/monitors/:id')
@@ -95,8 +104,9 @@ export class DeveloperMonitorsController {
     async findOne(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.findOne(projectId, id);
+        return this.monitorsService.findOne(projectId, id, principal);
     }
 
     @Patch('projects/:projectId/monitors/:id')
@@ -116,8 +126,9 @@ export class DeveloperMonitorsController {
         @Param('projectId') projectId: string,
         @Param('id') id: string,
         @Body() dto: UpdateMonitorDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.update(projectId, id, dto);
+        return this.monitorsService.update(projectId, id, dto, principal);
     }
 
     @Post('projects/:projectId/monitors/:id/pause')
@@ -136,8 +147,9 @@ export class DeveloperMonitorsController {
     async pause(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.pause(projectId, id);
+        return this.monitorsService.pause(projectId, id, principal);
     }
 
     @Post('projects/:projectId/monitors/:id/resume')
@@ -156,8 +168,9 @@ export class DeveloperMonitorsController {
     async resume(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.resume(projectId, id);
+        return this.monitorsService.resume(projectId, id, principal);
     }
 
     @Delete('projects/:projectId/monitors/:id')
@@ -176,8 +189,9 @@ export class DeveloperMonitorsController {
     async remove(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.softDelete(projectId, id);
+        return this.monitorsService.softDelete(projectId, id, principal);
     }
 
     @Post('projects/:projectId/monitors/:id/restore')
@@ -196,7 +210,8 @@ export class DeveloperMonitorsController {
     async restore(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.restore(projectId, id);
+        return this.monitorsService.restore(projectId, id, principal);
     }
 }

@@ -21,10 +21,15 @@ import { ProbesService } from '../src/modules/probes/probes.service';
 import { ProbesController } from '../src/modules/probes/probes.controller';
 import { ProbeValidationService } from '../src/modules/probes/probe-validation.service';
 import { NotificationsService } from '../src/modules/notifications/notifications.service';
+import { NotificationAccessService } from '../src/modules/notifications/notification-access.service';
 import { hashSecret } from '../src/modules/probes/probe-secret.util';
 import { CheckerService } from '../src/modules/checker/checker.service';
 import { MonitorDataCleanupService } from '../src/modules/cron/jobs/monitor-data-cleanup.service';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { ProjectAccessService } from '../src/common/authorization/project-access.service';
+import { ResourceContextResolver } from '../src/common/authorization/resource-context.resolver';
+import { ProjectAccessGuard } from '../src/common/authorization/project-access.guard';
+import { systemPrincipal } from '../src/common/authorization/access.types';
 
 describe('Probe credential lifecycle actor forwarding (HTTP)', () => {
     let app: INestApplication;
@@ -168,6 +173,11 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             prisma,
             { kick: jest.fn() } as never,
             { getStream: jest.fn() } as never,
+            new NotificationAccessService(
+                prisma,
+                new ProjectAccessService(prisma),
+            ),
+            new ProjectAccessService(prisma),
         );
         const module = await Test.createTestingModule({
             imports: [JwtModule.register({ secret: 'monitoring-test-only' })],
@@ -198,6 +208,9 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
                 MonitoringDashboardService,
                 MonitoringEtagInterceptor,
                 OrgMemberGuard,
+                ProjectAccessService,
+                ResourceContextResolver,
+                ProjectAccessGuard,
                 { provide: APP_GUARD, useClass: JwtAuthGuard },
             ],
         }).compile();
@@ -258,6 +271,19 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
                 },
             })
         ).id;
+        const membership = await prisma.membership.findUniqueOrThrow({
+            where: {
+                userId_organizationId: { userId: user, organizationId: org },
+            },
+        });
+        await prisma.projectMembership.createMany({
+            data: [project, emptyProject, otherProject].map((projectId) => ({
+                projectId,
+                organizationId: org,
+                membershipId: membership.id,
+                role: 'VIEWER' as const,
+            })),
+        });
         await prisma.monitoringCoverage.updateMany({
             where: { projectId: { in: [project, emptyProject, otherProject] } },
             data: {
@@ -336,7 +362,12 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
         adminToken = jwt.sign({ sub: user, globalRole: 'SUPER_ADMIN' });
         state = new StateService(
             prisma,
-            new AlertEventsService(prisma, notifications),
+            new AlertEventsService(
+                prisma,
+                notifications,
+                new ProjectAccessService(prisma),
+            ),
+            new ProjectAccessService(prisma),
         );
     }, 30000);
 
@@ -996,14 +1027,24 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
         await notifier.deliverAlertDelivery(delivery.id);
         expect(failing).toHaveBeenCalledTimes(3);
         await expect(
-            new AlertEventsService(prisma, notifications).retry(
+            new AlertEventsService(
+                prisma,
+                notifications,
+                new ProjectAccessService(prisma),
+            ).retry(
                 otherProject,
                 delivery.id,
+                systemPrincipal('alert integration fixture'),
             ),
         ).rejects.toThrow();
-        await new AlertEventsService(prisma, notifications).retry(
+        await new AlertEventsService(
+            prisma,
+            notifications,
+            new ProjectAccessService(prisma),
+        ).retry(
             project,
             delivery.id,
+            systemPrincipal('alert integration fixture'),
         );
         expect(
             (
@@ -1256,6 +1297,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             scheduler as never,
             {} as never,
             { findBindingsForMonitor: () => Promise.resolve([]) } as never,
+            new ProjectAccessService(prisma),
         );
         const probes = new ProbesService(
             prisma,

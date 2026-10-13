@@ -8,6 +8,9 @@ import { Subject, Observable, finalize } from 'rxjs';
 import type Redis from 'ioredis';
 import { RedisService } from '../../infra/redis/redis.service';
 import { NotificationEntity } from './entities';
+import { PrismaService } from '../../infra/database/prisma.service';
+import { NotificationAccessService } from './notification-access.service';
+import { projectInvitationState } from './invitation-notification-state';
 
 export interface NotificationMessageEvent {
     data: NotificationEntity;
@@ -25,8 +28,13 @@ export class NotificationStreamService
     >();
     private subscriber?: Redis;
     private readonly channel: string;
+    private readonly pending = new Map<string, Promise<void>>();
 
-    constructor(private readonly redis: RedisService) {
+    constructor(
+        private readonly redis: RedisService,
+        private readonly prisma: PrismaService,
+        private readonly authorization: NotificationAccessService,
+    ) {
         this.channel = `${redis.getClient().options.keyPrefix ?? ''}workspace-notifications`;
     }
 
@@ -47,10 +55,7 @@ export class NotificationStreamService
                     typeof notification.id !== 'string'
                 )
                     return;
-                this.streams.get(notification.userId)?.next({
-                    id: notification.id,
-                    data: notification,
-                });
+                this.enqueueAuthorized(notification.userId, notification.id);
             } catch {
                 this.logger.warn('Invalid notification stream message ignored');
             }
@@ -85,5 +90,33 @@ export class NotificationStreamService
         await this.redis
             .getClient()
             .publish(this.channel, JSON.stringify(notification));
+    }
+
+    private enqueueAuthorized(userId: string, notificationId: string): void {
+        if (!this.streams.has(userId)) return;
+        const previous = this.pending.get(userId) ?? Promise.resolve();
+        const next = previous
+            .then(async () => {
+                const notice = await this.prisma.notification.findFirst({
+                    where: {
+                        ...(await this.authorization.visibleWhere(userId)),
+                        id: notificationId,
+                    },
+                });
+                if (!notice) return;
+                const [data] = await projectInvitationState(this.prisma, [
+                    new NotificationEntity(notice),
+                ]);
+                this.streams.get(userId)?.next({ id: notificationId, data });
+            })
+            .catch(() => {
+                this.logger.warn(
+                    'Notification stream authorization failed; message withheld',
+                );
+            });
+        this.pending.set(userId, next);
+        void next.then(() => {
+            if (this.pending.get(userId) === next) this.pending.delete(userId);
+        });
     }
 }

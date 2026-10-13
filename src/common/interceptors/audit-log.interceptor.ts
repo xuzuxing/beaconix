@@ -47,6 +47,10 @@ export class AuditLogInterceptor implements NestInterceptor {
         const method = request.method.toUpperCase();
         const user = request['user'] as
             { sub: string; email: string } | undefined;
+        const machine =
+            request['accessPrincipal']?.type === 'API_KEY'
+                ? request['apiKey']
+                : null;
 
         const action = options.action
             ? (options.action as AuditAction)
@@ -113,14 +117,27 @@ export class AuditLogInterceptor implements NestInterceptor {
 
                                     if (resolvedEntityId) {
                                         this.writeLog({
-                                            actorId: user?.sub ?? null,
+                                            actorId: machine
+                                                ? null
+                                                : (user?.sub ?? null),
                                             organizationId,
                                             projectId,
                                             action,
                                             entity: options.entity,
                                             entityId: resolvedEntityId,
                                             before: before ?? undefined,
-                                            after: after ?? undefined,
+                                            after: machine
+                                                ? {
+                                                      value: after ?? null,
+                                                      authentication: {
+                                                          type: 'API_KEY',
+                                                          keyId: machine.id,
+                                                          createdById:
+                                                              machine.createdById ??
+                                                              null,
+                                                      },
+                                                  }
+                                                : (after ?? undefined),
                                             ipAddress,
                                             userAgent,
                                         });

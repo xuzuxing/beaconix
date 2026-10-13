@@ -30,6 +30,8 @@ import { ProjectEntity } from './entities';
 import { CurrentUser, Roles, AuditLog } from '../../common/decorators';
 import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
 
 @ApiTags('Projects')
 @ApiBearerAuth('access-token')
@@ -47,8 +49,14 @@ export class ProjectsController {
     })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member' })
-    async findAll(@Param('orgId') orgId: string) {
-        return this.projectsService.findAll(orgId);
+    async findAll(
+        @Param('orgId') orgId: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.projectsService.findAll(orgId, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 
     @Post()
@@ -77,7 +85,12 @@ export class ProjectsController {
     }
 
     @Get(':id')
-    @UseGuards(OrgMemberGuard)
+    @UseGuards(ProjectAccessGuard)
+    @ProjectPermission('project.read', {
+        resourceType: 'PROJECT',
+        idParam: 'id',
+        organizationParam: 'orgId',
+    })
     @ApiOperation({ summary: 'Get project by ID' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiParam({ name: 'id', description: 'Project CUID' })
@@ -88,13 +101,24 @@ export class ProjectsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member' })
     @ApiNotFoundResponse({ description: 'Project not found' })
-    async findOne(@Param('orgId') orgId: string, @Param('id') id: string) {
-        return this.projectsService.findOne(orgId, id);
+    async findOne(
+        @Param('orgId') orgId: string,
+        @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.projectsService.findOne(orgId, id, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 
     @Patch(':id')
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @UseGuards(ProjectAccessGuard)
+    @ProjectPermission('project.manage', {
+        resourceType: 'PROJECT',
+        idParam: 'id',
+        organizationParam: 'orgId',
+    })
     @AuditLog({ entity: 'Project' })
     @ApiOperation({ summary: 'Update project' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
@@ -111,15 +135,20 @@ export class ProjectsController {
     async update(
         @Param('orgId') orgId: string,
         @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
         @Body() dto: UpdateProjectDto,
     ) {
-        return this.projectsService.update(orgId, id, dto);
+        return this.projectsService.update(orgId, id, user.sub, dto);
     }
 
     @Post(':id/archive')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @UseGuards(ProjectAccessGuard)
+    @ProjectPermission('project.archive', {
+        resourceType: 'PROJECT',
+        idParam: 'id',
+        organizationParam: 'orgId',
+    })
     @AuditLog({ entity: 'Project', action: 'ARCHIVE' })
     @ApiOperation({ summary: 'Archive project (makes it read-only)' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
@@ -142,8 +171,12 @@ export class ProjectsController {
 
     @Delete(':id')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @UseGuards(ProjectAccessGuard)
+    @ProjectPermission('project.delete', {
+        resourceType: 'PROJECT',
+        idParam: 'id',
+        organizationParam: 'orgId',
+    })
     @AuditLog({ entity: 'Project', action: 'DELETE' })
     @ApiOperation({ summary: 'Soft delete project' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
@@ -165,8 +198,12 @@ export class ProjectsController {
 
     @Post(':id/restore')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @UseGuards(ProjectAccessGuard)
+    @ProjectPermission('project.restore', {
+        resourceType: 'PROJECT',
+        idParam: 'id',
+        organizationParam: 'orgId',
+    })
     @AuditLog({ entity: 'Project', action: 'RESTORE' })
     @ApiOperation({ summary: 'Restore a soft-deleted project' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })

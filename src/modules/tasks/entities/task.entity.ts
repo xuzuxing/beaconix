@@ -65,11 +65,10 @@ export class TaskEntity {
     deletedAt: Date | null;
 
     // Optional relations
-    createdBy?: { id: string; name: string; email: string } | null;
+    createdBy?: { id: string; name: string } | null;
     assignedTo?: {
         id: string;
         name: string;
-        email: string;
         avatarUrl: string | null;
     } | null;
     subTasks?: Record<string, any>[];

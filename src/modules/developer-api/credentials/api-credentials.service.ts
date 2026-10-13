@@ -69,6 +69,7 @@ export class ApiCredentialsService {
                 {
                     eventKey: `api-key-created:${key.id}`,
                     type: NotificationType.API_KEY_CREATED,
+                    accessScope: 'ORGANIZATION',
                     title: 'An organization API key was created',
                     organizationId: orgId,
                     actorId: createdById,
@@ -127,6 +128,7 @@ export class ApiCredentialsService {
                 {
                     eventKey: `api-key-revoked:${id}`,
                     type: NotificationType.API_KEY_REVOKED,
+                    accessScope: 'ORGANIZATION',
                     title: 'An organization API key was revoked',
                     organizationId: orgId,
                     actorId,
@@ -225,6 +227,7 @@ export class ApiCredentialsService {
                 {
                     eventKey: `pat-created:${token.id}`,
                     type: NotificationType.PERSONAL_ACCESS_TOKEN_CREATED,
+                    accessScope: 'ACCOUNT',
                     title: 'A personal access token was created',
                     recipients: [user.sub],
                     actorId: user.sub,
@@ -238,8 +241,7 @@ export class ApiCredentialsService {
             return token;
         });
 
-        // PATs are revocable user JWTs. Existing JWT-protected endpoints keep
-        // working unchanged; JwtAuthGuard checks revocation for kind === 'pat'.
+        // PATs are revocable user JWTs restricted to the scoped developer API.
         const expiresInSeconds = Math.max(
             1,
             Math.floor((expiresAt.getTime() - Date.now()) / 1000),
@@ -296,6 +298,7 @@ export class ApiCredentialsService {
                 {
                     eventKey: `pat-revoked:${id}`,
                     type: NotificationType.PERSONAL_ACCESS_TOKEN_REVOKED,
+                    accessScope: 'ACCOUNT',
                     title: 'A personal access token was revoked',
                     recipients: [userId],
                     actorId: userId,

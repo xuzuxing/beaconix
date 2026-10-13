@@ -39,6 +39,8 @@ import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 @ApiTags('Notification Channels')
 @ApiBearerAuth('access-token')
 @Controller('organizations/:orgId/notification-channels')
+@UseGuards(RolesGuard)
+@Roles('ADMIN')
 export class NotificationChannelsController {
     constructor(
         private readonly channelsService: NotificationChannelsService,

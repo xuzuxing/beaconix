@@ -225,6 +225,7 @@ export class AuthService {
                 {
                     eventKey: `password-changed:${userId}:${crypto.randomUUID()}`,
                     type: NotificationType.PASSWORD_CHANGED,
+                    accessScope: 'ACCOUNT',
                     title: 'Your password was changed',
                     body: 'Your sessions have been revoked. Contact support if you did not make this change.',
                     recipients: [userId],
@@ -392,6 +393,7 @@ export class AuthService {
                 {
                     eventKey: `password-reset:${otpId}`,
                     type: NotificationType.PASSWORD_RESET_COMPLETED,
+                    accessScope: 'ACCOUNT',
                     title: 'Your password was reset',
                     body: 'Your sessions have been revoked. Contact support if you did not request this reset.',
                     recipients: [user.id],

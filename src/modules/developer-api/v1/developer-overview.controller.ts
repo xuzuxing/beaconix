@@ -14,6 +14,8 @@ import { MonitoringService } from '../../monitoring/monitoring.service';
 import { MonitoringOverviewEntity } from '../../monitoring/entities';
 import { DeveloperAuthGuard } from '../auth/developer-auth.guard';
 import { RequireScopes } from '../auth/require-scopes.decorator';
+import { CurrentPrincipal } from '../../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../../common/authorization/access.types';
 
 @ApiTags('Developer API - Monitoring')
 @ApiBearerAuth('developer-api-key')
@@ -31,7 +33,10 @@ export class DeveloperOverviewController {
     @ApiOkResponse({ type: MonitoringOverviewEntity })
     @ApiUnauthorizedResponse({ description: 'Missing or invalid API key' })
     @ApiForbiddenResponse({ description: 'Missing scope' })
-    async getOverview(@Param('orgId') orgId: string) {
-        return this.monitoringService.getOrganizationOverview(orgId);
+    async getOverview(
+        @Param('orgId') orgId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.monitoringService.getOrganizationOverview(orgId, principal);
     }
 }

@@ -7,8 +7,10 @@ import {
     OssStorageProvider,
     StorageService,
 } from './storage';
+import { AuthorizationModule } from '../../common/authorization/authorization.module';
 
 @Module({
+    imports: [AuthorizationModule],
     controllers: [AttachmentsController, PublicAttachmentsController],
     providers: [
         AttachmentsService,

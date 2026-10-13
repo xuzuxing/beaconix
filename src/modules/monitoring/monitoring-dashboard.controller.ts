@@ -17,7 +17,10 @@ import {
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { OrgMemberGuard } from '../../common/guards';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
+import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { SkipTransform } from '../../common/decorators/skip-transform.decorator';
 import { MonitoringDashboardService } from './monitoring-dashboard.service';
 import { MonitoringEtagInterceptor } from './monitoring-etag.interceptor';
@@ -35,7 +38,11 @@ import {
 @ApiTags('Monitoring')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/monitoring')
-@UseGuards(OrgMemberGuard)
+@UseGuards(ProjectAccessGuard)
+@ProjectPermission('monitoring.read', {
+    resourceType: 'PROJECT',
+    idParam: 'projectId',
+})
 @UseInterceptors(MonitoringEtagInterceptor)
 @ApiBadRequestResponse({ description: 'Invalid query parameters or time zone' })
 @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
@@ -55,8 +62,9 @@ export class MonitoringDashboardController {
     getDashboard(
         @Param('projectId') projectId: string,
         @Query() query: QueryMonitoringDashboardDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.dashboard.dashboard(projectId, query);
+        return this.dashboard.dashboard(projectId, query, principal);
     }
 
     @Get('availability')
@@ -66,8 +74,9 @@ export class MonitoringDashboardController {
     getAvailability(
         @Param('projectId') projectId: string,
         @Query() query: QueryMonitoringAvailabilityDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.dashboard.availability(projectId, query);
+        return this.dashboard.availability(projectId, query, principal);
     }
 
     @Get('status-codes')
@@ -77,7 +86,8 @@ export class MonitoringDashboardController {
     getStatusCodes(
         @Param('projectId') projectId: string,
         @Query() query: QueryMonitoringStatusCodesDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.dashboard.statusCodes(projectId, query);
+        return this.dashboard.statusCodes(projectId, query, principal);
     }
 }

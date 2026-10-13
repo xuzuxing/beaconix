@@ -26,7 +26,8 @@ import {
 import { InvitationsService } from './invitations.service';
 import { CreateInvitationDto } from './dto';
 import { InvitationEntity } from './entities';
-import { CurrentUser, Public, Roles, AuditLog } from '../../common/decorators';
+import { InvitationPreviewEntity } from './entities/invitation.entity';
+import { CurrentUser, Public, Roles } from '../../common/decorators';
 import { RolesGuard } from '../../common/guards';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
@@ -40,7 +41,6 @@ export class InvitationsController {
     @Post('organizations/:orgId/invitations')
     @UseGuards(RolesGuard)
     @Roles('ADMIN')
-    @AuditLog({ entity: 'Invitation', action: 'INVITE' })
     @ApiBearerAuth('access-token')
     @ApiOperation({ summary: 'Send an invitation to join the organization' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
@@ -85,7 +85,6 @@ export class InvitationsController {
     @UseGuards(RolesGuard)
     @Roles('ADMIN')
     @HttpCode(HttpStatus.OK)
-    @AuditLog({ entity: 'Invitation', action: 'DELETE' })
     @ApiBearerAuth('access-token')
     @ApiOperation({ summary: 'Revoke a pending invitation' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
@@ -138,7 +137,6 @@ export class InvitationsController {
 
     @Post('invitations/by-id/:id/accept')
     @HttpCode(HttpStatus.OK)
-    @AuditLog({ entity: 'Invitation', action: 'JOIN' })
     @ApiBearerAuth('access-token')
     @ApiOperation({
         summary: 'Accept an invitation addressed to the verified current email',
@@ -190,8 +188,8 @@ export class InvitationsController {
     })
     @ApiParam({ name: 'token', description: 'Invitation token (CUID)' })
     @ApiOkResponse({
-        type: InvitationEntity,
-        description: 'Invitation details',
+        type: InvitationPreviewEntity,
+        description: 'Organization name, status and login requirement only',
     })
     @ApiNotFoundResponse({ description: 'Invitation not found' })
     async getByToken(@Param('token') token: string) {
@@ -199,7 +197,6 @@ export class InvitationsController {
     }
 
     @Post('invitations/:token/accept')
-    @AuditLog({ entity: 'Invitation', action: 'JOIN', idParam: 'token' })
     @ApiBearerAuth('access-token')
     @ApiOperation({
         summary: 'Accept an invitation',

@@ -10,6 +10,9 @@ function fixture() {
         updatedAt: new Date(),
     };
     const db = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        user: { findFirst: jest.fn().mockResolvedValue({ id: 'active-user' }) },
+        auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit' }) },
         organization: {
             findUnique: jest.fn().mockResolvedValue(org),
             update: jest
@@ -17,13 +20,27 @@ function fixture() {
                 .mockImplementation(({ data }) => ({ ...org, ...data })),
         },
         membership: {
-            findUnique: jest
-                .fn()
-                .mockResolvedValue({ id: 'membership', userId: 'member' }),
+            findUnique: jest.fn().mockImplementation(({ where }) =>
+                Promise.resolve(
+                    where.userId_organizationId?.userId === 'owner'
+                        ? {
+                              id: 'owner-membership',
+                              userId: 'owner',
+                              role: 'OWNER',
+                              projectPermissionsVersion: 2,
+                          }
+                        : {
+                              id: 'membership',
+                              userId: 'member',
+                              role: 'MEMBER',
+                              projectPermissionsVersion: 3,
+                          },
+                ),
+            ),
             findMany: jest.fn().mockResolvedValue([
-                { userId: 'owner', role: 'OWNER' },
-                { userId: 'admin', role: 'ADMIN' },
-                { userId: 'member', role: 'MEMBER' },
+                { id: 'owner-membership', userId: 'owner', role: 'OWNER' },
+                { id: 'admin-membership', userId: 'admin', role: 'ADMIN' },
+                { id: 'membership', userId: 'member', role: 'MEMBER' },
             ]),
             update: jest.fn().mockResolvedValue({}),
         },
@@ -70,6 +87,49 @@ describe('Organization lifecycle notifications', () => {
             newOwnerId: 'member',
         });
         expect(db.membership.update).toHaveBeenCalledTimes(2);
+        expect(db.auditLog.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                data: expect.objectContaining({
+                    entity: 'OrganizationOwnership',
+                    after: {
+                        ownerId: 'member',
+                        memberships: [
+                            {
+                                membershipId: 'owner-membership',
+                                userId: 'owner',
+                                role: 'ADMIN',
+                                projectPermissionsVersion: 3,
+                            },
+                            {
+                                membershipId: 'membership',
+                                userId: 'member',
+                                role: 'OWNER',
+                                projectPermissionsVersion: 4,
+                            },
+                        ],
+                    },
+                }),
+            }),
+        );
+        expect(db.membership.update).toHaveBeenNthCalledWith(1, {
+            where: { id: 'membership' },
+            data: {
+                role: 'OWNER',
+                projectPermissionsVersion: { increment: 1 },
+            },
+        });
+        expect(db.membership.update).toHaveBeenNthCalledWith(2, {
+            where: {
+                userId_organizationId: {
+                    userId: 'owner',
+                    organizationId: 'org',
+                },
+            },
+            data: {
+                role: 'ADMIN',
+                projectPermissionsVersion: { increment: 1 },
+            },
+        });
         expect(notifications.publish).toHaveBeenCalledWith(
             expect.objectContaining({
                 type: 'OWNERSHIP_TRANSFERRED',

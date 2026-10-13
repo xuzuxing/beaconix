@@ -4,6 +4,9 @@ import type { PrismaService } from '../../infra/database/prisma.service';
 import type { EmailService } from '../email/email.service';
 import type { NotificationStreamService } from './notification-stream.service';
 import type { ScheduledJobRegistry } from '../../infra/scheduler/scheduled-job.registry';
+import { NotificationAccessService } from './notification-access.service';
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
+import type { NotificationAudience } from './notification-event';
 
 function fixture(channel = 'EMAIL') {
     const job = {
@@ -19,13 +22,18 @@ function fixture(channel = 'EMAIL') {
                 body: 'Changed',
             },
             notificationId: 'notice',
-            audience: { userId: 'user', organizationId: 'org' },
+            audience: {
+                accessScope: 'ORGANIZATION',
+                userId: 'user',
+                organizationId: 'org',
+            } as NotificationAudience,
         },
     };
     const prisma = {
         notificationDelivery: {
             findMany: jest.fn().mockResolvedValue([job]),
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+            findFirst: jest.fn().mockResolvedValue(job),
         },
         notification: {
             findUnique: jest.fn().mockResolvedValue({
@@ -33,14 +41,28 @@ function fixture(channel = 'EMAIL') {
                 userId: 'user',
                 type: 'TASK_UPDATED',
                 title: 'Changed',
+                accessScope: 'ORGANIZATION',
+                organizationId: 'org',
+                projectId: null,
             }),
         },
-        user: { findFirst: jest.fn().mockResolvedValue({ id: 'user' }) },
+        user: {
+            findFirst: jest
+                .fn()
+                .mockResolvedValue({ id: 'user', email: 'user@example.test' }),
+        },
+        membership: {
+            findMany: jest.fn().mockResolvedValue([{ id: 'member' }]),
+            findFirst: jest.fn().mockResolvedValue({ id: 'member' }),
+        },
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        $transaction: jest.fn(),
         invitation: {
             findFirst: jest.fn().mockResolvedValue({ id: 'invite' }),
             findMany: jest.fn().mockResolvedValue([]),
         },
     };
+    prisma.$transaction.mockImplementation((work) => work(prisma));
     const email = { send: jest.fn().mockResolvedValue(undefined) };
     const streams = { emit: jest.fn().mockResolvedValue(undefined) };
     const registry = { register: jest.fn() };
@@ -49,6 +71,10 @@ function fixture(channel = 'EMAIL') {
         email as unknown as EmailService,
         streams as unknown as NotificationStreamService,
         registry as unknown as ScheduledJobRegistry,
+        new NotificationAccessService(
+            prisma as never,
+            mockProjectAccess(prisma, 'org'),
+        ),
     );
     return { service, prisma, email, streams, registry, job };
 }
@@ -63,23 +89,34 @@ describe('Notification delivery worker', () => {
                 id: 'user',
                 isActive: true,
                 deletedAt: null,
-                memberships: { some: { organizationId: 'org' } },
             },
-            select: { id: true },
+            select: { id: true, email: true },
         });
         expect(streams.emit).not.toHaveBeenCalled();
         expect(
-            prisma.notificationDelivery.updateMany.mock.calls[1][0].data.status,
+            prisma.notificationDelivery.updateMany.mock.calls.at(-1)![0].data
+                .status,
         ).toBe('SKIPPED');
     });
 
     it('keeps explicit cross-org invitation and removal delivery eligible', async () => {
         const { service, prisma, streams, job } = fixture('SSE');
-        Object.assign(job.payload.audience, { allowOutsideOrg: true });
+        Object.assign(job.payload.audience, {
+            accessScope: 'ACCOUNT',
+            organizationId: undefined,
+        });
+        prisma.notification.findUnique.mockResolvedValue({
+            id: 'notice',
+            userId: 'user',
+            type: 'MEMBER_REMOVED',
+            accessScope: 'ACCOUNT',
+            organizationId: null,
+            projectId: null,
+        });
         await service.processPending();
         expect(prisma.user.findFirst).toHaveBeenCalledWith({
             where: { id: 'user', isActive: true, deletedAt: null },
-            select: { id: true },
+            select: { id: true, email: true },
         });
         expect(streams.emit).toHaveBeenCalledTimes(1);
     });
@@ -102,9 +139,16 @@ describe('Notification delivery worker', () => {
             job.payload.data,
             'stable-key',
         );
-        expect(prisma.notificationDelivery.updateMany.mock.calls[1][0]).toEqual(
+        expect(
+            prisma.notificationDelivery.updateMany.mock.calls.at(-1)![0],
+        ).toEqual(
             expect.objectContaining({
-                where: { id: 'delivery', leaseToken: expect.any(String) },
+                where: {
+                    id: 'delivery',
+                    leaseToken: expect.any(String),
+                    status: 'SENDING',
+                    leaseUntil: { gt: expect.any(Date) },
+                },
                 data: expect.objectContaining({
                     status: 'SENT',
                     deliveredAt: expect.any(Date),
@@ -125,7 +169,7 @@ describe('Notification delivery worker', () => {
         email.send.mockRejectedValue(new Error('credential=do-not-log'));
         await service.processPending();
         expect(
-            prisma.notificationDelivery.updateMany.mock.calls[1][0].data,
+            prisma.notificationDelivery.updateMany.mock.calls.at(-1)![0].data,
         ).toEqual(
             expect.objectContaining({
                 status: 'PENDING',
@@ -146,13 +190,12 @@ describe('Notification delivery worker', () => {
                 isActive: true,
                 deletedAt: null,
                 emailVerified: true,
-                memberships: { some: { organizationId: 'org' } },
             },
-            select: { id: true },
+            select: { id: true, email: true },
         });
         expect(email.send).not.toHaveBeenCalled();
         expect(
-            prisma.notificationDelivery.updateMany.mock.calls[1][0].data,
+            prisma.notificationDelivery.updateMany.mock.calls.at(-1)![0].data,
         ).toEqual(
             expect.objectContaining({
                 status: 'SKIPPED',
@@ -164,12 +207,19 @@ describe('Notification delivery worker', () => {
     it('skips revoked or elapsed invitation emails', async () => {
         const { service, prisma, email, job } = fixture();
         job.payload.template = EmailTemplate.INVITATION;
+        Object.assign(job.payload.audience, {
+            accessScope: 'INVITATION',
+            invitationId: 'invite',
+            email: 'user@example.test',
+        });
         Object.assign(job.payload.data, { token: 'private-token' });
         prisma.invitation.findFirst.mockResolvedValue(null);
         await service.processPending();
         expect(prisma.invitation.findFirst).toHaveBeenCalledWith({
             where: {
-                token: 'private-token',
+                id: 'invite',
+                organizationId: 'org',
+                email: { equals: 'user@example.test', mode: 'insensitive' },
                 status: 'PENDING',
                 expiresAt: { gt: expect.any(Date) },
                 organization: { deletedAt: null },
@@ -178,7 +228,8 @@ describe('Notification delivery worker', () => {
         });
         expect(email.send).not.toHaveBeenCalled();
         expect(
-            prisma.notificationDelivery.updateMany.mock.calls[1][0].data.status,
+            prisma.notificationDelivery.updateMany.mock.calls.at(-1)![0].data
+                .status,
         ).toBe('SKIPPED');
     });
 
@@ -189,6 +240,9 @@ describe('Notification delivery worker', () => {
             userId: 'user',
             type: 'TASK_UPDATED',
             dedupKey: 'internal',
+            accessScope: 'ORGANIZATION',
+            organizationId: 'org',
+            projectId: null,
         });
         await service.processPending();
         expect(streams.emit).toHaveBeenCalledWith(
@@ -206,6 +260,9 @@ describe('Notification delivery worker', () => {
             resourceType: 'Invitation',
             resourceId: 'invite',
             meta: { invitationStatus: 'PENDING', actionable: true },
+            accessScope: 'ORGANIZATION',
+            organizationId: 'org',
+            projectId: null,
         });
         prisma.invitation.findMany.mockResolvedValue([
             {
@@ -232,7 +289,8 @@ describe('Notification delivery worker', () => {
         await service.processPending();
         expect(streams.emit).not.toHaveBeenCalled();
         expect(
-            prisma.notificationDelivery.updateMany.mock.calls[1][0].data.status,
+            prisma.notificationDelivery.updateMany.mock.calls.at(-1)![0].data
+                .status,
         ).toBe('SKIPPED');
     });
 
@@ -250,5 +308,53 @@ describe('Notification delivery worker', () => {
         expect(prisma.notificationDelivery.findMany).toHaveBeenCalledTimes(1);
         release([]);
         await first;
+    });
+
+    it.each(['EMAIL', 'SSE'])(
+        'cannot start %s after losing the dispatch lease',
+        async (channel) => {
+            const { service, prisma, email, streams } = fixture(channel);
+            prisma.notificationDelivery.updateMany
+                .mockResolvedValueOnce({ count: 1 })
+                .mockResolvedValueOnce({ count: 1 })
+                .mockResolvedValueOnce({ count: 0 });
+            await service.processPending();
+            expect(email.send).not.toHaveBeenCalled();
+            expect(streams.emit).not.toHaveBeenCalled();
+            expect(
+                prisma.notificationDelivery.updateMany,
+            ).toHaveBeenCalledTimes(3);
+            expect(
+                prisma.notificationDelivery.updateMany.mock.calls[2][0].where,
+            ).toMatchObject({
+                leaseToken: expect.any(String),
+                status: 'SENDING',
+                leaseUntil: { gt: expect.any(Date) },
+                dispatchAuthorizedAt: { not: null },
+            });
+        },
+    );
+
+    it('renews SSE lease only after asynchronous payload projection completes', async () => {
+        const { service, prisma, streams } = fixture('SSE');
+        prisma.notification.findUnique.mockResolvedValue({
+            id: 'notice',
+            userId: 'user',
+            type: 'INVITATION_RECEIVED',
+            resourceType: 'Invitation',
+            resourceId: 'invite',
+            accessScope: 'ORGANIZATION',
+            organizationId: 'org',
+            projectId: null,
+        });
+        await service.processPending();
+        expect(
+            prisma.invitation.findMany.mock.invocationCallOrder[0],
+        ).toBeLessThan(
+            prisma.notificationDelivery.updateMany.mock.invocationCallOrder[2],
+        );
+        expect(
+            prisma.notificationDelivery.updateMany.mock.invocationCallOrder[2],
+        ).toBeLessThan(streams.emit.mock.invocationCallOrder[0]);
     });
 });

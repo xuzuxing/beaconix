@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { NotFoundException } from '@nestjs/common';
 import { CheckSource, MonitorStatus } from '../../generated/prisma/enums';
 import { deriveState, StateService } from './state.service';
@@ -69,6 +70,7 @@ function createService() {
     const service = new StateService(
         prisma as unknown as PrismaService,
         alerts as unknown as AlertEventsService,
+        mockProjectAccess(prisma),
     );
 
     return { service, prisma, alerts };
@@ -541,7 +543,10 @@ describe('StateService', () => {
                 _avg: { latency: 127.6 },
             });
 
-            const summary = await service.getSummary('project-1', 'monitor-1');
+            const summary = await service.getSummary('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.monitor.findFirst).toHaveBeenCalledWith({
                 where: {
@@ -571,7 +576,10 @@ describe('StateService', () => {
                 _avg: { latency: null },
             });
 
-            const summary = await service.getSummary('project-1', 'monitor-1');
+            const summary = await service.getSummary('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(summary.status).toBe('UNKNOWN');
             expect(summary.uptimePercent).toBeNull();
@@ -583,7 +591,10 @@ describe('StateService', () => {
             prisma.monitor.findFirst.mockResolvedValue(null);
 
             await expect(
-                service.getSummary('project-1', 'monitor-1'),
+                service.getSummary('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).rejects.toThrow(NotFoundException);
         });
     });

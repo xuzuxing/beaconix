@@ -5,8 +5,10 @@ import { RuleBindingsService } from './rule-bindings.service';
 import { RuleGroupsController } from './rule-groups.controller';
 import { RuleBindingsController } from './rule-bindings.controller';
 import { RuleMetaController } from './rule-meta.controller';
+import { AuthorizationModule } from '../../common/authorization/authorization.module';
 
 @Module({
+    imports: [AuthorizationModule],
     controllers: [
         RuleGroupsController,
         RuleBindingsController,

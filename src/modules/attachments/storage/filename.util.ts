@@ -77,8 +77,29 @@ export function isPublicUploadKey(key: string): boolean {
     return (
         key.length > 0 &&
         !key.includes('\\') &&
+        !key.includes('%') &&
+        !key.startsWith('/') &&
+        !key.includes(':') &&
+        !segments.includes('.') &&
+        !segments.includes('') &&
         !segments.includes('..') &&
-        !key.startsWith('organizations/')
+        segments[0].toLowerCase() !== 'organizations'
+    );
+}
+
+export function isTaskUploadKey(
+    key: string,
+    organizationId: string,
+    taskId: string,
+): boolean {
+    return (
+        key.startsWith(`organizations/${organizationId}/tasks/${taskId}/`) &&
+        !/[\\%:]/.test(key) &&
+        key
+            .split('/')
+            .every(
+                (segment) => !!segment && segment !== '.' && segment !== '..',
+            )
     );
 }
 
@@ -113,5 +134,6 @@ function buildFinalName(objectId: string, filename: string): string {
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '');
 
-    return `${objectId}-${compactName || FALLBACK_FILENAME}${extension}`;
+    const safeExtension = extension.replace(/[^\p{L}\p{N}._-]/gu, '-');
+    return `${objectId}-${compactName || FALLBACK_FILENAME}${safeExtension}`;
 }

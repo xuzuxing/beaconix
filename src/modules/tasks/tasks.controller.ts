@@ -40,20 +40,29 @@ import {
     TaskDependencyEntity,
     TaskActivityEntity,
 } from './entities';
-import { CurrentUser, Roles, AuditLog } from '../../common/decorators';
-import { RolesGuard, OrgMemberGuard } from '../../common/guards';
+import { CurrentUser, AuditLog } from '../../common/decorators';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
 @ApiTags('Tasks')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/tasks')
+@UseGuards(ProjectAccessGuard)
+@ProjectPermission('project.read', {
+    resourceType: 'PROJECT',
+    idParam: 'projectId',
+})
 export class TasksController {
     constructor(private readonly tasksService: TasksService) {}
 
     // ── CRUD ────────────────────────────────────────────────────────────
 
     @Post()
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.write', {
+        resourceType: 'PROJECT',
+        idParam: 'projectId',
+    })
     @AuditLog({ entity: 'Task' })
     @ApiOperation({ summary: 'Create a new task' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -74,7 +83,6 @@ export class TasksController {
     }
 
     @Get()
-    @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List tasks with filters and pagination' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiOkResponse({ description: 'Paginated task list' })
@@ -83,23 +91,35 @@ export class TasksController {
     async findAll(
         @Param('projectId') projectId: string,
         @Query() query: QueryTasksDto,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.tasksService.findAll(projectId, query);
+        return this.tasksService.findAll(projectId, query, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 
     @Get('backlog')
-    @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Get backlog tasks (not in any sprint)' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiOkResponse({ type: [TaskEntity], description: 'Backlog tasks' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member of the organization' })
-    async findBacklog(@Param('projectId') projectId: string) {
-        return this.tasksService.findBacklog(projectId);
+    async findBacklog(
+        @Param('projectId') projectId: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.tasksService.findBacklog(projectId, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 
     @Get(':taskId')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('project.read', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @ApiOperation({ summary: 'Get task details' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiParam({ name: 'taskId', description: 'Task CUID' })
@@ -110,12 +130,19 @@ export class TasksController {
     async findOne(
         @Param('projectId') projectId: string,
         @Param('taskId') taskId: string,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.tasksService.findOne(projectId, taskId);
+        return this.tasksService.findOne(projectId, taskId, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 
     @Patch(':taskId')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.write', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @AuditLog({ entity: 'Task', idParam: 'taskId' })
     @ApiOperation({ summary: 'Update a task' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -136,7 +163,10 @@ export class TasksController {
     }
 
     @Delete(':taskId')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.write', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @HttpCode(HttpStatus.NO_CONTENT)
     @AuditLog({ entity: 'Task', idParam: 'taskId', action: 'DELETE' })
     @ApiOperation({ summary: 'Soft-delete a task' })
@@ -155,8 +185,10 @@ export class TasksController {
     }
 
     @Patch(':taskId/restore')
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @ProjectPermission('task.restore', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @AuditLog({ entity: 'Task', idParam: 'taskId', action: 'RESTORE' })
     @ApiOperation({ summary: 'Restore a soft-deleted task (Admin+)' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -177,7 +209,10 @@ export class TasksController {
     // ── ASSIGN ──────────────────────────────────────────────────────────
 
     @Patch(':taskId/assign')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.write', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @AuditLog({ entity: 'Task', idParam: 'taskId', action: 'ASSIGN' })
     @ApiOperation({ summary: 'Assign or unassign a task' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -200,7 +235,10 @@ export class TasksController {
     // ── SPRINT MOVE ─────────────────────────────────────────────────────
 
     @Patch(':taskId/move')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.write', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @AuditLog({ entity: 'Task', idParam: 'taskId', action: 'UPDATE' })
     @ApiOperation({ summary: 'Move task to sprint or backlog' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -223,7 +261,10 @@ export class TasksController {
     // ── WATCHERS ────────────────────────────────────────────────────────
 
     @Post(':taskId/watch')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.subscribe', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({ summary: 'Watch a task' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -242,7 +283,10 @@ export class TasksController {
     }
 
     @Delete(':taskId/watch')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.subscribe', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({ summary: 'Unwatch a task' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -262,7 +306,10 @@ export class TasksController {
     // ── DEPENDENCIES ────────────────────────────────────────────────────
 
     @Post(':taskId/dependencies')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.write', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @ApiOperation({ summary: 'Add a dependency (blocking task)' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiParam({ name: 'taskId', description: 'Dependent task CUID' })
@@ -293,7 +340,10 @@ export class TasksController {
     }
 
     @Delete(':taskId/dependencies/:depId')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('task.write', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({ summary: 'Remove a dependency' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -320,7 +370,10 @@ export class TasksController {
     // ── ACTIVITIES ──────────────────────────────────────────────────────
 
     @Get(':taskId/activities')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('project.read', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @ApiOperation({ summary: 'Get task activity log' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiParam({ name: 'taskId', description: 'Task CUID' })
@@ -331,7 +384,11 @@ export class TasksController {
     async getActivities(
         @Param('projectId') projectId: string,
         @Param('taskId') taskId: string,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.tasksService.getActivities(projectId, taskId);
+        return this.tasksService.getActivities(projectId, taskId, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 }

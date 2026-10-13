@@ -24,12 +24,13 @@ import type {
     NotificationEvent,
 } from '../notifications/notification-event';
 import { randomUUID } from 'node:crypto';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 
 // Shared select for user relations
 const userSelect = {
     id: true,
     name: true,
-    email: true,
     avatarUrl: true,
 } as const;
 
@@ -60,113 +61,129 @@ export class TasksService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
+        private readonly access: ProjectAccessService,
     ) {}
 
     // ── CRUD ────────────────────────────────────────────────────────────
 
     async create(projectId: string, userId: string, dto: CreateTaskDto) {
-        const project = await this.ensureProjectActive(projectId);
+        const task = await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.write',
+            async (tx, project) => {
+                if (dto.sprintId) {
+                    await this.ensureSprintBelongsToProject(
+                        dto.sprintId,
+                        projectId,
+                        tx,
+                    );
+                }
+                if (dto.parentTaskId) {
+                    await this.ensureTaskBelongsToProject(
+                        dto.parentTaskId,
+                        projectId,
+                        tx,
+                    );
+                }
+                if (dto.assignedToId) {
+                    await this.ensureAssignee(
+                        dto.assignedToId,
+                        project.organizationId,
+                        projectId,
+                        tx,
+                    );
+                }
+                // Auto-increment task number within the project (inside tx to reduce race window)
+                const lastTask = await tx.task.findFirst({
+                    where: { projectId },
+                    orderBy: { number: 'desc' },
+                    select: { number: true },
+                });
+                const nextNumber = (lastTask?.number ?? 0) + 1;
 
-        // Validate sprint belongs to this project
-        if (dto.sprintId) {
-            await this.ensureSprintBelongsToProject(dto.sprintId, projectId);
-        }
+                const created = await tx.task.create({
+                    data: {
+                        number: nextNumber,
+                        title: dto.title,
+                        description: dto.description,
+                        priority: (dto.priority as any) ?? 'MEDIUM',
+                        storyPoints: dto.storyPoints,
+                        dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+                        organizationId: project.organizationId,
+                        projectId,
+                        sprintId: dto.sprintId ?? null,
+                        parentTaskId: dto.parentTaskId ?? null,
+                        assignedToId: dto.assignedToId ?? null,
+                        createdById: userId,
+                    },
+                    include: {
+                        createdBy: { select: userSelect },
+                        assignedTo: { select: userSelect },
+                    },
+                });
 
-        // Validate parent task belongs to this project
-        if (dto.parentTaskId) {
-            await this.ensureTaskBelongsToProject(dto.parentTaskId, projectId);
-        }
-
-        // Validate assignee is an org member
-        if (dto.assignedToId) {
-            await this.ensureOrgMember(
-                dto.assignedToId,
-                project.organizationId,
-            );
-        }
-
-        const task = await this.prisma.$transaction(async (tx) => {
-            // Auto-increment task number within the project (inside tx to reduce race window)
-            const lastTask = await tx.task.findFirst({
-                where: { projectId },
-                orderBy: { number: 'desc' },
-                select: { number: true },
-            });
-            const nextNumber = (lastTask?.number ?? 0) + 1;
-
-            const created = await tx.task.create({
-                data: {
-                    number: nextNumber,
-                    title: dto.title,
-                    description: dto.description,
-                    priority: (dto.priority as any) ?? 'MEDIUM',
-                    storyPoints: dto.storyPoints,
-                    dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
-                    organizationId: project.organizationId,
-                    projectId,
-                    sprintId: dto.sprintId ?? null,
-                    parentTaskId: dto.parentTaskId ?? null,
-                    assignedToId: dto.assignedToId ?? null,
-                    createdById: userId,
-                },
-                include: {
-                    createdBy: { select: userSelect },
-                    assignedTo: { select: userSelect },
-                },
-            });
-
-            // Auto-watch creator
-            await tx.taskWatcher.create({
-                data: { taskId: created.id, userId },
-            });
-
-            // Auto-watch assignee if different from creator
-            if (dto.assignedToId && dto.assignedToId !== userId) {
+                // Auto-watch creator
                 await tx.taskWatcher.create({
-                    data: { taskId: created.id, userId: dto.assignedToId },
+                    data: { taskId: created.id, userId },
                 });
-            }
 
-            // Log creation activity
-            await tx.taskActivity.create({
-                data: {
-                    taskId: created.id,
-                    actorId: userId,
-                    action: 'created task',
-                    field: null,
-                    oldValue: null,
-                    newValue: null,
-                },
-            });
+                // Auto-watch assignee if different from creator
+                if (dto.assignedToId && dto.assignedToId !== userId) {
+                    await tx.taskWatcher.create({
+                        data: { taskId: created.id, userId: dto.assignedToId },
+                    });
+                }
 
-            if (created.assignedToId) {
-                await this.publishTaskEvent(created, userId, tx, {
-                    eventKey: `task:${created.id}:created`,
-                    type: 'TASK_ASSIGNED',
-                    title: `Task #${created.number} was assigned`,
-                    recipients: [
-                        {
-                            userId: created.assignedToId,
-                            title: `You were assigned to task #${created.number}`,
-                            email: true,
-                        },
-                    ],
+                // Log creation activity
+                await tx.taskActivity.create({
+                    data: {
+                        taskId: created.id,
+                        actorId: userId,
+                        action: 'created task',
+                        field: null,
+                        oldValue: null,
+                        newValue: null,
+                    },
                 });
-            }
 
-            return created;
-        });
+                if (created.assignedToId) {
+                    await this.publishTaskEvent(created, userId, tx, {
+                        eventKey: `task:${created.id}:created`,
+                        type: 'TASK_ASSIGNED',
+                        title: `Task #${created.number} was assigned`,
+                        recipients: [
+                            {
+                                userId: created.assignedToId,
+                                title: `You were assigned to task #${created.number}`,
+                                email: true,
+                            },
+                        ],
+                    });
+                }
+
+                return created;
+            },
+            'NO KEY UPDATE',
+            dto.assignedToId ? [dto.assignedToId] : [],
+        );
 
         return new TaskEntity(task);
     }
 
-    async findAll(projectId: string, query: QueryTasksDto) {
+    async findAll(
+        projectId: string,
+        query: QueryTasksDto,
+        principal: AccessPrincipal,
+    ) {
+        const access = await this.access.project(principal, projectId);
         const page = query.page ?? 1;
         const limit = query.limit ?? 20;
         const skip = (page - 1) * limit;
 
         const where: any = {
             projectId,
+            organizationId: access.organizationId,
             deletedAt: null,
         };
 
@@ -184,7 +201,13 @@ export class TasksService {
                     assignedTo: { select: userSelect },
                     _count: {
                         select: {
-                            subTasks: true,
+                            subTasks: {
+                                where: {
+                                    projectId,
+                                    organizationId: access.organizationId,
+                                    deletedAt: null,
+                                },
+                            },
                             comments: true,
                             attachments: true,
                             watchers: true,
@@ -209,15 +232,27 @@ export class TasksService {
         };
     }
 
-    async findBacklog(projectId: string) {
+    async findBacklog(projectId: string, principal: AccessPrincipal) {
+        const access = await this.access.project(principal, projectId);
         const tasks = await this.prisma.task.findMany({
-            where: { projectId, sprintId: null, deletedAt: null },
+            where: {
+                projectId,
+                organizationId: access.organizationId,
+                sprintId: null,
+                deletedAt: null,
+            },
             include: {
                 createdBy: { select: userSelect },
                 assignedTo: { select: userSelect },
                 _count: {
                     select: {
-                        subTasks: true,
+                        subTasks: {
+                            where: {
+                                projectId,
+                                organizationId: access.organizationId,
+                                deletedAt: null,
+                            },
+                        },
                         comments: true,
                         attachments: true,
                         watchers: true,
@@ -230,14 +265,28 @@ export class TasksService {
         return tasks.map((t) => new TaskEntity(t));
     }
 
-    async findOne(projectId: string, taskId: string) {
+    async findOne(
+        projectId: string,
+        taskId: string,
+        principal: AccessPrincipal,
+    ) {
+        const access = await this.access.project(principal, projectId);
         const task = await this.prisma.task.findFirst({
-            where: { id: taskId, projectId, deletedAt: null },
+            where: {
+                id: taskId,
+                projectId,
+                organizationId: access.organizationId,
+                deletedAt: null,
+            },
             include: {
                 createdBy: { select: userSelect },
                 assignedTo: { select: userSelect },
                 subTasks: {
-                    where: { deletedAt: null },
+                    where: {
+                        projectId,
+                        organizationId: access.organizationId,
+                        deletedAt: null,
+                    },
                     select: {
                         id: true,
                         number: true,
@@ -248,6 +297,13 @@ export class TasksService {
                     },
                 },
                 dependencies: {
+                    where: {
+                        dependencyTask: {
+                            projectId,
+                            organizationId: access.organizationId,
+                            deletedAt: null,
+                        },
+                    },
                     include: {
                         dependencyTask: {
                             select: {
@@ -260,6 +316,13 @@ export class TasksService {
                     },
                 },
                 dependents: {
+                    where: {
+                        dependentTask: {
+                            projectId,
+                            organizationId: access.organizationId,
+                            deletedAt: null,
+                        },
+                    },
                     include: {
                         dependentTask: {
                             select: {
@@ -273,7 +336,13 @@ export class TasksService {
                 },
                 _count: {
                     select: {
-                        subTasks: true,
+                        subTasks: {
+                            where: {
+                                projectId,
+                                organizationId: access.organizationId,
+                                deletedAt: null,
+                            },
+                        },
                         comments: true,
                         attachments: true,
                         watchers: true,
@@ -293,194 +362,198 @@ export class TasksService {
         userId: string,
         dto: UpdateTaskDto,
     ) {
-        await this.ensureTaskExists(projectId, taskId);
-
-        // Validate parent task if changing
-        if (dto.parentTaskId !== undefined) {
-            if (dto.parentTaskId === taskId) {
-                throw new BadRequestException(
-                    'A task cannot be its own parent',
-                );
-            }
-            if (dto.parentTaskId) {
-                await this.ensureTaskBelongsToProject(
-                    dto.parentTaskId,
-                    projectId,
-                );
-            }
-        }
-
-        const task = await this.prisma.$transaction(async (tx) => {
-            if (dto.status === 'DONE') {
-                // Two blockers completing together must observe each other's
-                // committed state before deciding whether a task is unblocked.
-                await tx.$queryRaw`
-                    SELECT "id" FROM "projects" WHERE "id" = ${projectId}
-                    FOR NO KEY UPDATE
-                `;
-            }
-            const existing = await this.lockTask(projectId, taskId, tx);
-            // Compute the transition from the locked, current task snapshot.
-            const data: any = { ...dto };
-            if (dto.dueDate !== undefined) {
-                const nextDueDate = dto.dueDate ? new Date(dto.dueDate) : null;
-                data.dueDate = nextDueDate;
-                if (dueDateChanged(existing.dueDate, nextDueDate)) {
-                    data.dueSoonNotifiedAt = null;
-                    data.overdueNotifiedAt = null;
+        const task = await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.write',
+            async (tx) => {
+                if (dto.parentTaskId !== undefined) {
+                    if (dto.parentTaskId === taskId) {
+                        throw new BadRequestException(
+                            'A task cannot be its own parent',
+                        );
+                    }
+                    if (dto.parentTaskId) {
+                        await this.ensureTaskBelongsToProject(
+                            dto.parentTaskId,
+                            projectId,
+                            tx,
+                        );
+                    }
                 }
-            }
-            if (dto.status === 'DONE' && existing.status !== 'DONE') {
-                data.completedAt = new Date();
-            } else if (
-                dto.status &&
-                dto.status !== 'DONE' &&
-                existing.completedAt
-            ) {
-                data.completedAt = null;
-            }
-            const updated = await tx.task.update({
-                where: { id: taskId },
-                data,
-                include: {
-                    createdBy: { select: userSelect },
-                    assignedTo: { select: userSelect },
-                },
-            });
 
-            // Log activity for each changed field
-            const activities = this.buildActivityRecords(
-                taskId,
-                userId,
-                existing,
-                dto,
-            );
-            if (activities.length > 0) {
-                await tx.taskActivity.createMany({ data: activities });
-            }
-
-            const statusChanged =
-                !!dto.status && dto.status !== existing.status;
-            const meaningfulFields = activities
-                .map((a) => a.field)
-                .filter((field) => ['priority', 'dueDate'].includes(field));
-            const transitionKey = `task:${taskId}:updated:${randomUUID()}`;
-            if (statusChanged || meaningfulFields.length > 0) {
-                await this.publishTaskEvent(updated, userId, tx, {
-                    eventKey: transitionKey,
-                    type: statusChanged
-                        ? 'TASK_STATUS_CHANGED'
-                        : 'TASK_UPDATED',
-                    title: statusChanged
-                        ? `Task #${existing.number} status changed to ${dto.status}`
-                        : `Task #${existing.number} was updated`,
-                    body: statusChanged
-                        ? `"${updated.title}" was moved to ${dto.status}`
-                        : `"${updated.title}" - changed: ${meaningfulFields.map((field) => TRACKED_FIELD_LABELS[field]).join(', ')}`,
+                const existing = await this.lockTask(projectId, taskId, tx);
+                // Compute the transition from the locked, current task snapshot.
+                const data: any = { ...dto };
+                if (dto.dueDate !== undefined) {
+                    const nextDueDate = dto.dueDate
+                        ? new Date(dto.dueDate)
+                        : null;
+                    data.dueDate = nextDueDate;
+                    if (dueDateChanged(existing.dueDate, nextDueDate)) {
+                        data.dueSoonNotifiedAt = null;
+                        data.overdueNotifiedAt = null;
+                    }
+                }
+                if (dto.status === 'DONE' && existing.status !== 'DONE') {
+                    data.completedAt = new Date();
+                } else if (
+                    dto.status &&
+                    dto.status !== 'DONE' &&
+                    existing.completedAt
+                ) {
+                    data.completedAt = null;
+                }
+                const updated = await tx.task.update({
+                    where: { id: taskId },
+                    data,
+                    include: {
+                        createdBy: { select: userSelect },
+                        assignedTo: { select: userSelect },
+                    },
                 });
-            }
 
-            if (statusChanged && dto.status === 'DONE') {
-                const dependents = await tx.task.findMany({
-                    where: {
-                        projectId,
-                        deletedAt: null,
-                        status: { notIn: ['DONE', 'CANCELLED'] },
-                        dependencies: {
-                            some: { dependencyTaskId: taskId },
-                            none: {
-                                dependencyTask: {
-                                    deletedAt: null,
-                                    status: { not: 'DONE' },
+                // Log activity for each changed field
+                const activities = this.buildActivityRecords(
+                    taskId,
+                    userId,
+                    existing,
+                    dto,
+                );
+                if (activities.length > 0) {
+                    await tx.taskActivity.createMany({ data: activities });
+                }
+
+                const statusChanged =
+                    !!dto.status && dto.status !== existing.status;
+                const meaningfulFields = activities
+                    .map((a) => a.field)
+                    .filter((field) => ['priority', 'dueDate'].includes(field));
+                const transitionKey = `task:${taskId}:updated:${randomUUID()}`;
+                if (statusChanged || meaningfulFields.length > 0) {
+                    await this.publishTaskEvent(updated, userId, tx, {
+                        eventKey: transitionKey,
+                        type: statusChanged
+                            ? 'TASK_STATUS_CHANGED'
+                            : 'TASK_UPDATED',
+                        title: statusChanged
+                            ? `Task #${existing.number} status changed to ${dto.status}`
+                            : `Task #${existing.number} was updated`,
+                        body: statusChanged
+                            ? `"${updated.title}" was moved to ${dto.status}`
+                            : `"${updated.title}" - changed: ${meaningfulFields.map((field) => TRACKED_FIELD_LABELS[field]).join(', ')}`,
+                    });
+                }
+
+                if (statusChanged && dto.status === 'DONE') {
+                    const dependents = await tx.task.findMany({
+                        where: {
+                            projectId,
+                            deletedAt: null,
+                            status: { notIn: ['DONE', 'CANCELLED'] },
+                            dependencies: {
+                                some: { dependencyTaskId: taskId },
+                                none: {
+                                    dependencyTask: {
+                                        deletedAt: null,
+                                        status: { not: 'DONE' },
+                                    },
                                 },
                             },
                         },
-                    },
-                });
-                for (const dependent of dependents) {
-                    await this.publishTaskEvent(dependent, userId, tx, {
-                        eventKey: `${transitionKey}:unblocked:${dependent.id}`,
-                        type: 'TASK_UNBLOCKED',
-                        title: `Task #${dependent.number} is no longer blocked`,
-                        meta: { dependencyTaskId: taskId },
                     });
+                    for (const dependent of dependents) {
+                        await this.publishTaskEvent(dependent, userId, tx, {
+                            eventKey: `${transitionKey}:unblocked:${dependent.id}`,
+                            type: 'TASK_UNBLOCKED',
+                            title: `Task #${dependent.number} is no longer blocked`,
+                            meta: { dependencyTaskId: taskId },
+                        });
+                    }
                 }
-            }
 
-            return updated;
-        });
+                return updated;
+            },
+            dto.status === 'DONE' ? 'NO KEY UPDATE' : 'SHARE',
+        );
 
         return new TaskEntity(task);
     }
 
     async softDelete(projectId: string, taskId: string, userId: string) {
-        await this.ensureTaskExists(projectId, taskId);
+        const task = await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.write',
+            async (tx) => {
+                await this.lockTask(projectId, taskId, tx);
+                const recipients =
+                    await this.notificationsService.taskRecipients(taskId, tx);
+                const deleted = await tx.task.update({
+                    where: { id: taskId },
+                    data: { deletedAt: new Date() },
+                });
 
-        const task = await this.prisma.$transaction(async (tx) => {
-            await this.lockTask(projectId, taskId, tx);
-            const recipients = await this.notificationsService.taskRecipients(
-                taskId,
-                tx,
-            );
-            const deleted = await tx.task.update({
-                where: { id: taskId },
-                data: { deletedAt: new Date() },
-            });
+                await tx.taskActivity.create({
+                    data: {
+                        taskId,
+                        actorId: userId,
+                        action: 'soft-deleted task',
+                    },
+                });
 
-            await tx.taskActivity.create({
-                data: {
-                    taskId,
-                    actorId: userId,
-                    action: 'soft-deleted task',
-                },
-            });
+                await this.publishTaskEvent(
+                    deleted,
+                    userId,
+                    tx,
+                    {
+                        eventKey: `task:${taskId}:deleted:${randomUUID()}`,
+                        type: 'TASK_DELETED',
+                        title: `Task #${deleted.number} was deleted`,
+                        recipients,
+                    },
+                    false,
+                );
 
-            await this.publishTaskEvent(
-                deleted,
-                userId,
-                tx,
-                {
-                    eventKey: `task:${taskId}:deleted:${randomUUID()}`,
-                    type: 'TASK_DELETED',
-                    title: `Task #${deleted.number} was deleted`,
-                    recipients,
-                },
-                false,
-            );
-
-            return deleted;
-        });
+                return deleted;
+            },
+        );
 
         return new TaskEntity(task);
     }
 
     async restore(projectId: string, taskId: string, userId: string) {
-        const restored = await this.prisma.$transaction(async (tx) => {
-            const task = await this.lockTask(projectId, taskId, tx, true);
-            if (!task.deletedAt) {
-                throw new BadRequestException('Task is not deleted');
-            }
-            const updated = await tx.task.update({
-                where: { id: taskId },
-                data: { deletedAt: null },
-            });
+        const restored = await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.restore',
+            async (tx) => {
+                const task = await this.lockTask(projectId, taskId, tx, true);
+                if (!task.deletedAt) {
+                    throw new BadRequestException('Task is not deleted');
+                }
+                const updated = await tx.task.update({
+                    where: { id: taskId },
+                    data: { deletedAt: null },
+                });
 
-            await tx.taskActivity.create({
-                data: {
-                    taskId,
-                    actorId: userId,
-                    action: 'restored task',
-                },
-            });
+                await tx.taskActivity.create({
+                    data: {
+                        taskId,
+                        actorId: userId,
+                        action: 'restored task',
+                    },
+                });
 
-            await this.publishTaskEvent(updated, userId, tx, {
-                eventKey: `task:${taskId}:restored:${randomUUID()}`,
-                type: 'TASK_RESTORED',
-                title: `Task #${updated.number} was restored`,
-            });
+                await this.publishTaskEvent(updated, userId, tx, {
+                    eventKey: `task:${taskId}:restored:${randomUUID()}`,
+                    type: 'TASK_RESTORED',
+                    title: `Task #${updated.number} was restored`,
+                });
 
-            return updated;
-        });
+                return updated;
+            },
+        );
 
         return new TaskEntity(restored);
     }
@@ -493,92 +566,97 @@ export class TasksService {
         userId: string,
         dto: AssignTaskDto,
     ) {
-        await this.ensureTaskExists(projectId, taskId);
-        const project = await this.ensureProjectActive(projectId);
-
-        if (dto.assignedToId) {
-            await this.ensureOrgMember(
-                dto.assignedToId,
-                project.organizationId,
-            );
-        }
-
-        const task = await this.prisma.$transaction(async (tx) => {
-            const existing = await this.lockTask(projectId, taskId, tx);
-            const updated = await tx.task.update({
-                where: { id: taskId },
-                data: { assignedToId: dto.assignedToId },
-                include: {
-                    createdBy: { select: userSelect },
-                    assignedTo: { select: userSelect },
-                },
-            });
-
-            // Auto-watch new assignee
-            if (dto.assignedToId) {
-                await tx.taskWatcher.upsert({
-                    where: {
-                        taskId_userId: { taskId, userId: dto.assignedToId },
-                    },
-                    create: { taskId, userId: dto.assignedToId },
-                    update: {},
-                });
-            }
-
-            // Log activity
-            await tx.taskActivity.create({
-                data: {
-                    taskId,
-                    actorId: userId,
-                    action: dto.assignedToId
-                        ? 'assigned task'
-                        : 'unassigned task',
-                    field: 'assignedToId',
-                    oldValue: existing.assignedToId,
-                    newValue: dto.assignedToId,
-                },
-            });
-
-            if (
-                dto.assignedToId !== undefined &&
-                existing.assignedToId !== dto.assignedToId
-            ) {
-                await this.publishTaskEvent(updated, userId, tx, {
-                    eventKey: `task:${taskId}:assignment:${randomUUID()}`,
-                    type: dto.assignedToId
-                        ? 'TASK_ASSIGNED'
-                        : 'TASK_UNASSIGNED',
-                    title: `Task #${existing.number} assignment changed`,
-                    recipients: [
-                        ...(dto.assignedToId
-                            ? [
-                                  {
-                                      userId: dto.assignedToId,
-                                      type: 'TASK_ASSIGNED' as const,
-                                      title: `You were assigned to task #${existing.number}`,
-                                      email: true,
-                                  },
-                              ]
-                            : []),
-                        ...(existing.assignedToId
-                            ? [
-                                  {
-                                      userId: existing.assignedToId,
-                                      type: 'TASK_UNASSIGNED' as const,
-                                      title: `You are no longer assigned to task #${existing.number}`,
-                                  },
-                              ]
-                            : []),
-                    ],
-                    meta: {
-                        previousAssigneeId: existing.assignedToId,
-                        assignedToId: dto.assignedToId,
+        const task = await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.write',
+            async (tx, project) => {
+                if (dto.assignedToId) {
+                    await this.ensureAssignee(
+                        dto.assignedToId,
+                        project.organizationId,
+                        projectId,
+                        tx,
+                    );
+                }
+                const existing = await this.lockTask(projectId, taskId, tx);
+                const updated = await tx.task.update({
+                    where: { id: taskId },
+                    data: { assignedToId: dto.assignedToId },
+                    include: {
+                        createdBy: { select: userSelect },
+                        assignedTo: { select: userSelect },
                     },
                 });
-            }
 
-            return updated;
-        });
+                // Auto-watch new assignee
+                if (dto.assignedToId) {
+                    await tx.taskWatcher.upsert({
+                        where: {
+                            taskId_userId: { taskId, userId: dto.assignedToId },
+                        },
+                        create: { taskId, userId: dto.assignedToId },
+                        update: {},
+                    });
+                }
+
+                // Log activity
+                await tx.taskActivity.create({
+                    data: {
+                        taskId,
+                        actorId: userId,
+                        action: dto.assignedToId
+                            ? 'assigned task'
+                            : 'unassigned task',
+                        field: 'assignedToId',
+                        oldValue: existing.assignedToId,
+                        newValue: dto.assignedToId,
+                    },
+                });
+
+                if (
+                    dto.assignedToId !== undefined &&
+                    existing.assignedToId !== dto.assignedToId
+                ) {
+                    await this.publishTaskEvent(updated, userId, tx, {
+                        eventKey: `task:${taskId}:assignment:${randomUUID()}`,
+                        type: dto.assignedToId
+                            ? 'TASK_ASSIGNED'
+                            : 'TASK_UNASSIGNED',
+                        title: `Task #${existing.number} assignment changed`,
+                        recipients: [
+                            ...(dto.assignedToId
+                                ? [
+                                      {
+                                          userId: dto.assignedToId,
+                                          type: 'TASK_ASSIGNED' as const,
+                                          title: `You were assigned to task #${existing.number}`,
+                                          email: true,
+                                      },
+                                  ]
+                                : []),
+                            ...(existing.assignedToId
+                                ? [
+                                      {
+                                          userId: existing.assignedToId,
+                                          type: 'TASK_UNASSIGNED' as const,
+                                          title: `You are no longer assigned to task #${existing.number}`,
+                                      },
+                                  ]
+                                : []),
+                        ],
+                        meta: {
+                            previousAssigneeId: existing.assignedToId,
+                            assignedToId: dto.assignedToId,
+                        },
+                    });
+                }
+
+                return updated;
+            },
+            'SHARE',
+            dto.assignedToId ? [dto.assignedToId] : [],
+        );
 
         return new TaskEntity(task);
     }
@@ -591,55 +669,61 @@ export class TasksService {
         userId: string,
         dto: MoveTaskToSprintDto,
     ) {
-        await this.ensureTaskExists(projectId, taskId);
-
-        if (dto.sprintId) {
-            await this.ensureSprintBelongsToProject(dto.sprintId, projectId);
-        }
-
-        const task = await this.prisma.$transaction(async (tx) => {
-            const existing = await this.lockTask(projectId, taskId, tx);
-            const updated = await tx.task.update({
-                where: { id: taskId },
-                data: { sprintId: dto.sprintId },
-                include: {
-                    createdBy: { select: userSelect },
-                    assignedTo: { select: userSelect },
-                },
-            });
-
-            await tx.taskActivity.create({
-                data: {
-                    taskId,
-                    actorId: userId,
-                    action: dto.sprintId
-                        ? 'moved task to sprint'
-                        : 'moved task to backlog',
-                    field: 'sprintId',
-                    oldValue: existing.sprintId,
-                    newValue: dto.sprintId,
-                },
-            });
-
-            if (
-                dto.sprintId !== undefined &&
-                existing.sprintId !== dto.sprintId
-            ) {
-                await this.publishTaskEvent(updated, userId, tx, {
-                    eventKey: `task:${taskId}:sprint:${randomUUID()}`,
-                    type: 'TASK_SPRINT_CHANGED',
-                    title: dto.sprintId
-                        ? `Task #${existing.number} moved to a sprint`
-                        : `Task #${existing.number} moved to backlog`,
-                    meta: {
-                        previousSprintId: existing.sprintId,
-                        sprintId: dto.sprintId,
+        const task = await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.write',
+            async (tx) => {
+                if (dto.sprintId) {
+                    await this.ensureSprintBelongsToProject(
+                        dto.sprintId,
+                        projectId,
+                        tx,
+                    );
+                }
+                const existing = await this.lockTask(projectId, taskId, tx);
+                const updated = await tx.task.update({
+                    where: { id: taskId },
+                    data: { sprintId: dto.sprintId },
+                    include: {
+                        createdBy: { select: userSelect },
+                        assignedTo: { select: userSelect },
                     },
                 });
-            }
 
-            return updated;
-        });
+                await tx.taskActivity.create({
+                    data: {
+                        taskId,
+                        actorId: userId,
+                        action: dto.sprintId
+                            ? 'moved task to sprint'
+                            : 'moved task to backlog',
+                        field: 'sprintId',
+                        oldValue: existing.sprintId,
+                        newValue: dto.sprintId,
+                    },
+                });
+
+                if (
+                    dto.sprintId !== undefined &&
+                    existing.sprintId !== dto.sprintId
+                ) {
+                    await this.publishTaskEvent(updated, userId, tx, {
+                        eventKey: `task:${taskId}:sprint:${randomUUID()}`,
+                        type: 'TASK_SPRINT_CHANGED',
+                        title: dto.sprintId
+                            ? `Task #${existing.number} moved to a sprint`
+                            : `Task #${existing.number} moved to backlog`,
+                        meta: {
+                            previousSprintId: existing.sprintId,
+                            sprintId: dto.sprintId,
+                        },
+                    });
+                }
+
+                return updated;
+            },
+        );
 
         return new TaskEntity(task);
     }
@@ -647,35 +731,53 @@ export class TasksService {
     // ── WATCHERS ────────────────────────────────────────────────────────
 
     async watch(projectId: string, taskId: string, userId: string) {
-        await this.ensureTaskExists(projectId, taskId);
+        await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.subscribe',
+            async (tx) => {
+                await this.ensureTaskExists(projectId, taskId, tx);
 
-        const existing = await this.prisma.taskWatcher.findUnique({
-            where: { taskId_userId: { taskId, userId } },
-        });
+                const existing = await tx.taskWatcher.findUnique({
+                    where: { taskId_userId: { taskId, userId } },
+                });
 
-        if (existing) {
-            throw new ConflictException('You are already watching this task');
-        }
+                if (existing) {
+                    throw new ConflictException(
+                        'You are already watching this task',
+                    );
+                }
 
-        await this.prisma.taskWatcher.create({
-            data: { taskId, userId },
-        });
+                await tx.taskWatcher.create({
+                    data: { taskId, userId },
+                });
+            },
+        );
     }
 
     async unwatch(projectId: string, taskId: string, userId: string) {
-        await this.ensureTaskExists(projectId, taskId);
+        await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.subscribe',
+            async (tx) => {
+                await this.ensureTaskExists(projectId, taskId, tx);
 
-        const existing = await this.prisma.taskWatcher.findUnique({
-            where: { taskId_userId: { taskId, userId } },
-        });
+                const existing = await tx.taskWatcher.findUnique({
+                    where: { taskId_userId: { taskId, userId } },
+                });
 
-        if (!existing) {
-            throw new NotFoundException('You are not watching this task');
-        }
+                if (!existing) {
+                    throw new NotFoundException(
+                        'You are not watching this task',
+                    );
+                }
 
-        await this.prisma.taskWatcher.delete({
-            where: { id: existing.id },
-        });
+                await tx.taskWatcher.delete({
+                    where: { id: existing.id },
+                });
+            },
+        );
     }
 
     // ── DEPENDENCIES ────────────────────────────────────────────────────
@@ -686,70 +788,88 @@ export class TasksService {
         userId: string,
         dto: AddDependencyDto,
     ) {
-        const task = await this.ensureTaskExists(projectId, taskId);
-        await this.ensureTaskBelongsToProject(dto.dependencyTaskId, projectId);
+        const dependency = await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.write',
+            async (tx) => {
+                const task = await this.lockTask(projectId, taskId, tx);
+                await this.ensureTaskBelongsToProject(
+                    dto.dependencyTaskId,
+                    projectId,
+                    tx,
+                );
 
-        if (dto.dependencyTaskId === taskId) {
-            throw new BadRequestException('A task cannot depend on itself');
-        }
+                if (dto.dependencyTaskId === taskId) {
+                    throw new BadRequestException(
+                        'A task cannot depend on itself',
+                    );
+                }
 
-        // Check for existing dependency
-        const existing = await this.prisma.taskDependency.findUnique({
-            where: {
-                dependentTaskId_dependencyTaskId: {
-                    dependentTaskId: taskId,
-                    dependencyTaskId: dto.dependencyTaskId,
-                },
-            },
-        });
-
-        if (existing) {
-            throw new ConflictException('This dependency already exists');
-        }
-
-        // Circular dependency check via BFS
-        await this.checkCircularDependency(taskId, dto.dependencyTaskId);
-
-        const dependency = await this.prisma.$transaction(async (tx) => {
-            const dep = await tx.taskDependency.create({
-                data: {
-                    dependentTaskId: taskId,
-                    dependencyTaskId: dto.dependencyTaskId,
-                },
-                include: {
-                    dependencyTask: {
-                        select: {
-                            id: true,
-                            number: true,
-                            title: true,
-                            status: true,
+                // Check for existing dependency
+                const existing = await tx.taskDependency.findUnique({
+                    where: {
+                        dependentTaskId_dependencyTaskId: {
+                            dependentTaskId: taskId,
+                            dependencyTaskId: dto.dependencyTaskId,
                         },
                     },
-                },
-            });
+                });
 
-            await tx.taskActivity.create({
-                data: {
+                if (existing) {
+                    throw new ConflictException(
+                        'This dependency already exists',
+                    );
+                }
+
+                // Circular dependency check via BFS
+                await this.checkCircularDependency(
                     taskId,
-                    actorId: userId,
-                    action: 'added dependency',
-                    field: 'dependencies',
-                    newValue: dto.dependencyTaskId,
-                },
-            });
+                    dto.dependencyTaskId,
+                    tx,
+                );
 
-            await this.publishTaskEvent(task, userId, tx, {
-                eventKey: `task:${taskId}:dependency:${dep.id}:added`,
-                type: 'TASK_DEPENDENCY_CHANGED',
-                title: `A dependency was added to task #${task.number}`,
-                meta: {
-                    dependencyTaskId: dto.dependencyTaskId,
-                    action: 'added',
-                },
-            });
+                const dep = await tx.taskDependency.create({
+                    data: {
+                        dependentTaskId: taskId,
+                        dependencyTaskId: dto.dependencyTaskId,
+                    },
+                    include: {
+                        dependencyTask: {
+                            select: {
+                                id: true,
+                                number: true,
+                                title: true,
+                                status: true,
+                            },
+                        },
+                    },
+                });
 
-            return dep;
-        });
+                await tx.taskActivity.create({
+                    data: {
+                        taskId,
+                        actorId: userId,
+                        action: 'added dependency',
+                        field: 'dependencies',
+                        newValue: dto.dependencyTaskId,
+                    },
+                });
+
+                await this.publishTaskEvent(task, userId, tx, {
+                    eventKey: `task:${taskId}:dependency:${dep.id}:added`,
+                    type: 'TASK_DEPENDENCY_CHANGED',
+                    title: `A dependency was added to task #${task.number}`,
+                    meta: {
+                        dependencyTaskId: dto.dependencyTaskId,
+                        action: 'added',
+                    },
+                });
+
+                return dep;
+            },
+            'NO KEY UPDATE',
+        );
 
         return new TaskDependencyEntity(dependency);
     }
@@ -760,50 +880,60 @@ export class TasksService {
         depId: string,
         userId: string,
     ) {
-        const task = await this.ensureTaskExists(projectId, taskId);
+        await this.access.withProject(
+            { type: 'USER', userId },
+            projectId,
+            'task.write',
+            async (tx) => {
+                const task = await this.lockTask(projectId, taskId, tx);
 
-        const dependency = await this.prisma.taskDependency.findFirst({
-            where: { id: depId, dependentTaskId: taskId },
-        });
+                const dependency = await tx.taskDependency.findFirst({
+                    where: { id: depId, dependentTaskId: taskId },
+                });
 
-        if (!dependency) {
-            throw new NotFoundException('Dependency not found');
-        }
+                if (!dependency) {
+                    throw new NotFoundException('Dependency not found');
+                }
 
-        await this.prisma.$transaction(async (tx) => {
-            await tx.taskDependency.delete({ where: { id: depId } });
+                await tx.taskDependency.delete({ where: { id: depId } });
 
-            await tx.taskActivity.create({
-                data: {
-                    taskId,
-                    actorId: userId,
-                    action: 'removed dependency',
-                    field: 'dependencies',
-                    oldValue: dependency.dependencyTaskId,
-                },
-            });
+                await tx.taskActivity.create({
+                    data: {
+                        taskId,
+                        actorId: userId,
+                        action: 'removed dependency',
+                        field: 'dependencies',
+                        oldValue: dependency.dependencyTaskId,
+                    },
+                });
 
-            await this.publishTaskEvent(task, userId, tx, {
-                eventKey: `task:${taskId}:dependency:${depId}:removed`,
-                type: 'TASK_DEPENDENCY_CHANGED',
-                title: `A dependency was removed from task #${task.number}`,
-                meta: {
-                    dependencyTaskId: dependency.dependencyTaskId,
-                    action: 'removed',
-                },
-            });
-        });
+                await this.publishTaskEvent(task, userId, tx, {
+                    eventKey: `task:${taskId}:dependency:${depId}:removed`,
+                    type: 'TASK_DEPENDENCY_CHANGED',
+                    title: `A dependency was removed from task #${task.number}`,
+                    meta: {
+                        dependencyTaskId: dependency.dependencyTaskId,
+                        action: 'removed',
+                    },
+                });
+            },
+        );
     }
 
     // ── ACTIVITIES ──────────────────────────────────────────────────────
 
-    async getActivities(projectId: string, taskId: string) {
+    async getActivities(
+        projectId: string,
+        taskId: string,
+        principal: AccessPrincipal,
+    ) {
+        await this.access.project(principal, projectId);
         await this.ensureTaskExists(projectId, taskId);
 
         const activities = await this.prisma.taskActivity.findMany({
             where: { taskId },
             include: {
-                actor: { select: { id: true, name: true, email: true } },
+                actor: { select: { id: true, name: true } },
             },
             orderBy: { createdAt: 'desc' },
         });
@@ -875,8 +1005,12 @@ export class TasksService {
         );
     }
 
-    private async ensureTaskExists(projectId: string, taskId: string) {
-        const task = await this.prisma.task.findFirst({
+    private async ensureTaskExists(
+        projectId: string,
+        taskId: string,
+        db: NotificationDb = this.prisma,
+    ) {
+        const task = await db.task.findFirst({
             where: { id: taskId, projectId, deletedAt: null },
         });
 
@@ -884,27 +1018,12 @@ export class TasksService {
         return task;
     }
 
-    private async ensureProjectActive(projectId: string) {
-        const project = await this.prisma.project.findFirst({
-            where: { id: projectId, deletedAt: null },
-        });
-
-        if (!project) throw new NotFoundException('Project not found');
-
-        if (project.status === 'ARCHIVED') {
-            throw new BadRequestException(
-                'Cannot modify tasks in an archived project',
-            );
-        }
-
-        return project;
-    }
-
     private async ensureSprintBelongsToProject(
         sprintId: string,
         projectId: string,
+        db: NotificationDb = this.prisma,
     ) {
-        const sprint = await this.prisma.sprint.findFirst({
+        const sprint = await db.sprint.findFirst({
             where: { id: sprintId, projectId },
         });
 
@@ -920,8 +1039,9 @@ export class TasksService {
     private async ensureTaskBelongsToProject(
         taskId: string,
         projectId: string,
+        db: NotificationDb = this.prisma,
     ) {
-        const task = await this.prisma.task.findFirst({
+        const task = await db.task.findFirst({
             where: { id: taskId, projectId, deletedAt: null },
         });
 
@@ -934,16 +1054,26 @@ export class TasksService {
         return task;
     }
 
-    private async ensureOrgMember(userId: string, organizationId: string) {
-        const membership = await this.prisma.membership.findUnique({
+    private async ensureAssignee(
+        userId: string,
+        organizationId: string,
+        projectId: string,
+        tx: NotificationDb,
+    ) {
+        const membership = await tx.membership.findFirst({
             where: {
-                userId_organizationId: { userId, organizationId },
+                ...this.access.projectMemberFilter(
+                    organizationId,
+                    projectId,
+                    true,
+                ),
+                userId,
             },
         });
 
         if (!membership) {
             throw new BadRequestException(
-                'User is not a member of this organization',
+                'Assignee must be a current writable project member',
             );
         }
     }
@@ -956,6 +1086,7 @@ export class TasksService {
     private async checkCircularDependency(
         dependentTaskId: string,
         dependencyTaskId: string,
+        db: NotificationDb = this.prisma,
     ) {
         const maxDepth = 50;
         const visited = new Set<string>();
@@ -979,7 +1110,7 @@ export class TasksService {
             visited.add(current);
 
             // Find all tasks that `current` depends on
-            const deps = await this.prisma.taskDependency.findMany({
+            const deps = await db.taskDependency.findMany({
                 where: { dependentTaskId: current },
                 select: { dependencyTaskId: true },
             });

@@ -27,18 +27,24 @@ import {
 import { SprintsService } from './sprints.service';
 import { CreateSprintDto, UpdateSprintDto } from './dto';
 import { SprintEntity } from './entities';
-import { Roles, AuditLog, CurrentUser } from '../../common/decorators';
-import { RolesGuard, OrgMemberGuard } from '../../common/guards';
+import { AuditLog, CurrentUser } from '../../common/decorators';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
 @ApiTags('Sprints')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/sprints')
+@UseGuards(ProjectAccessGuard)
+@ProjectPermission('sprint.manage', { resourceType: 'SPRINT', idParam: 'id' })
 export class SprintsController {
     constructor(private readonly sprintsService: SprintsService) {}
 
     @Get()
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('project.read', {
+        resourceType: 'PROJECT',
+        idParam: 'projectId',
+    })
     @ApiOperation({ summary: 'List all sprints in a project' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiOkResponse({
@@ -48,13 +54,21 @@ export class SprintsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member of the organization' })
     @ApiNotFoundResponse({ description: 'Project not found' })
-    async findAll(@Param('projectId') projectId: string) {
-        return this.sprintsService.findAll(projectId);
+    async findAll(
+        @Param('projectId') projectId: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.sprintsService.findAll(projectId, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 
     @Post()
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @ProjectPermission('sprint.manage', {
+        resourceType: 'PROJECT',
+        idParam: 'projectId',
+    })
     @AuditLog({ entity: 'Sprint' })
     @ApiOperation({ summary: 'Create a new sprint' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -72,12 +86,16 @@ export class SprintsController {
     async create(
         @Param('projectId') projectId: string,
         @Body() dto: CreateSprintDto,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.sprintsService.create(projectId, dto);
+        return this.sprintsService.create(projectId, dto, user.sub);
     }
 
     @Get(':id')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('project.read', {
+        resourceType: 'SPRINT',
+        idParam: 'id',
+    })
     @ApiOperation({ summary: 'Get sprint by ID' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiParam({ name: 'id', description: 'Sprint CUID' })
@@ -91,13 +109,15 @@ export class SprintsController {
     async findOne(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.sprintsService.findOne(projectId, id);
+        return this.sprintsService.findOne(projectId, id, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 
     @Patch(':id')
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @AuditLog({ entity: 'Sprint' })
     @ApiOperation({ summary: 'Update sprint details' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -115,14 +135,13 @@ export class SprintsController {
         @Param('projectId') projectId: string,
         @Param('id') id: string,
         @Body() dto: UpdateSprintDto,
+        @CurrentUser() user: JwtPayload,
     ) {
-        return this.sprintsService.update(projectId, id, dto);
+        return this.sprintsService.update(projectId, id, dto, user.sub);
     }
 
     @Post(':id/start')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @AuditLog({ entity: 'Sprint', action: 'UPDATE' })
     @ApiOperation({
         summary: 'Start a sprint (PLANNED → ACTIVE)',
@@ -152,8 +171,6 @@ export class SprintsController {
 
     @Post(':id/complete')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @AuditLog({ entity: 'Sprint', action: 'UPDATE' })
     @ApiOperation({
         summary: 'Complete a sprint (ACTIVE → COMPLETED)',
@@ -182,8 +199,6 @@ export class SprintsController {
 
     @Delete(':id')
     @HttpCode(HttpStatus.NO_CONTENT)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @AuditLog({ entity: 'Sprint', action: 'DELETE' })
     @ApiOperation({
         summary: 'Delete a sprint',

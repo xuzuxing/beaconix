@@ -15,6 +15,9 @@ import { MonitorStateEntity } from './entities';
 import type { SslCertificateInfo } from '../checker/checkers';
 import { AlertEventsService } from '../alert-events/alert-events.service';
 import type { Prisma } from '../../generated/prisma/client';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
+import { monitoringProjection } from '../../common/authorization/monitoring-projection';
 import type {
     CheckFailureKind,
     CheckMetadata,
@@ -116,6 +119,7 @@ export class StateService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly alerts: AlertEventsService,
+        private readonly access: ProjectAccessService,
     ) {}
 
     /**
@@ -477,7 +481,16 @@ export class StateService {
     }
 
     /** Current state of a monitor plus its trailing 24h uptime/latency summary. */
-    async getSummary(projectId: string, monitorId: string) {
+    async getSummary(
+        projectId: string,
+        monitorId: string,
+        principal: AccessPrincipal,
+    ) {
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'monitor.read',
+        );
         const monitor = await this.prisma.monitor.findFirst({
             where: { id: monitorId, projectId, deletedAt: null },
             include: { state: true },
@@ -507,33 +520,37 @@ export class StateService {
 
         const averageLatency = latency._avg.latency;
 
-        return new MonitorStateEntity({
-            monitorId: monitor.id,
-            name: monitor.name,
-            target: monitor.target,
-            type: monitor.type,
-            executionBlockedReason:
-                monitor.state?.executionBlockedReason ?? null,
-            status: monitor.state?.status ?? MonitorStatus.UNKNOWN,
-            failCount: monitor.state?.failCount ?? 0,
-            lastCheckAt: monitor.state?.lastCheckAt ?? null,
-            lastLatency: monitor.state?.lastLatency ?? null,
-            lastError: monitor.state?.lastError ?? null,
-            lastNotifiedStatus: monitor.state?.lastNotifiedStatus ?? null,
-            sslExpiresAt: monitor.state?.sslExpiresAt ?? null,
-            sslDaysRemaining: monitor.state?.sslDaysRemaining ?? null,
-            sslIssuer: monitor.state?.sslIssuer ?? null,
-            sslSubject: monitor.state?.sslSubject ?? null,
-            sslLastNotifiedAt: monitor.state?.sslLastNotifiedAt ?? null,
-            updatedAt: monitor.state?.updatedAt ?? null,
-            uptimePercent:
-                totalChecks > 0
-                    ? Math.round((successfulChecks / totalChecks) * 10000) / 100
-                    : null,
-            avgLatency:
-                averageLatency === null || averageLatency === undefined
-                    ? null
-                    : Math.round(averageLatency),
-        });
+        return monitoringProjection(
+            new MonitorStateEntity({
+                monitorId: monitor.id,
+                name: monitor.name,
+                target: monitor.target,
+                type: monitor.type,
+                executionBlockedReason:
+                    monitor.state?.executionBlockedReason ?? null,
+                status: monitor.state?.status ?? MonitorStatus.UNKNOWN,
+                failCount: monitor.state?.failCount ?? 0,
+                lastCheckAt: monitor.state?.lastCheckAt ?? null,
+                lastLatency: monitor.state?.lastLatency ?? null,
+                lastError: monitor.state?.lastError ?? null,
+                lastNotifiedStatus: monitor.state?.lastNotifiedStatus ?? null,
+                sslExpiresAt: monitor.state?.sslExpiresAt ?? null,
+                sslDaysRemaining: monitor.state?.sslDaysRemaining ?? null,
+                sslIssuer: monitor.state?.sslIssuer ?? null,
+                sslSubject: monitor.state?.sslSubject ?? null,
+                sslLastNotifiedAt: monitor.state?.sslLastNotifiedAt ?? null,
+                updatedAt: monitor.state?.updatedAt ?? null,
+                uptimePercent:
+                    totalChecks > 0
+                        ? Math.round((successfulChecks / totalChecks) * 10000) /
+                          100
+                        : null,
+                avgLatency:
+                    averageLatency === null || averageLatency === undefined
+                        ? null
+                        : Math.round(averageLatency),
+            }),
+            access.effectiveRole,
+        );
     }
 }

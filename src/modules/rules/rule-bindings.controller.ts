@@ -10,8 +10,10 @@ import {
     UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Roles } from '../../common/decorators';
-import { OrgMemberGuard, RolesGuard } from '../../common/guards';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
+import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { RuleBindingsService } from './rule-bindings.service';
 import { BindRuleDto } from './dto';
 
@@ -19,33 +21,53 @@ import { BindRuleDto } from './dto';
 @ApiTags('Rule Bindings')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/monitors/:monitorId/rule-bindings')
+@UseGuards(ProjectAccessGuard)
+@ProjectPermission('rule.manage', {
+    resourceType: 'MONITOR',
+    idParam: 'monitorId',
+})
 export class RuleBindingsController {
     constructor(private readonly service: RuleBindingsService) {}
 
     @Post()
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @ApiOperation({ summary: 'Bind a rule group to a monitor' })
-    bind(@Param('monitorId') monitorId: string, @Body() dto: BindRuleDto) {
-        return this.service.bind({ monitorId, ...dto });
+    bind(
+        @Param('projectId') projectId: string,
+        @Param('monitorId') monitorId: string,
+        @Body() dto: BindRuleDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.service.bind({ monitorId, ...dto }, projectId, principal);
     }
 
     @Get()
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('monitor.read', {
+        resourceType: 'MONITOR',
+        idParam: 'monitorId',
+    })
     @ApiOperation({ summary: 'List rule bindings of a monitor' })
-    list(@Param('monitorId') monitorId: string) {
-        return this.service.listByMonitor(monitorId);
+    list(
+        @Param('projectId') projectId: string,
+        @Param('monitorId') monitorId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.service.listByMonitor(monitorId, projectId, principal);
     }
 
     @Delete(':ruleGroupId')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @ApiOperation({ summary: 'Unbind a rule group from a monitor' })
     unbind(
+        @Param('projectId') projectId: string,
         @Param('monitorId') monitorId: string,
         @Param('ruleGroupId') ruleGroupId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.service.unbind(monitorId, ruleGroupId);
+        return this.service.unbind(
+            monitorId,
+            ruleGroupId,
+            projectId,
+            principal,
+        );
     }
 }

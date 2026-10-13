@@ -10,7 +10,10 @@ import {
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { OrgMemberGuard } from '../../common/guards';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
+import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { QueryMonitorInsightsDto } from './dto/query-monitor-insights.dto';
 import { MonitorInsightsEntity } from './entities/monitor-insights.entity';
 import { MonitorInsightsService } from './monitor-insights.service';
@@ -18,7 +21,11 @@ import { MonitorInsightsService } from './monitor-insights.service';
 @ApiTags('Monitoring')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/monitors/:monitorId/insights')
-@UseGuards(OrgMemberGuard)
+@UseGuards(ProjectAccessGuard)
+@ProjectPermission('monitoring.read', {
+    resourceType: 'MONITOR',
+    idParam: 'monitorId',
+})
 export class MonitorInsightsController {
     constructor(private readonly insights: MonitorInsightsService) {}
 
@@ -39,7 +46,8 @@ export class MonitorInsightsController {
         @Param('projectId') projectId: string,
         @Param('monitorId') monitorId: string,
         @Query() query: QueryMonitorInsightsDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.insights.get(projectId, monitorId, query);
+        return this.insights.get(projectId, monitorId, query, principal);
     }
 }

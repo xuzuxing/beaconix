@@ -12,12 +12,18 @@ import { MembershipEntity } from './entities';
 import { MembershipRole } from '../../generated/prisma/enums';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ADMIN_ROLES } from '../notifications/notification-event';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import {
+    lockOrganizationMembers,
+    type AccessDb,
+} from '../../common/authorization/access-locks';
 
 @Injectable()
 export class MembershipsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
+        private readonly access: ProjectAccessService,
     ) {}
 
     async findAll(orgId: string) {
@@ -66,12 +72,43 @@ export class MembershipsService {
             throw new BadRequestException('Cannot change your own role');
         }
 
+        const actor = await this.access.organization(
+            { type: 'USER', userId: actorUserId },
+            orgId,
+        );
+        this.assertMemberAdministration(actor, membership.role, dto.role);
         if (membership.role === dto.role)
             return new MembershipEntity(membership);
         const updated = await this.prisma.$transaction(async (tx) => {
+            await lockOrganizationMembers(
+                tx,
+                orgId,
+                [actorUserId, targetUserId],
+                [targetUserId],
+            );
+            const actor = await this.access.organization(
+                { type: 'USER', userId: actorUserId },
+                orgId,
+                tx,
+            );
+            const current = await this.findMembership(orgId, targetUserId, tx);
+            if (
+                current.id !== membership.id ||
+                current.role !== membership.role ||
+                current.projectPermissionsVersion !==
+                    membership.projectPermissionsVersion
+            ) {
+                throw new ConflictException(
+                    'Membership changed; reload and retry',
+                );
+            }
+            this.assertMemberAdministration(actor, current.role, dto.role);
             const claimed = await tx.membership.updateMany({
                 where: { id: membership.id, role: membership.role },
-                data: { role: dto.role },
+                data: {
+                    role: dto.role,
+                    projectPermissionsVersion: { increment: 1 },
+                },
             });
             const updated = await tx.membership.findUniqueOrThrow({
                 where: { id: membership.id },
@@ -92,6 +129,43 @@ export class MembershipsService {
                     'Member role changed; reload and retry',
                 );
             }
+            const beforeGrants = await tx.projectMembership.findMany({
+                where: { membershipId: current.id, organizationId: orgId },
+                select: { projectId: true, role: true },
+                orderBy: { projectId: 'asc' },
+            });
+            if (dto.role === 'VIEWER') {
+                await tx.projectMembership.updateMany({
+                    where: { membershipId: current.id, organizationId: orgId },
+                    data: { role: 'VIEWER' },
+                });
+            }
+            await tx.auditLog.create({
+                data: {
+                    actorId: actorUserId,
+                    organizationId: orgId,
+                    action: 'UPDATE',
+                    entity: 'Membership',
+                    entityId: current.id,
+                    before: {
+                        targetUserId,
+                        role: current.role,
+                        projectPermissionsVersion:
+                            current.projectPermissionsVersion,
+                        projects: beforeGrants,
+                    },
+                    after: {
+                        targetUserId,
+                        role: dto.role,
+                        projectPermissionsVersion:
+                            updated.projectPermissionsVersion,
+                        projects: beforeGrants.map((grant) => ({
+                            projectId: grant.projectId,
+                            role: dto.role === 'VIEWER' ? 'VIEWER' : grant.role,
+                        })),
+                    },
+                },
+            });
             await this.notificationsService.publish(
                 {
                     eventKey: `membership-role:${updated.id}:${toIsoString(updated.updatedAt)}`,
@@ -144,10 +218,48 @@ export class MembershipsService {
         }
 
         await this.prisma.$transaction(async (tx) => {
+            await lockOrganizationMembers(
+                tx,
+                orgId,
+                [actorUserId, targetUserId],
+                [targetUserId],
+                'UPDATE',
+            );
+            const actor = await this.access.organization(
+                { type: 'USER', userId: actorUserId },
+                orgId,
+                tx,
+            );
+            const current = await this.findMembership(orgId, targetUserId, tx);
+            if (
+                current.id !== membership.id ||
+                current.role !== membership.role
+            ) {
+                throw new ConflictException(
+                    'Membership changed; reload and retry',
+                );
+            }
+            this.assertMemberAdministration(actor, current.role);
+            await tx.auditLog.create({
+                data: {
+                    actorId: actorUserId,
+                    organizationId: orgId,
+                    action: 'DELETE',
+                    entity: 'Membership',
+                    entityId: current.id,
+                    before: {
+                        targetUserId,
+                        role: current.role,
+                        projectPermissionsVersion:
+                            current.projectPermissionsVersion,
+                    },
+                },
+            });
             await tx.membership.delete({ where: { id: membership.id } });
             await this.notificationsService.publish(
                 {
                     eventKey: `member-removed:${membership.id}`,
+                    accessScope: 'ACCOUNT',
                     type: 'MEMBER_REMOVED',
                     title: 'You were removed from an organization',
                     resourceType: 'Organization',
@@ -162,6 +274,7 @@ export class MembershipsService {
             await this.notificationsService.publish(
                 {
                     eventKey: `member-removed-admin:${membership.id}`,
+                    accessScope: 'ORGANIZATION',
                     type: 'MEMBER_REMOVED',
                     title: 'A member was removed from the organization',
                     resourceType: 'Organization',
@@ -192,6 +305,35 @@ export class MembershipsService {
         }
 
         await this.prisma.$transaction(async (tx) => {
+            await lockOrganizationMembers(
+                tx,
+                orgId,
+                [userId],
+                [userId],
+                'UPDATE',
+            );
+            await this.access.organization({ type: 'USER', userId }, orgId, tx);
+            const current = await this.findMembership(orgId, userId, tx);
+            if (current.id !== membership.id || current.role === 'OWNER') {
+                throw new ConflictException(
+                    'Membership changed; reload and retry',
+                );
+            }
+            await tx.auditLog.create({
+                data: {
+                    actorId: userId,
+                    organizationId: orgId,
+                    action: 'LEAVE',
+                    entity: 'Membership',
+                    entityId: current.id,
+                    before: {
+                        userId,
+                        role: current.role,
+                        projectPermissionsVersion:
+                            current.projectPermissionsVersion,
+                    },
+                },
+            });
             await tx.membership.delete({ where: { id: membership.id } });
             await this.notificationsService.publish(
                 {
@@ -230,8 +372,31 @@ export class MembershipsService {
         return (membership?.role as MembershipRole) ?? null;
     }
 
-    private async findMembership(orgId: string, userId: string) {
-        const membership = await this.prisma.membership.findUnique({
+    private assertMemberAdministration(
+        actor: {
+            canManageOrganization: boolean;
+            canGrantOrganizationAdmin: boolean;
+        },
+        currentRole: MembershipRole,
+        newRole?: MembershipRole,
+    ) {
+        if (
+            !actor.canManageOrganization ||
+            currentRole === 'OWNER' ||
+            ((currentRole === 'ADMIN' || newRole === 'ADMIN') &&
+                !actor.canGrantOrganizationAdmin)
+        )
+            throw new ForbiddenException(
+                'Insufficient member administration authority',
+            );
+    }
+
+    private async findMembership(
+        orgId: string,
+        userId: string,
+        db: AccessDb = this.prisma,
+    ) {
+        const membership = await db.membership.findUnique({
             include: {
                 user: {
                     select: {

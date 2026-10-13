@@ -13,6 +13,7 @@ import { MonitorType } from '../../../generated/prisma/enums';
 import type { CheckerStrategy } from './checker.interface';
 import { validateHttpMonitorConfig } from '../../monitors/http-monitor-config';
 import { evaluateHttpAssertions } from './http-assertions';
+import { sanitizeMonitoringDiagnostic } from '../../../common/authorization/monitoring-projection';
 
 export interface HttpCheckOptions {
     checkSsl?: boolean;
@@ -86,7 +87,7 @@ export class HttpChecker implements CheckerStrategy {
         try {
             url = new URL(target);
         } catch {
-            return this.failure(0, `Invalid URL "${target}"`);
+            return this.failure(0, 'Invalid URL');
         }
 
         if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -94,6 +95,16 @@ export class HttpChecker implements CheckerStrategy {
                 0,
                 `Unsupported protocol "${url.protocol}" (expected http or https)`,
             );
+        }
+        if (url.username || url.password) {
+            return {
+                ...this.failure(
+                    0,
+                    'HTTP target must not contain URL credentials',
+                ),
+                evaluated: false,
+                failureKind: 'CONFIGURATION',
+            };
         }
 
         const startedAt = Date.now();
@@ -319,7 +330,7 @@ export class HttpChecker implements CheckerStrategy {
         return {
             success: false,
             latency,
-            error,
+            error: sanitizeMonitoringDiagnostic(error),
             checkedAt: new Date(),
             statusCode,
             bodyContains,

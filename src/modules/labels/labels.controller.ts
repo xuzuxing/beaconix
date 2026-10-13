@@ -31,6 +31,10 @@ import { LabelEntity } from './entities';
 import { CurrentUser, Roles, AuditLog } from '../../common/decorators';
 import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
+import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 
 // ── ORG-SCOPED LABELS ───────────────────────────────────────────────────────
 
@@ -47,8 +51,11 @@ export class OrgLabelsController {
     @ApiOkResponse({ type: [LabelEntity], description: 'Org labels' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member of the organization' })
-    async findOrgLabels(@Param('orgId') orgId: string) {
-        return this.labelsService.findOrgLabels(orgId);
+    async findOrgLabels(
+        @Param('orgId') orgId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.labelsService.findOrgLabels(orgId, principal);
     }
 
     @Post()
@@ -77,24 +84,33 @@ export class OrgLabelsController {
 @ApiTags('Labels')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/labels')
+@UseGuards(ProjectAccessGuard)
 export class ProjectLabelsController {
     constructor(private readonly labelsService: LabelsService) {}
 
     @Get()
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('project.read', {
+        resourceType: 'PROJECT',
+        idParam: 'projectId',
+    })
     @ApiOperation({ summary: 'List project-scoped labels' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiOkResponse({ type: [LabelEntity], description: 'Project labels' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member of the organization' })
     @ApiNotFoundResponse({ description: 'Project not found' })
-    async findProjectLabels(@Param('projectId') projectId: string) {
-        return this.labelsService.findProjectLabels(projectId);
+    async findProjectLabels(
+        @Param('projectId') projectId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.labelsService.findProjectLabels(projectId, principal);
     }
 
     @Post()
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @ProjectPermission('label.manage', {
+        resourceType: 'PROJECT',
+        idParam: 'projectId',
+    })
     @AuditLog({ entity: 'Label' })
     @ApiOperation({ summary: 'Create a project-scoped label (Admin+)' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -123,8 +139,7 @@ export class LabelsController {
     constructor(private readonly labelsService: LabelsService) {}
 
     @Patch(':id')
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @UseGuards(OrgMemberGuard)
     @AuditLog({ entity: 'Label' })
     @ApiOperation({ summary: 'Update a label (Admin+)' })
     @ApiParam({ name: 'id', description: 'Label CUID' })
@@ -135,13 +150,16 @@ export class LabelsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role' })
     @ApiNotFoundResponse({ description: 'Label not found' })
-    async update(@Param('id') labelId: string, @Body() dto: UpdateLabelDto) {
-        return this.labelsService.update(labelId, dto);
+    async update(
+        @Param('id') labelId: string,
+        @Body() dto: UpdateLabelDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.labelsService.update(labelId, dto, principal);
     }
 
     @Delete(':id')
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @UseGuards(OrgMemberGuard)
     @HttpCode(HttpStatus.NO_CONTENT)
     @AuditLog({ entity: 'Label', action: 'DELETE' })
     @ApiOperation({ summary: 'Delete a label (Admin+)' })
@@ -150,8 +168,11 @@ export class LabelsController {
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Insufficient role' })
     @ApiNotFoundResponse({ description: 'Label not found' })
-    async remove(@Param('id') labelId: string) {
-        await this.labelsService.remove(labelId);
+    async remove(
+        @Param('id') labelId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        await this.labelsService.remove(labelId, principal);
     }
 }
 
@@ -160,11 +181,12 @@ export class LabelsController {
 @ApiTags('Labels')
 @ApiBearerAuth('access-token')
 @Controller('tasks/:taskId/labels')
+@UseGuards(ProjectAccessGuard)
+@ProjectPermission('task.write', { resourceType: 'TASK', idParam: 'taskId' })
 export class TaskLabelsController {
     constructor(private readonly labelsService: LabelsService) {}
 
     @Post(':labelId')
-    @UseGuards(OrgMemberGuard)
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({ summary: 'Tag a task with a label' })
     @ApiParam({ name: 'taskId', description: 'Task CUID' })
@@ -177,12 +199,12 @@ export class TaskLabelsController {
     async tagTask(
         @Param('taskId') taskId: string,
         @Param('labelId') labelId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        await this.labelsService.tagTask(taskId, labelId);
+        await this.labelsService.tagTask(taskId, labelId, principal);
     }
 
     @Delete(':labelId')
-    @UseGuards(OrgMemberGuard)
     @HttpCode(HttpStatus.NO_CONTENT)
     @ApiOperation({ summary: 'Remove a label from a task' })
     @ApiParam({ name: 'taskId', description: 'Task CUID' })
@@ -194,7 +216,8 @@ export class TaskLabelsController {
     async untagTask(
         @Param('taskId') taskId: string,
         @Param('labelId') labelId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        await this.labelsService.untagTask(taskId, labelId);
+        await this.labelsService.untagTask(taskId, labelId, principal);
     }
 }

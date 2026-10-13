@@ -10,6 +10,7 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { NotificationEvent } from '../notifications/notification-event';
 import { MembershipsService } from './memberships.service';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
 
 const updatedAt = new Date('2026-10-11T08:00:00.000Z');
 
@@ -22,6 +23,7 @@ async function setup(role: MembershipRole = 'MEMBER') {
         joinedAt: new Date('2026-10-01T08:00:00.000Z'),
         updatedAt,
         invitedById: 'inviter',
+        projectPermissionsVersion: 0,
         user: {
             id: 'target',
             name: 'Target',
@@ -32,10 +34,16 @@ async function setup(role: MembershipRole = 'MEMBER') {
     let inTransaction = false;
     let currentMembership = membership;
     const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
         membership: {
             updateMany: jest.fn().mockImplementation(({ data }) => {
                 expect(inTransaction).toBe(true);
-                currentMembership = { ...currentMembership, ...data };
+                currentMembership = {
+                    ...currentMembership,
+                    role: data.role,
+                    projectPermissionsVersion:
+                        currentMembership.projectPermissionsVersion + 1,
+                };
                 return Promise.resolve({ count: 1 });
             }),
             findUniqueOrThrow: jest.fn().mockImplementation(() => {
@@ -43,7 +51,19 @@ async function setup(role: MembershipRole = 'MEMBER') {
                 return Promise.resolve(currentMembership);
             }),
             delete: jest.fn().mockResolvedValue(membership),
+            findUnique: jest.fn().mockResolvedValue(membership),
+            findMany: jest.fn().mockResolvedValue([
+                { id: 'membership', userId: 'target' },
+                { id: 'actor-membership', userId: 'actor' },
+            ]),
         },
+        projectMembership: {
+            updateMany: jest.fn().mockResolvedValue({ count: 2 }),
+            findMany: jest
+                .fn()
+                .mockResolvedValue([{ projectId: 'project', role: 'ADMIN' }]),
+        },
+        auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit' }) },
     };
     const prisma = {
         membership: { findUnique: jest.fn().mockResolvedValue(membership) },
@@ -71,6 +91,15 @@ async function setup(role: MembershipRole = 'MEMBER') {
             MembershipsService,
             { provide: PrismaService, useValue: prisma },
             { provide: NotificationsService, useValue: notifications },
+            {
+                provide: ProjectAccessService,
+                useValue: {
+                    organization: jest.fn().mockResolvedValue({
+                        canManageOrganization: true,
+                        canGrantOrganizationAdmin: true,
+                    }),
+                },
+            },
         ],
     }).compile();
     return {
@@ -123,7 +152,10 @@ describe('MembershipsService collaboration notifications', () => {
         expect(tx.membership.updateMany).toHaveBeenCalledTimes(1);
         expect(tx.membership.updateMany).toHaveBeenCalledWith({
             where: { id: 'membership', role: 'MEMBER' },
-            data: { role: 'ADMIN' },
+            data: {
+                role: 'ADMIN',
+                projectPermissionsVersion: { increment: 1 },
+            },
         });
         expect(tx.membership.findUniqueOrThrow).toHaveBeenCalledWith({
             where: { id: 'membership' },
@@ -162,7 +194,10 @@ describe('MembershipsService collaboration notifications', () => {
             expect(tx.membership.updateMany).toHaveBeenCalledTimes(1);
             expect(tx.membership.updateMany).toHaveBeenCalledWith({
                 where: { id: 'membership', role: 'MEMBER' },
-                data: { role: 'ADMIN' },
+                data: {
+                    role: 'ADMIN',
+                    projectPermissionsVersion: { increment: 1 },
+                },
             });
             expect(notifications.publish).not.toHaveBeenCalled();
             expect(notifications.organizationRecipients).not.toHaveBeenCalled();
@@ -194,8 +229,27 @@ describe('MembershipsService collaboration notifications', () => {
         });
         expect(tx.membership.updateMany).toHaveBeenCalledWith({
             where: { id: 'membership', role: 'MEMBER' },
+            data: {
+                role: 'VIEWER',
+                projectPermissionsVersion: { increment: 1 },
+            },
+        });
+        expect(tx.projectMembership.updateMany).toHaveBeenCalledWith({
+            where: { membershipId: 'membership', organizationId: 'org' },
             data: { role: 'VIEWER' },
         });
+        expect(tx.auditLog.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                data: expect.objectContaining({
+                    before: expect.objectContaining({
+                        projects: [{ projectId: 'project', role: 'ADMIN' }],
+                    }),
+                    after: expect.objectContaining({
+                        projects: [{ projectId: 'project', role: 'VIEWER' }],
+                    }),
+                }),
+            }),
+        );
         expect(event()).toMatchObject({
             eventKey: `membership-role:membership:${updatedAt.toISOString()}`,
             type: 'MEMBER_ROLE_CHANGED',

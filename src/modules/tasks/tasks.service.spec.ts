@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { dueDateChanged } from './tasks.service';
 import { TasksService } from './tasks.service';
 import type { NotificationEvent } from '../notifications/notification-event';
@@ -84,6 +85,17 @@ function setup(overrides = {}) {
             }
         }),
     };
+    Object.assign(tx, {
+        sprint: prisma.sprint,
+        membership: {
+            findFirst: jest.fn().mockResolvedValue({ userId: 'new' }),
+        },
+    });
+    Object.assign(tx.taskDependency, {
+        findUnique: prisma.taskDependency.findUnique,
+        findFirst: prisma.taskDependency.findFirst,
+        findMany: prisma.taskDependency.findMany,
+    });
     const notifications = {
         taskRecipients: jest
             .fn()
@@ -95,7 +107,11 @@ function setup(overrides = {}) {
         }),
     };
     return {
-        service: new TasksService(prisma as never, notifications as never),
+        service: new TasksService(
+            prisma as never,
+            notifications as never,
+            mockProjectAccess(prisma, 'org'),
+        ),
         prisma,
         tx,
         notifications,

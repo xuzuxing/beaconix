@@ -9,6 +9,9 @@ import {
     MonitoringOverviewEntity,
     MonitoringOverviewMonitorEntity,
 } from './entities';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
+import { monitoringProjection } from '../../common/authorization/monitoring-projection';
 
 const OVERVIEW_UPTIME_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RECENT_INCIDENT_LIMIT = 5;
@@ -17,26 +20,67 @@ type MonitorWithState = MonitorModel & { state?: MonitorStateModel | null };
 
 @Injectable()
 export class MonitoringService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly access: ProjectAccessService,
+    ) {}
 
-    async getOrganizationOverview(orgId: string) {
+    async getOrganizationOverview(orgId: string, principal: AccessPrincipal) {
+        const project = await this.access.projectFilter(
+            principal,
+            orgId,
+            this.prisma,
+            'monitoring.read',
+        );
         const monitors = await this.prisma.monitor.findMany({
-            where: { organizationId: orgId, deletedAt: null },
+            where: { organizationId: orgId, deletedAt: null, project },
             include: { state: true },
             orderBy: { createdAt: 'asc' },
         });
 
-        return this.buildOverview(monitors);
+        const roles = new Map<string, 'ADMIN' | 'MEMBER' | 'VIEWER'>();
+        for (const projectId of new Set(
+            monitors.map((monitor) => monitor.projectId),
+        )) {
+            roles.set(
+                projectId,
+                (
+                    await this.access.project(
+                        principal,
+                        projectId,
+                        'monitoring.read',
+                        orgId,
+                    )
+                ).effectiveRole,
+            );
+        }
+        return this.buildOverview(
+            monitors.map((monitor) =>
+                monitoringProjection(monitor, roles.get(monitor.projectId)!),
+            ),
+        );
     }
 
-    async getProjectOverview(projectId: string) {
+    async getProjectOverview(projectId: string, principal: AccessPrincipal) {
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'monitoring.read',
+        );
         const monitors = await this.prisma.monitor.findMany({
-            where: { projectId, deletedAt: null },
+            where: {
+                projectId,
+                organizationId: access.organizationId,
+                deletedAt: null,
+            },
             include: { state: true },
             orderBy: { createdAt: 'asc' },
         });
 
-        return this.buildOverview(monitors);
+        return monitoringProjection(
+            await this.buildOverview(monitors),
+            access.effectiveRole,
+        );
     }
 
     // -- Helpers ---------------------------------------------------------

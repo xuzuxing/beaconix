@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { CommentsService } from './comments.service';
 
 function setup(parentAuthor: string | null = 'reply-author') {
@@ -56,8 +57,13 @@ function setup(parentAuthor: string | null = 'reply-author') {
             return Promise.resolve();
         }),
     };
+    Object.assign(tx, { task: prisma.task });
     return {
-        service: new CommentsService(prisma as never, notifications as never),
+        service: new CommentsService(
+            prisma as never,
+            notifications as never,
+            mockProjectAccess(prisma, 'org'),
+        ),
         prisma,
         tx,
         notifications,
@@ -98,7 +104,17 @@ describe('CommentsService collaboration notifications', () => {
         });
         expect(notifications.taskRecipients).toHaveBeenCalledWith('task', tx);
         expect(tx.membership.findMany).toHaveBeenCalledWith({
-            where: { organizationId: 'org' },
+            where: {
+                organizationId: 'org',
+                user: { isActive: true, deletedAt: null },
+                OR: [
+                    { role: { in: ['OWNER', 'ADMIN'] } },
+                    {
+                        role: { in: ['MEMBER', 'VIEWER'] },
+                        projectMemberships: { some: { projectId: 'project' } },
+                    },
+                ],
+            },
             select: { userId: true, user: { select: { name: true } } },
         });
     });

@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { NotFoundException } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import {
@@ -59,6 +60,7 @@ const checkResult = {
 
 function createService() {
     const prisma = {
+        auditLog: { create: jest.fn().mockResolvedValue({}) },
         monitor: { findFirst: jest.fn(), findMany: jest.fn() },
         checkLog: {
             findFirst: jest.fn(),
@@ -158,6 +160,7 @@ function createService() {
         findBindingsForMonitor: jest.fn().mockResolvedValue([]),
     };
 
+    const access = mockProjectAccess(prisma);
     const service = new CheckerService(
         prisma as unknown as PrismaService,
         stateService as unknown as StateService,
@@ -167,6 +170,7 @@ function createService() {
         systemProbeScheduler as never,
         ruleEvaluator as never,
         ruleGroups as never,
+        access,
     );
 
     return {
@@ -182,6 +186,7 @@ function createService() {
         dnsChecker,
         pingChecker,
         quotaService,
+        access,
     };
 }
 
@@ -211,7 +216,10 @@ describe('CheckerService', () => {
                     failureKind,
                     meta,
                 });
-                await service.checkMonitorForProject('project-1', 'monitor-1');
+                await service.checkMonitorForProject('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                });
                 expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
                 expect(stateService.record).toHaveBeenCalledWith(
                     'monitor-1',
@@ -258,7 +266,10 @@ describe('CheckerService', () => {
                     error: 'Target failed',
                     failureKind: 'ASSERTION',
                 });
-                await service.checkMonitorForProject('project-1', 'monitor-1');
+                await service.checkMonitorForProject('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                });
                 expect(checker.run).toHaveBeenCalledTimes(1);
                 expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
                 expect(stateService.record).toHaveBeenCalledWith(
@@ -286,7 +297,10 @@ describe('CheckerService', () => {
                 success: false,
                 failureKind: 'ASSERTION',
             });
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
             expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
             prisma.monitor.findFirst.mockResolvedValue({
                 ...monitorRow,
@@ -296,7 +310,10 @@ describe('CheckerService', () => {
                 ...checkResult,
                 success: false,
             });
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
             expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
         });
 
@@ -313,7 +330,10 @@ describe('CheckerService', () => {
                 new Error('not allowed'),
             );
             await expect(
-                service.checkMonitorForProject('project-1', 'monitor-1'),
+                service.checkMonitorForProject('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).rejects.toThrow('not allowed');
             expect(httpChecker.check).not.toHaveBeenCalled();
             expect(stateService.record).not.toHaveBeenCalled();
@@ -341,7 +361,10 @@ describe('CheckerService', () => {
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
             stateService.record.mockResolvedValue(null);
             expect(
-                await service.checkMonitorForProject('project-1', 'monitor-1'),
+                await service.checkMonitorForProject('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).toMatchObject({
                 applied: false,
                 evaluated: false,
@@ -367,6 +390,7 @@ describe('CheckerService', () => {
             const result = await service.checkMonitorForProject(
                 'project-1',
                 'monitor-1',
+                { type: 'USER', userId: 'user-1' },
             );
             expect(result).toMatchObject({
                 applied: false,
@@ -384,12 +408,43 @@ describe('CheckerService', () => {
                 enabled: false,
             });
             await expect(
-                service.checkMonitorForProject('project-1', 'monitor-1'),
+                service.checkMonitorForProject('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).rejects.toThrow('paused');
             expect(httpChecker.check).not.toHaveBeenCalled();
         });
     });
     describe('checkMonitorForProject', () => {
+        it.each([true, false])(
+            'does not disclose response snippets to MEMBER (success=%s)',
+            async (success) => {
+                const { service, prisma, httpChecker, access } =
+                    createService();
+                prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+                httpChecker.check.mockResolvedValue({
+                    ...checkResult,
+                    success,
+                    bodyContains: 'sensitive-marker',
+                });
+                (access.project as jest.Mock).mockResolvedValue({
+                    effectiveRole: 'MEMBER',
+                    organizationId: 'org-1',
+                    projectId: 'project-1',
+                });
+                const response = await service.checkMonitorForProject(
+                    'project-1',
+                    'monitor-1',
+                    { type: 'USER', userId: 'user-1' },
+                );
+                expect(response.success).toBe(success);
+                expect(JSON.stringify(response)).not.toContain(
+                    'sensitive-marker',
+                );
+                expect(response).not.toHaveProperty('bodyContains');
+            },
+        );
         it('runs an HTTP check and leaves delivery to the transactional outbox', async () => {
             const {
                 service,
@@ -403,12 +458,14 @@ describe('CheckerService', () => {
             const result = await service.checkMonitorForProject(
                 'project-1',
                 'monitor-1',
+                { type: 'USER', userId: 'user-1' },
             );
 
             expect(prisma.monitor.findFirst).toHaveBeenCalledWith({
                 where: {
                     id: 'monitor-1',
                     projectId: 'project-1',
+                    organizationId: 'org-1',
                     deletedAt: null,
                 },
             });
@@ -496,6 +553,7 @@ describe('CheckerService', () => {
             const result = await service.checkMonitorForProject(
                 'project-1',
                 'monitor-1',
+                { type: 'USER', userId: 'user-1' },
             );
 
             expect(notifierService.notifyTransition).not.toHaveBeenCalled();
@@ -515,7 +573,10 @@ describe('CheckerService', () => {
                 target: 'db.internal:5432',
             });
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(tcpChecker.check).toHaveBeenCalledWith(
                 'db.internal:5432',
@@ -543,7 +604,10 @@ describe('CheckerService', () => {
                 ssl,
             });
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(httpChecker.check).toHaveBeenCalledWith(
                 'https://api.example.com/health',
@@ -582,7 +646,10 @@ describe('CheckerService', () => {
                 },
             ]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.probeResult.findMany).toHaveBeenCalledWith({
                 where: {
@@ -652,7 +719,10 @@ describe('CheckerService', () => {
                     },
                 ]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.probeResult.findMany).toHaveBeenNthCalledWith(2, {
                 where: {
@@ -712,7 +782,10 @@ describe('CheckerService', () => {
                 },
             ]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
             expect(stateService.record).toHaveBeenCalledWith(
@@ -747,7 +820,10 @@ describe('CheckerService', () => {
                 },
             ]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(stateService.record).toHaveBeenCalledWith(
                 'monitor-1',
@@ -763,7 +839,10 @@ describe('CheckerService', () => {
             prisma.monitor.findFirst.mockResolvedValue(null);
 
             await expect(
-                service.checkMonitorForProject('project-1', 'monitor-1'),
+                service.checkMonitorForProject('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).rejects.toThrow(NotFoundException);
         });
     });
@@ -1163,10 +1242,16 @@ describe('CheckerService', () => {
                     page: 1,
                     limit: 5,
                 },
+                { type: 'USER', userId: 'user-1' },
             );
 
             expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
-                where: { monitorId: 'monitor-1', success: false },
+                where: {
+                    monitorId: 'monitor-1',
+                    organizationId: 'org-1',
+                    projectId: 'project-1',
+                    success: false,
+                },
                 orderBy: { checkedAt: 'desc' },
                 skip: 0,
                 take: 5,
@@ -1180,7 +1265,12 @@ describe('CheckerService', () => {
             prisma.monitor.findFirst.mockResolvedValue(null);
 
             await expect(
-                service.listCheckLogs('project-1', 'monitor-1', {}),
+                service.listCheckLogs(
+                    'project-1',
+                    'monitor-1',
+                    {},
+                    { type: 'USER', userId: 'user-1' },
+                ),
             ).rejects.toThrow(NotFoundException);
         });
     });
@@ -1223,7 +1313,10 @@ describe('CheckerService', () => {
                 { ruleMatched: false },
             ]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.checkLog.findMany).not.toHaveBeenCalled();
             expect(
@@ -1249,7 +1342,10 @@ describe('CheckerService', () => {
                 { ruleMatched: true },
             ]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(
                 notifierService.notifyAvailabilityAlert,
@@ -1272,7 +1368,10 @@ describe('CheckerService', () => {
                 Array.from({ length: 10 }, () => ({ ruleMatched: false })),
             );
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(
                 notifierService.notifyAvailabilityRecovery,
@@ -1297,7 +1396,10 @@ describe('CheckerService', () => {
                 { ruleMatched: false },
             ]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(
                 notifierService.notifyAvailabilityAlert,
@@ -1322,7 +1424,10 @@ describe('CheckerService', () => {
                 { ruleMatched: true },
             ]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(
                 notifierService.notifyAvailabilityAlert,
@@ -1341,7 +1446,10 @@ describe('CheckerService', () => {
                 recordWith({ status: 'DOWN', failCount: 3 }),
             );
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.checkLog.findMany).not.toHaveBeenCalled();
             expect(
@@ -1398,7 +1506,10 @@ describe('CheckerService', () => {
             ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
             ruleEvaluator.evaluate.mockReturnValue(true);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(ruleGroups.findBindingsForMonitor).toHaveBeenCalledWith(
                 'monitor-1',
@@ -1433,7 +1544,10 @@ describe('CheckerService', () => {
             ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
             ruleEvaluator.evaluate.mockReturnValue(false);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(stateService.record).toHaveBeenCalledWith(
                 'monitor-1',
@@ -1455,7 +1569,10 @@ describe('CheckerService', () => {
             });
             ruleGroups.findBindingsForMonitor.mockResolvedValue([]);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(ruleEvaluator.evaluate).not.toHaveBeenCalled();
             expect(stateService.record).toHaveBeenCalledWith(
@@ -1492,7 +1609,10 @@ describe('CheckerService', () => {
             ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
             ruleEvaluator.evaluate.mockReturnValue(true);
 
-            await service.checkMonitorForProject('project-1', 'monitor-1');
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(ruleEvaluator.evaluate).toHaveBeenCalledWith(
                 binding.ruleGroup.tree,

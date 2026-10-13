@@ -311,7 +311,7 @@ describe('TwoFactorService', () => {
                 expect.objectContaining({ to: 'john@example.com' }),
                 'two-factor-enabled:ch1',
                 prisma,
-                { userId: 'u1' },
+                { accessScope: 'ACCOUNT', userId: 'u1' },
             );
             expect(notifications.publish).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -441,7 +441,7 @@ describe('TwoFactorService', () => {
                 expect.objectContaining({ ipAddress: '127.0.0.1' }),
                 'two-factor-recovery-code-used:rc1',
                 prisma,
-                { userId: 'u1' },
+                { accessScope: 'ACCOUNT', userId: 'u1' },
             );
         });
 
@@ -526,7 +526,7 @@ describe('TwoFactorService', () => {
                 expect.objectContaining({ to: 'john@example.com' }),
                 expect.stringContaining('two-factor-disabled:u1:'),
                 prisma,
-                { userId: 'u1' },
+                { accessScope: 'ACCOUNT', userId: 'u1' },
             );
         });
     });
@@ -611,7 +611,7 @@ describe('TwoFactorService', () => {
                 expect.objectContaining({ to: 'john@example.com' }),
                 'two-factor-recovery-code-used:rc1',
                 prisma,
-                { userId: 'u1' },
+                { accessScope: 'ACCOUNT', userId: 'u1' },
             );
             expect(notifications.publish.mock.calls[1][0].email).toBe(true);
             const notices = JSON.stringify(notifications.publish.mock.calls);
@@ -647,7 +647,10 @@ describe('TwoFactorService', () => {
                 notifications.enqueueEmail.mock.calls.map(
                     ([, , , , audience]) => audience,
                 ),
-            ).toEqual([{ userId: 'u1' }, { userId: 'u1' }]);
+            ).toEqual([
+                { accessScope: 'ACCOUNT', userId: 'u1' },
+                { accessScope: 'ACCOUNT', userId: 'u1' },
+            ]);
         });
 
         it('rejects a recovery code already claimed concurrently without sending notices', async () => {

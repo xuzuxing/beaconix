@@ -171,6 +171,7 @@ export class PaymentService {
                 {
                     eventKey: `payment-succeeded:${payment.id}`,
                     type: NotificationType.PAYMENT_SUCCEEDED,
+                    accessScope: 'ORGANIZATION',
                     title: 'Payment received',
                     body: 'Your subscription payment has been confirmed.',
                     organizationId: payment.order.organizationId,
@@ -188,6 +189,7 @@ export class PaymentService {
                     type: activation.renewed
                         ? NotificationType.SUBSCRIPTION_RENEWED
                         : NotificationType.SUBSCRIPTION_ACTIVATED,
+                    accessScope: 'ORGANIZATION',
                     title: activation.renewed
                         ? 'Subscription renewed'
                         : 'Subscription activated',

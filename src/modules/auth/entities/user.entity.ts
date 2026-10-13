@@ -21,6 +21,9 @@ export class UserEntity {
     @ApiProperty({ enum: ['SUPER_ADMIN', 'USER'], example: 'USER' })
     globalRole: GlobalRole;
 
+    @Exclude()
+    platformAuthorityVersion?: number;
+
     @ApiProperty({ example: true })
     isActive: boolean;
 
@@ -44,5 +47,6 @@ export class UserEntity {
 
     constructor(partial: Partial<UserEntity>) {
         Object.assign(this, partial);
+        delete this.platformAuthorityVersion;
     }
 }

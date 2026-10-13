@@ -42,6 +42,8 @@ import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 @ApiTags('Probes')
 @ApiBearerAuth('access-token')
 @Controller('organizations/:orgId/probes')
+@UseGuards(RolesGuard)
+@Roles('ADMIN')
 export class ProbesController {
     constructor(
         private readonly probesService: ProbesService,

@@ -11,7 +11,10 @@ import { MonitorStatus, MonitorType } from '../../src/generated/prisma/enums';
 import { StateService } from '../../src/modules/state/state.service';
 import { AlertEventsService } from '../../src/modules/alert-events/alert-events.service';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service';
+import { NotificationAccessService } from '../../src/modules/notifications/notification-access.service';
 import type { CheckMetadata } from '../../src/modules/checker/checkers/check-result';
+import { ProjectAccessService } from '../../src/common/authorization/project-access.service';
+import { systemPrincipal } from '../../src/common/authorization/access.types';
 import {
     addLocalMigrations,
     assertEmptyDatabase,
@@ -171,10 +174,13 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
         );
         await prisma.$connect();
         const db = prisma;
+        const access = new ProjectAccessService(db);
         const notifications = new NotificationsService(
             db,
             { kick: () => undefined } as never,
             { getStream: () => undefined } as never,
+            new NotificationAccessService(db, access),
+            access,
         );
         await db.membership.create({
             data: {
@@ -185,7 +191,8 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
         });
         const state = new StateService(
             db,
-            new AlertEventsService(db, notifications),
+            new AlertEventsService(db, notifications, access),
+            access,
         );
         const createMonitor = (type: MonitorType = MonitorType.HTTP) =>
             db.monitor.create({
@@ -518,6 +525,7 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
                 const summary = await state.getSummary(
                     'fixture-project',
                     monitor.id,
+                    systemPrincipal('monitor integration state fixture'),
                 );
                 assert.equal(summary.uptimePercent, 100);
                 assert.equal(summary.avgLatency, 20);
@@ -548,7 +556,8 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
                 assert.ok(token);
                 const restarted = new StateService(
                     db,
-                    new AlertEventsService(db, notifications),
+                    new AlertEventsService(db, notifications, access),
+                    access,
                 );
                 assert.equal(
                     await restarted.claimAvailabilityAlert(

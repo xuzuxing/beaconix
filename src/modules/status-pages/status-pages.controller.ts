@@ -31,6 +31,8 @@ import { StatusPagesService } from './status-pages.service';
 @ApiTags('Status Pages')
 @ApiBearerAuth('access-token')
 @Controller('organizations/:orgId/status-pages')
+@UseGuards(RolesGuard)
+@Roles('ADMIN')
 export class StatusPagesController {
     constructor(private readonly statusPagesService: StatusPagesService) {}
 

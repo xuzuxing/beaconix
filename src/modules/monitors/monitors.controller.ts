@@ -27,17 +27,25 @@ import {
 import { MonitorsService } from './monitors.service';
 import { CreateMonitorDto, UpdateMonitorDto } from './dto';
 import { MonitorEntity } from './entities';
-import { Roles, AuditLog } from '../../common/decorators';
-import { RolesGuard, OrgMemberGuard } from '../../common/guards';
+import { AuditLog } from '../../common/decorators';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
+import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 
 @ApiTags('Monitors')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/monitors')
+@UseGuards(ProjectAccessGuard)
+@ProjectPermission('monitor.manage', { resourceType: 'MONITOR', idParam: 'id' })
 export class MonitorsController {
     constructor(private readonly monitorsService: MonitorsService) {}
 
     @Get()
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('monitor.read', {
+        resourceType: 'PROJECT',
+        idParam: 'projectId',
+    })
     @ApiOperation({ summary: 'List all monitors in the project' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiOkResponse({
@@ -46,13 +54,18 @@ export class MonitorsController {
     })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member' })
-    async findAll(@Param('projectId') projectId: string) {
-        return this.monitorsService.findAll(projectId);
+    async findAll(
+        @Param('projectId') projectId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.monitorsService.findAll(projectId, principal);
     }
 
     @Post()
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @ProjectPermission('monitor.manage', {
+        resourceType: 'PROJECT',
+        idParam: 'projectId',
+    })
     @AuditLog({ entity: 'Monitor' })
     @ApiOperation({ summary: 'Create a new monitor' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -70,12 +83,16 @@ export class MonitorsController {
     async create(
         @Param('projectId') projectId: string,
         @Body() dto: CreateMonitorDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.create(projectId, dto);
+        return this.monitorsService.create(projectId, dto, principal);
     }
 
     @Get(':id')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('monitor.read', {
+        resourceType: 'MONITOR',
+        idParam: 'id',
+    })
     @ApiOperation({ summary: 'Get monitor by ID' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiParam({ name: 'id', description: 'Monitor CUID' })
@@ -89,13 +106,12 @@ export class MonitorsController {
     async findOne(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.findOne(projectId, id);
+        return this.monitorsService.findOne(projectId, id, principal);
     }
 
     @Patch(':id')
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @AuditLog({ entity: 'Monitor' })
     @ApiOperation({ summary: 'Update monitor' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -116,14 +132,13 @@ export class MonitorsController {
         @Param('projectId') projectId: string,
         @Param('id') id: string,
         @Body() dto: UpdateMonitorDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.update(projectId, id, dto);
+        return this.monitorsService.update(projectId, id, dto, principal);
     }
 
     @Post(':id/pause')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     // AuditAction has no PAUSE value, so the toggle is logged as an update.
     @AuditLog({ entity: 'Monitor', action: 'UPDATE' })
     @ApiOperation({
@@ -142,14 +157,13 @@ export class MonitorsController {
     async pause(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.pause(projectId, id);
+        return this.monitorsService.pause(projectId, id, principal);
     }
 
     @Post(':id/resume')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @AuditLog({ entity: 'Monitor', action: 'UPDATE' })
     @ApiOperation({ summary: 'Resume a paused monitor' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -165,14 +179,13 @@ export class MonitorsController {
     async resume(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.resume(projectId, id);
+        return this.monitorsService.resume(projectId, id, principal);
     }
 
     @Delete(':id')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
     @AuditLog({ entity: 'Monitor', action: 'DELETE' })
     @ApiOperation({ summary: 'Soft delete monitor' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -187,14 +200,17 @@ export class MonitorsController {
     async remove(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.softDelete(projectId, id);
+        return this.monitorsService.softDelete(projectId, id, principal);
     }
 
     @Post(':id/restore')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @ProjectPermission('monitor.restore', {
+        resourceType: 'MONITOR',
+        idParam: 'id',
+    })
     @AuditLog({ entity: 'Monitor', action: 'RESTORE' })
     @ApiOperation({ summary: 'Restore a soft-deleted monitor' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
@@ -210,14 +226,17 @@ export class MonitorsController {
     async restore(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.restore(projectId, id);
+        return this.monitorsService.restore(projectId, id, principal);
     }
 
     @Post(':id/test-alert')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(RolesGuard)
-    @Roles('ADMIN')
+    @ProjectPermission('monitor.test-alert', {
+        resourceType: 'MONITOR',
+        idParam: 'id',
+    })
     @ApiOperation({
         summary: 'Send a test availability alert to the bound channels',
     })
@@ -230,7 +249,8 @@ export class MonitorsController {
     async sendTestAlert(
         @Param('projectId') projectId: string,
         @Param('id') id: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.monitorsService.sendTestAlert(projectId, id);
+        return this.monitorsService.sendTestAlert(projectId, id, principal);
     }
 }

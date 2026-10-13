@@ -51,7 +51,7 @@ export class AttachmentEntity {
     createdAt: Date;
 
     // Optional relation
-    uploadedBy?: { id: string; name: string; email: string } | null;
+    uploadedBy?: { id: string; name: string } | null;
 
     constructor(partial: Partial<AttachmentEntity>) {
         Object.assign(this, partial);

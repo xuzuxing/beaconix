@@ -26,7 +26,7 @@ export class TaskActivityEntity {
     createdAt: Date;
 
     // Optional relation
-    actor?: { id: string; name: string; email: string } | null;
+    actor?: { id: string; name: string } | null;
 
     constructor(partial: Partial<TaskActivityEntity>) {
         Object.assign(this, partial);

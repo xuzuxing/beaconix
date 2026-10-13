@@ -1,8 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createReadStream } from 'node:fs';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, relative, isAbsolute, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { StorageConfig } from '../../../config';
 import { SettingsService } from '../../settings';
@@ -11,12 +11,14 @@ import {
     DownloadResult,
     PutObjectInput,
     PutObjectResult,
+    StorageVisibility,
 } from './storage.types';
 import { buildObjectKey, buildPublicObjectKey } from './filename.util';
 
 @Injectable()
 export class LocalStorageProvider implements AttachmentStorageProvider {
     private readonly root: string;
+    private readonly privateRoot: string;
 
     constructor(
         private readonly configService: ConfigService,
@@ -24,11 +26,25 @@ export class LocalStorageProvider implements AttachmentStorageProvider {
     ) {
         const storage = this.configService.get<StorageConfig>('storage')!;
         this.root = resolve(process.cwd(), storage.localRoot);
+        this.privateRoot = resolve(
+            process.cwd(),
+            storage.privateRoot || `${storage.localRoot}-private`,
+        );
+        if (
+            this.contains(this.root, this.privateRoot) ||
+            this.contains(this.privateRoot, this.root)
+        ) {
+            throw new BadRequestException(
+                'Public and private storage roots must not overlap',
+            );
+        }
     }
 
     async putObject(input: PutObjectInput): Promise<PutObjectResult> {
         const objectId = randomUUID();
-        const key = input.publicUpload
+        const publicUpload =
+            input.visibility === 'PUBLIC' && input.publicUpload === true;
+        const key = publicUpload
             ? buildPublicObjectKey({
                   userId: input.uploadedById ?? 'unknown',
                   directory: input.directory,
@@ -41,43 +57,70 @@ export class LocalStorageProvider implements AttachmentStorageProvider {
                   objectId,
                   filename: input.filename,
               });
-        const target = this.resolveKey(key);
+        const target = this.resolveKey(
+            key,
+            publicUpload ? this.root : this.privateRoot,
+        );
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, input.buffer);
 
         return {
             provider: 'LOCAL',
             key,
-            url: await this.publicUrl(key),
+            url: publicUpload ? await this.publicUrl(key) : '',
             checksum: createHash('sha256').update(input.buffer).digest('hex'),
         };
     }
 
     async deleteObject(key: string): Promise<void> {
-        const target = this.resolveKey(key);
+        const target = this.resolveKey(
+            key,
+            key.startsWith('organizations/') ? this.privateRoot : this.root,
+        );
         await unlink(target).catch((error: NodeJS.ErrnoException) => {
             if (error.code !== 'ENOENT') throw error;
         });
     }
 
-    async getDownload(key: string): Promise<DownloadResult> {
-        const publicUrl = await this.publicUrl(key);
+    async getDownload(
+        key: string,
+        _bucket?: string | null,
+        visibility: StorageVisibility = 'PRIVATE',
+    ): Promise<DownloadResult> {
+        const publicUrl =
+            visibility === 'PUBLIC' ? await this.publicUrl(key) : '';
         if (publicUrl) {
             return { type: 'redirect', url: publicUrl };
         }
 
         return {
             type: 'stream',
-            stream: createReadStream(this.resolveKey(key)),
+            stream: createReadStream(
+                this.resolveKey(
+                    key,
+                    visibility === 'PRIVATE' ? this.privateRoot : this.root,
+                ),
+            ),
         };
     }
 
-    private resolveKey(key: string): string {
-        const target = resolve(this.root, key);
-        if (!target.startsWith(this.root)) {
+    private resolveKey(key: string, root: string): string {
+        const target = resolve(root, key);
+        const within = relative(root, target);
+        if (!within || within.startsWith('..') || isAbsolute(within)) {
             throw new Error('Resolved attachment path escapes storage root');
         }
         return target;
+    }
+
+    private contains(root: string, target: string): boolean {
+        const within = relative(root, target);
+        return (
+            !within ||
+            (within !== '..' &&
+                !within.startsWith(`..${sep}`) &&
+                !isAbsolute(within))
+        );
     }
 
     private async publicUrl(key: string): Promise<string> {

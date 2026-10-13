@@ -5,6 +5,7 @@ import type { PrismaService } from '../../infra/database/prisma.service';
 import type { NotificationDeliveryService } from './notification-delivery.service';
 import type { NotificationStreamService } from './notification-stream.service';
 import type { NotificationDb, NotificationEvent } from './notification-event';
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 
 function fixture() {
     const notices = new Map<string, Record<string, unknown>>();
@@ -64,21 +65,47 @@ function fixture() {
                 return Promise.resolve(job);
             }),
         },
-        invitation: { findMany: jest.fn().mockResolvedValue([]) },
+        invitation: {
+            findMany: jest.fn().mockResolvedValue([]),
+            findUnique: jest.fn().mockResolvedValue({
+                id: 'invite',
+                organizationId: 'org',
+                email: 'invitee@example.test',
+            }),
+        },
         membership: {
             findMany: jest.fn().mockResolvedValue([{ userId: 'recipient' }]),
         },
         task: { findUnique: jest.fn() },
-        project: { findUnique: jest.fn() },
+        project: {
+            findUnique: jest.fn(),
+            findFirst: jest.fn().mockResolvedValue({ id: 'project' }),
+        },
         $transaction: jest.fn(),
     };
     db.$transaction.mockImplementation((work) => work(db));
     const delivery = { kick: jest.fn() };
     const streams = { getStream: jest.fn() };
+    const authorization = {
+        eligible: jest.fn().mockResolvedValue(true),
+        visibleWhere: jest.fn().mockImplementation((userId) => ({
+            userId,
+            accessScope: { not: 'UNKNOWN' },
+        })),
+        withWrite: jest
+            .fn()
+            .mockImplementation((userId, work) =>
+                db.$transaction((tx) =>
+                    work(tx, { userId, accessScope: { not: 'UNKNOWN' } }),
+                ),
+            ),
+    };
     const service = new NotificationsService(
         db as unknown as PrismaService,
         delivery as unknown as NotificationDeliveryService,
         streams as unknown as NotificationStreamService,
+        authorization as never,
+        mockProjectAccess(db, 'org'),
     );
     const event: NotificationEvent = {
         eventKey: 'mutation-1',
@@ -87,11 +114,49 @@ function fixture() {
         recipients: ['recipient'],
         organizationId: 'org',
         actorId: 'actor',
+        projectId: 'project',
     };
-    return { service, db, delivery, notices, deliveries, event };
+    return { service, db, delivery, notices, deliveries, event, authorization };
 }
 
 describe('NotificationsService transactional publishing', () => {
+    it.each([
+        ['PASSWORD_CHANGED', 'ACCOUNT', undefined],
+        ['PASSWORD_RESET_COMPLETED', 'ACCOUNT', undefined],
+        ['PERSONAL_ACCESS_TOKEN_CREATED', 'ACCOUNT', 'PersonalAccessToken'],
+        ['PERSONAL_ACCESS_TOKEN_REVOKED', 'ACCOUNT', 'PersonalAccessToken'],
+        ['API_KEY_CREATED', 'ORGANIZATION', 'ApiKey'],
+        ['API_KEY_REVOKED', 'ORGANIZATION', 'ApiKey'],
+        ['PROBE_ENROLLED', 'ORGANIZATION', 'Probe'],
+        ['SUBSCRIPTION_ACTIVATED', 'ORGANIZATION', 'Subscription'],
+        ['PAYMENT_SUCCEEDED', 'ORGANIZATION', 'Order'],
+    ] as const)(
+        'accepts explicitly scoped %s without rolling back its business transaction',
+        async (type, accessScope, resourceType) => {
+            const { service, event, notices, db, authorization } = fixture();
+            await service.publish(
+                {
+                    ...event,
+                    type,
+                    accessScope,
+                    resourceType,
+                    resourceId: 'resource',
+                    projectId: undefined,
+                },
+                db as never,
+            );
+            expect([...notices.values()][0].accessScope).toBe(accessScope);
+            expect(db.$transaction).not.toHaveBeenCalled();
+            if (accessScope === 'ORGANIZATION') {
+                expect(authorization.eligible).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        organizationRoles: ['OWNER', 'ADMIN'],
+                    }),
+                    db,
+                );
+            }
+        },
+    );
     it('uses first recipient override and excludes the ordinary actor', async () => {
         const { service, db, event, notices } = fixture();
         await service.publish({
@@ -132,6 +197,7 @@ describe('NotificationsService transactional publishing', () => {
             recipients: ['actor'],
             includeActor: true,
             allowOutsideOrg: true,
+            accessScope: 'ACCOUNT',
         });
         const where = db.user.findMany.mock.calls[0][0].where;
         expect(where.id.in).toEqual(['actor']);
@@ -152,7 +218,13 @@ describe('NotificationsService transactional publishing', () => {
         ]);
         expect([...deliveries.values()][1].payload).toEqual(
             expect.objectContaining({
-                audience: { userId: 'recipient', organizationId: 'org' },
+                audience: {
+                    accessScope: 'PROJECT',
+                    userId: 'recipient',
+                    organizationId: 'org',
+                    projectId: 'project',
+                    email: 'recipient@example.test',
+                },
             }),
         );
     });
@@ -270,7 +342,11 @@ describe('NotificationsService transactional publishing', () => {
             service.markAsRead('user', 'other-notice'),
         ).rejects.toThrow('Notification not found');
         expect(db.notification.findFirst).toHaveBeenCalledWith({
-            where: { id: 'other-notice', userId: 'user' },
+            where: {
+                id: 'other-notice',
+                userId: 'user',
+                accessScope: { not: 'UNKNOWN' },
+            },
         });
     });
 });
@@ -285,7 +361,11 @@ describe('Notification lookup and durable event audience', () => {
         const result = await service.findOne('user', 'old-notice');
         expect(result.id).toBe('old-notice');
         expect(db.notification.findFirst).toHaveBeenCalledWith({
-            where: { id: 'old-notice', userId: 'user' },
+            where: {
+                id: 'old-notice',
+                userId: 'user',
+                accessScope: { not: 'UNKNOWN' },
+            },
         });
         db.notification.findFirst.mockResolvedValue(null);
         await expect(service.findOne('other', 'old-notice')).rejects.toThrow(

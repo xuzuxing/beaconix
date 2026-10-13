@@ -135,8 +135,11 @@ export class TaskOverdueService implements OnModuleInit {
                             `${eventKey}:email:${assignee.id}`,
                             tx,
                             {
+                                accessScope: 'PROJECT',
                                 userId: assignee.id,
                                 organizationId: task.organizationId,
+                                projectId: task.projectId,
+                                minimumRole: 'MEMBER',
                             },
                         );
                     }
