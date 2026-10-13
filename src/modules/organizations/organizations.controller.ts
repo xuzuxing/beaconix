@@ -125,7 +125,6 @@ export class OrganizationsController {
     @Patch(':id/transfer')
     @UseGuards(RolesGuard)
     @Roles('OWNER')
-    @AuditLog({ entity: 'Organization', action: 'UPDATE' })
     @ApiOperation({ summary: 'Transfer organization ownership' })
     @ApiParam({ name: 'id', description: 'Organization CUID' })
     @ApiBody({ type: TransferOwnershipDto })

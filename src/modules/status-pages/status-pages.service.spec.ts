@@ -130,6 +130,11 @@ describe('StatusPagesService', () => {
                     id: { in: ['monitor-1'] },
                     organizationId: 'org-1',
                     deletedAt: null,
+                    project: {
+                        organizationId: 'org-1',
+                        deletedAt: null,
+                        organization: { deletedAt: null },
+                    },
                 },
                 select: { id: true },
             });
@@ -202,6 +207,11 @@ describe('StatusPagesService', () => {
                     id: { in: ['monitor-1'] },
                     organizationId: 'org-1',
                     deletedAt: null,
+                    project: {
+                        organizationId: 'org-1',
+                        deletedAt: null,
+                        organization: { deletedAt: null },
+                    },
                 },
                 include: { state: true },
                 orderBy: { createdAt: 'asc' },
@@ -222,6 +232,33 @@ describe('StatusPagesService', () => {
             await expect(
                 service.getPublicBySlug('acme-status'),
             ).rejects.toThrow(NotFoundException);
+        });
+
+        it('filters deleted organizations and projects while stripping target credentials', async () => {
+            const { service, prisma } = createService();
+            prisma.statusPage.findUnique.mockResolvedValue(statusPageRow);
+            prisma.monitor.findMany.mockResolvedValue([
+                {
+                    ...monitorRow,
+                    target: 'https://user:password@api.test/health?token=private-secret',
+                },
+            ]);
+            const result = await service.getPublicBySlug('acme-status');
+            expect(prisma.statusPage.findUnique).toHaveBeenCalledWith({
+                where: {
+                    slug: 'acme-status',
+                    organization: { deletedAt: null },
+                },
+            });
+            expect(
+                prisma.monitor.findMany.mock.calls[0][0].where.project,
+            ).toEqual({
+                organizationId: 'org-1',
+                deletedAt: null,
+                organization: { deletedAt: null },
+            });
+            expect(JSON.stringify(result)).not.toContain('private-secret');
+            expect(JSON.stringify(result)).not.toContain('password');
         });
     });
 });

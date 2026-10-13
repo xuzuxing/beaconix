@@ -6,8 +6,10 @@ import {
     LabelsController,
     TaskLabelsController,
 } from './labels.controller';
+import { AuthorizationModule } from '../../common/authorization/authorization.module';
 
 @Module({
+    imports: [AuthorizationModule],
     controllers: [
         OrgLabelsController,
         ProjectLabelsController,

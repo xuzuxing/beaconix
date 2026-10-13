@@ -21,6 +21,32 @@ enum MembershipRole {
   VIEWER
 }
 
+enum ProjectRole {
+  VIEWER
+  MEMBER
+  ADMIN
+}
+
+enum InvitationIssuerType {
+  LEGACY
+  ORGANIZATION
+  PLATFORM
+}
+
+enum NotificationAccessScope {
+  UNKNOWN
+  ACCOUNT
+  INVITATION
+  ORGANIZATION
+  PROJECT
+}
+
+enum AttachmentVisibility {
+  UNKNOWN
+  PRIVATE
+  EXTERNAL
+}
+
 enum ProjectStatus {
   ACTIVE
   ARCHIVED
@@ -166,6 +192,7 @@ model User {
   name          String
   avatarUrl     String?
   globalRole    GlobalRole @default(USER)
+  platformAuthorityVersion Int @default(0)
   isActive      Boolean    @default(true)
   emailVerified Boolean    @default(false)
   lastSeenAt    DateTime?
@@ -183,6 +210,7 @@ model User {
   identities           UserIdentity[]
   ownedOrganizations   Organization[]        @relation("OrganizationOwner")
   memberships          Membership[]
+  grantedProjectMemberships ProjectMembership[] @relation("ProjectGrantActor")
   createdProjects      Project[]             @relation("ProjectCreator")
   createdTasks         Task[]                @relation("TaskCreator")
   assignedTasks        Task[]                @relation("TaskAssignee")
@@ -372,6 +400,7 @@ model Membership {
   userId         String
   organizationId String
   role           MembershipRole @default(MEMBER)
+  projectPermissionsVersion Int @default(0)
   joinedAt       DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -381,7 +410,9 @@ model Membership {
   // Relations
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  projectMemberships ProjectMembership[]
 
+  @@unique([id, organizationId])
   @@unique([userId, organizationId])
   @@index([organizationId])
   @@index([role])
@@ -399,6 +430,9 @@ model Invitation {
   expiresAt      DateTime
   sentById       String
   acceptedAt     DateTime?
+  issuerType InvitationIssuerType @default(LEGACY)
+  issuerMembershipId String?
+  issuerAuthorityVersion Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -406,7 +440,9 @@ model Invitation {
   // Relations
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   sentBy       User         @relation("InvitationSender", fields: [sentById], references: [id], onDelete: Cascade)
+  projectGrants InvitationProjectGrant[]
 
+  @@unique([id, organizationId])
   @@unique([email, organizationId])
   @@index([organizationId])
   @@index([status])
@@ -437,7 +473,10 @@ model Project {
   auditLogs    AuditLog[]
   monitors     Monitor[]
   ruleGroups   RuleGroup[]
+  memberships ProjectMembership[]
+  invitationGrants InvitationProjectGrant[]
 
+  @@unique([id, organizationId])
   // Enforce unique project key per organization (e.g. no two "PROJ" in same org)
   @@unique([organizationId, key])
   @@index([organizationId])
@@ -446,6 +485,42 @@ model Project {
   @@index([createdById])
   @@index([deletedAt])
   @@map("projects")
+}
+
+model ProjectMembership {
+  id String @id @default(cuid())
+  organizationId String
+  membershipId String
+  projectId String
+  role ProjectRole
+  grantedById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  membership Membership @relation(fields: [membershipId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  grantedBy User? @relation("ProjectGrantActor", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@unique([membershipId, projectId])
+  @@index([projectId, role])
+  @@index([membershipId, organizationId])
+  @@map("project_memberships")
+}
+
+model InvitationProjectGrant {
+  id String @id @default(cuid())
+  invitationId String
+  organizationId String
+  projectId String
+  role ProjectRole
+  createdAt DateTime @default(now())
+
+  invitation Invitation @relation(fields: [invitationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([invitationId, projectId])
+  @@index([projectId])
+  @@map("invitation_project_grants")
 }
 
 // SPRINT
@@ -628,6 +703,7 @@ model Attachment {
   bucket       String?
   checksum     String?
   source       AttachmentSource @default(UPLOAD)
+  visibility AttachmentVisibility @default(UNKNOWN)
   taskId       String
   uploadedById String?
 
@@ -700,6 +776,9 @@ model TaskLabel {
 model Notification {
   id           String           @id @default(cuid())
   userId       String
+  organizationId String?
+  projectId String?
+  accessScope NotificationAccessScope @default(UNKNOWN)
   dedupKey     String?          @unique
   type         NotificationType
   title        String
@@ -717,6 +796,7 @@ model Notification {
 
   @@index([userId])
   @@index([userId, isRead])
+  @@index([userId, accessScope, projectId, isRead])
   @@index([createdAt])
   @@index([resourceType, resourceId])
   @@map("notifications")
@@ -735,6 +815,7 @@ model NotificationDelivery {
   leaseToken  String?
   lastError   String?
   deliveredAt DateTime?
+  dispatchAuthorizedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

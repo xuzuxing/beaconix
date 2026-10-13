@@ -8,15 +8,21 @@ import {
     ApiOperation,
     ApiTags,
 } from '@nestjs/swagger';
-import { AuditLog, Roles } from '../../common/decorators';
-import { RolesGuard } from '../../common/guards';
+import { AuditLog } from '../../common/decorators';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
+import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { AlertEventsService } from './alert-events.service';
 
 @ApiTags('Monitoring')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/monitoring/alert-deliveries')
-@UseGuards(RolesGuard)
-@Roles('ADMIN')
+@UseGuards(ProjectAccessGuard)
+@ProjectPermission('alert.retry', {
+    resourceType: 'PROJECT',
+    idParam: 'projectId',
+})
 export class AlertEventsController {
     constructor(private readonly events: AlertEventsService) {}
 
@@ -33,12 +39,13 @@ export class AlertEventsController {
     @ApiConflictResponse({
         description: 'Delivery is not failed or not in this project',
     })
-    @ApiForbiddenResponse({ description: 'Organization admin required' })
+    @ApiForbiddenResponse({ description: 'Project administrator required' })
     @ApiNotFoundResponse({ description: 'Project not found' })
     retry(
         @Param('projectId') projectId: string,
         @Param('deliveryId') deliveryId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.events.retry(projectId, deliveryId);
+        return this.events.retry(projectId, deliveryId, principal);
     }
 }

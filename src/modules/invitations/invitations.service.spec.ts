@@ -7,11 +7,17 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { QuotaService } from '../../shared/quota/quota.service';
-import { InvitationStatus, MembershipRole } from '../../generated/prisma/enums';
+import {
+    InvitationIssuerType,
+    InvitationStatus,
+    MembershipRole,
+    ProjectRole,
+} from '../../generated/prisma/enums';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { NotificationEvent } from '../notifications/notification-event';
 import { EmailTemplate } from '../email/email.types';
 import { InvitationsService } from './invitations.service';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
 
 const now = new Date('2026-10-11T08:00:00.000Z');
 const org = { id: 'org', name: 'Beacon', slug: 'beacon', deletedAt: null };
@@ -24,7 +30,7 @@ const invitationRow = {
     id: 'invitation',
     organizationId: 'org',
     email: 'invitee@example.com',
-    role: MembershipRole.MEMBER,
+    role: MembershipRole.MEMBER as MembershipRole,
     status: InvitationStatus.PENDING,
     token: 'test-invitation-token',
     sentById: 'sender',
@@ -34,18 +40,54 @@ const invitationRow = {
     updatedAt: now,
     organization: org,
     sentBy: { id: 'sender', name: 'Sender', email: 'sender@example.com' },
+    issuerType: InvitationIssuerType.ORGANIZATION as InvitationIssuerType,
+    issuerMembershipId: 'sender-membership' as string | null,
+    issuerAuthorityVersion: null as number | null,
+    projectGrants: [
+        {
+            projectId: 'project',
+            role: ProjectRole.VIEWER,
+            project: { name: 'Project' },
+        },
+    ],
 };
+const projects = [{ projectId: 'project', role: ProjectRole.VIEWER }];
 
 async function setup(overrides: Partial<typeof invitationRow> = {}) {
     const invitation = { ...invitationRow, ...overrides };
     let inTransaction = false;
     const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([]),
         organization: { findFirst: jest.fn().mockResolvedValue(org) },
         membership: {
-            findFirst: jest.fn().mockResolvedValue(null),
-            findUnique: jest.fn().mockResolvedValue(null),
+            findFirst: jest
+                .fn()
+                .mockImplementation(({ where }) =>
+                    Promise.resolve(
+                        where.id
+                            ? { id: 'sender-membership', role: 'OWNER' }
+                            : null,
+                    ),
+                ),
+            findUnique: jest
+                .fn()
+                .mockImplementation(({ where }) =>
+                    Promise.resolve(
+                        where.userId_organizationId.userId === 'sender'
+                            ? { id: 'sender-membership', role: 'OWNER' }
+                            : null,
+                    ),
+                ),
+            findMany: jest
+                .fn()
+                .mockResolvedValue([{ id: 'sender-membership' }]),
             create: jest.fn().mockResolvedValue({ id: 'membership' }),
         },
+        project: { findMany: jest.fn().mockResolvedValue([{ id: 'project' }]) },
+        projectMembership: {
+            createMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit' }) },
         invitation: {
             findFirst: jest.fn().mockResolvedValue(null),
             findUnique: jest.fn().mockResolvedValue(invitation),
@@ -62,7 +104,18 @@ async function setup(overrides: Partial<typeof invitationRow> = {}) {
             }),
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
-        user: { findFirst: jest.fn().mockResolvedValue(invitee) },
+        user: {
+            findFirst: jest.fn().mockImplementation(({ where }) =>
+                Promise.resolve(
+                    where.id === 'sender'
+                        ? {
+                              globalRole: 'USER',
+                              platformAuthorityVersion: 0,
+                          }
+                        : invitee,
+                ),
+            ),
+        },
         notification: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const prisma = {
@@ -97,9 +150,19 @@ async function setup(overrides: Partial<typeof invitationRow> = {}) {
         syncPendingInvitations: jest.fn().mockResolvedValue(undefined),
     };
     const quota = {
-        assertCanCreate: jest.fn().mockImplementation(() => {
+        assertCanAddMember: jest.fn().mockImplementation((_orgId, client) => {
             expect(inTransaction).toBe(true);
+            expect(client).toBe(tx);
             return Promise.resolve();
+        }),
+    };
+    const access = {
+        organization: jest.fn().mockResolvedValue({
+            globalRole: 'USER',
+            membershipId: 'sender-membership',
+            platformAuthorityVersion: 0,
+            canManageOrganization: true,
+            canGrantOrganizationAdmin: true,
         }),
     };
     const moduleRef = await Test.createTestingModule({
@@ -108,6 +171,7 @@ async function setup(overrides: Partial<typeof invitationRow> = {}) {
             { provide: PrismaService, useValue: prisma },
             { provide: NotificationsService, useValue: notifications },
             { provide: QuotaService, useValue: quota },
+            { provide: ProjectAccessService, useValue: access },
         ],
     }).compile();
     return {
@@ -116,6 +180,7 @@ async function setup(overrides: Partial<typeof invitationRow> = {}) {
         tx,
         notifications,
         quota,
+        access,
         invitation,
         event: (index = 0) =>
             notifications.publish.mock.calls[index][0] as NotificationEvent,
@@ -130,10 +195,180 @@ describe('InvitationsService collaboration notifications', () => {
         jest.useRealTimers();
     });
 
+    it('keeps public token previews free of project details and identity secrets', async () => {
+        const { service } = await setup();
+        const result = await service.getByToken(invitationRow.token);
+        expect(result).toEqual({
+            organizationName: 'Beacon',
+            status: 'PENDING',
+            requiresLogin: true,
+        });
+        expect(JSON.stringify(result)).not.toContain('project');
+        expect(JSON.stringify(result)).not.toContain('@');
+    });
+
+    it('whitelists authenticated invitation details', async () => {
+        const { service } = await setup();
+        const result = await service.getById('invitation', 'invitee');
+        expect(result.projects).toEqual([
+            { projectId: 'project', projectName: 'Project', role: 'VIEWER' },
+        ]);
+        expect(result.accessMode).toBe('SELECTED_PROJECTS');
+        expect(result).not.toHaveProperty('token');
+        expect(result).not.toHaveProperty('issuerType');
+        expect(result).not.toHaveProperty('issuerMembershipId');
+        expect(result.organization).not.toHaveProperty('deletedAt');
+    });
+
+    it('persists exactly the fixed grants against the new membership incarnation', async () => {
+        const { service, tx } = await setup();
+        await service.acceptById('invitation', 'invitee');
+        expect(tx.projectMembership.createMany).toHaveBeenCalledWith({
+            data: [
+                {
+                    projectId: 'project',
+                    role: 'VIEWER',
+                    organizationId: 'org',
+                    membershipId: 'membership',
+                    grantedById: 'sender',
+                },
+            ],
+        });
+        expect(tx.auditLog.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                data: expect.objectContaining({
+                    action: 'JOIN',
+                    entityId: 'membership',
+                    actorId: 'invitee',
+                }),
+            }),
+        );
+    });
+
+    it.each([
+        'legacy',
+        'left-rejoined',
+        'demoted',
+        'project-deleted',
+        'project-archived',
+    ])(
+        'rejects invalid fixed invitation authority/grants: %s',
+        async (reason) => {
+            const { service, tx, notifications } = await setup(
+                reason === 'legacy'
+                    ? { issuerType: 'LEGACY', issuerMembershipId: null }
+                    : {},
+            );
+            if (reason === 'left-rejoined')
+                tx.membership.findFirst.mockResolvedValue(null);
+            if (reason === 'demoted')
+                tx.membership.findFirst.mockResolvedValue({
+                    role: 'MEMBER',
+                });
+            if (reason.startsWith('project-'))
+                tx.project.findMany.mockResolvedValue([]);
+            await expect(
+                service.acceptById('invitation', 'invitee'),
+            ).rejects.toThrow(ConflictException);
+            expect(tx.membership.create).not.toHaveBeenCalled();
+            expect(tx.projectMembership.createMany).not.toHaveBeenCalled();
+            expect(notifications.enqueueEmail).not.toHaveBeenCalled();
+        },
+    );
+
+    it('accepts valid platform invitations without a sender membership', async () => {
+        const { service, tx } = await setup({
+            issuerType: 'PLATFORM',
+            issuerMembershipId: null,
+            issuerAuthorityVersion: 4,
+        });
+        tx.membership.findMany.mockResolvedValue([]);
+        tx.membership.findFirst.mockResolvedValue(null);
+        tx.user.findFirst.mockImplementation(({ where }) =>
+            Promise.resolve(
+                where.id === 'sender'
+                    ? { globalRole: 'SUPER_ADMIN', platformAuthorityVersion: 4 }
+                    : invitee,
+            ),
+        );
+        await expect(
+            service.acceptById('invitation', 'invitee'),
+        ).resolves.toMatchObject({ status: 'ACCEPTED' });
+        expect(tx.membership.findFirst).not.toHaveBeenCalled();
+    });
+
+    it.each(['USER', 'SUPER_ADMIN'] as const)(
+        'never revives a platform invite after authority loss (%s)',
+        async (globalRole) => {
+            const { service, tx, notifications } = await setup({
+                issuerType: 'PLATFORM',
+                issuerMembershipId: null,
+                issuerAuthorityVersion: 4,
+            });
+            tx.user.findFirst.mockImplementation(({ where }) =>
+                Promise.resolve(
+                    where.id === 'sender'
+                        ? { globalRole, platformAuthorityVersion: 6 }
+                        : invitee,
+                ),
+            );
+            await expect(
+                service.acceptById('invitation', 'invitee'),
+            ).rejects.toThrow(ConflictException);
+            expect(tx.membership.create).not.toHaveBeenCalled();
+            expect(notifications.enqueueEmail).not.toHaveBeenCalled();
+        },
+    );
+
+    it('requires an owner for administrator invitations even when the sender is an organization admin', async () => {
+        const { service, access, tx } = await setup();
+        access.organization.mockResolvedValue({
+            canManageOrganization: true,
+            canGrantOrganizationAdmin: false,
+        });
+        await expect(
+            service.send('org', 'sender', {
+                email: invitee.email,
+                role: 'ADMIN',
+            }),
+        ).rejects.toThrow(ForbiddenException);
+        expect(tx.invitation.create).not.toHaveBeenCalled();
+    });
+
+    it('requires current owner authority to accept an administrator invitation', async () => {
+        const { service, tx } = await setup({
+            role: 'ADMIN',
+            projectGrants: [],
+        });
+        tx.membership.findFirst.mockResolvedValue({ role: 'ADMIN' });
+        await expect(
+            service.acceptById('invitation', 'invitee'),
+        ).rejects.toThrow(ConflictException);
+    });
+
+    it('propagates grant and audit persistence failures before publishing welcome intent', async () => {
+        for (const delegate of ['projectMembership', 'auditLog'] as const) {
+            const { service, tx, notifications } = await setup();
+            if (delegate === 'projectMembership')
+                tx.projectMembership.createMany.mockRejectedValue(
+                    new Error('Persistence failed'),
+                );
+            else
+                tx.auditLog.create.mockRejectedValue(
+                    new Error('Persistence failed'),
+                );
+            await expect(
+                service.acceptById('invitation', 'invitee'),
+            ).rejects.toThrow('Persistence failed');
+            expect(notifications.enqueueEmail).not.toHaveBeenCalled();
+        }
+    });
+
     it('creates the invitation, station notification and durable email in the same transaction', async () => {
         const { service, tx, notifications, event } = await setup();
         const result = await service.send('org', 'sender', {
             email: ' Invitee@Example.COM ',
+            projects,
         });
         expect(result.id).toBe('invitation');
         expect(tx.organization.findFirst).toHaveBeenCalledWith({
@@ -146,6 +381,12 @@ describe('InvitationsService collaboration notifications', () => {
                     organizationId: 'org',
                     role: 'MEMBER',
                     sentById: 'sender',
+                    issuerType: 'ORGANIZATION',
+                    issuerMembershipId: 'sender-membership',
+                    issuerAuthorityVersion: null,
+                    projectGrants: {
+                        create: [{ ...projects[0], organizationId: 'org' }],
+                    },
                     expiresAt: invitationRow.expiresAt,
                 },
             }),
@@ -185,6 +426,12 @@ describe('InvitationsService collaboration notifications', () => {
             },
             'invitation:invitation',
             tx,
+            {
+                accessScope: 'INVITATION',
+                invitationId: 'invitation',
+                organizationId: 'org',
+                email: 'invitee@example.com',
+            },
         );
         expect(tx.invitation.create.mock.invocationCallOrder[0]).toBeLessThan(
             notifications.publish.mock.invocationCallOrder[0],
@@ -194,7 +441,7 @@ describe('InvitationsService collaboration notifications', () => {
     it('emails an invitee without publishing a station notice unless a verified active account exists', async () => {
         const { service, tx, notifications } = await setup();
         tx.user.findFirst.mockResolvedValue(null);
-        await service.send('org', 'sender', { email: invitee.email });
+        await service.send('org', 'sender', { email: invitee.email, projects });
         expect(notifications.publish).not.toHaveBeenCalled();
         expect(notifications.enqueueEmail).toHaveBeenCalledTimes(1);
     });
@@ -206,7 +453,7 @@ describe('InvitationsService collaboration notifications', () => {
             id: 'old-invitation',
             expiresAt: now,
         });
-        await service.send('org', 'sender', { email: invitee.email });
+        await service.send('org', 'sender', { email: invitee.email, projects });
         expect(tx.invitation.updateMany).toHaveBeenCalledWith({
             where: {
                 id: 'old-invitation',
@@ -249,7 +496,7 @@ describe('InvitationsService collaboration notifications', () => {
         });
         tx.invitation.updateMany.mockResolvedValue({ count: 0 });
         await expect(
-            service.send('org', 'sender', { email: invitee.email }),
+            service.send('org', 'sender', { email: invitee.email, projects }),
         ).rejects.toThrow(
             new ConflictException(
                 'Invitation was already processed; retry the request',
@@ -295,7 +542,10 @@ describe('InvitationsService collaboration notifications', () => {
             if (reason === 'pending-invitation')
                 tx.invitation.findFirst.mockResolvedValue(invitationRow);
             await expect(
-                service.send('org', 'sender', { email: invitee.email }),
+                service.send('org', 'sender', {
+                    email: invitee.email,
+                    projects,
+                }),
             ).rejects.toThrow();
             expect(tx.invitation.create).not.toHaveBeenCalled();
             expect(notifications.publish).not.toHaveBeenCalled();
@@ -311,7 +561,10 @@ describe('InvitationsService collaboration notifications', () => {
                 new Error('Outbox unavailable'),
             );
             await expect(
-                service.send('org', 'sender', { email: invitee.email }),
+                service.send('org', 'sender', {
+                    email: invitee.email,
+                    projects,
+                }),
             ).rejects.toThrow('Outbox unavailable');
         },
     );
@@ -444,7 +697,7 @@ describe('InvitationsService collaboration notifications', () => {
         await expect(
             service.acceptById('invitation', 'invitee'),
         ).resolves.toMatchObject({ status: 'ACCEPTED' });
-        expect(quota.assertCanCreate).toHaveBeenCalledWith('org', 'members');
+        expect(quota.assertCanAddMember).toHaveBeenCalledWith('org', tx);
         expect(tx.invitation.updateMany).toHaveBeenCalledWith({
             where: {
                 id: 'invitation',
@@ -503,7 +756,11 @@ describe('InvitationsService collaboration notifications', () => {
             { to: invitee.email, name: invitee.name, orgName: 'Beacon' },
             'invitation-welcome:invitation',
             tx,
-            { userId: 'invitee', organizationId: 'org' },
+            {
+                accessScope: 'ORGANIZATION',
+                userId: 'invitee',
+                organizationId: 'org',
+            },
         );
         expect(JSON.stringify(event())).not.toContain(invitationRow.token);
     });
@@ -529,7 +786,7 @@ describe('InvitationsService collaboration notifications', () => {
                     id: 'membership',
                 });
             if (reason === 'quota')
-                quota.assertCanCreate.mockRejectedValue(
+                quota.assertCanAddMember.mockRejectedValue(
                     new ForbiddenException('Quota exceeded'),
                 );
             if (reason === 'owner-role')

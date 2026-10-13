@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { SubscriptionStatus } from '../../generated/prisma/enums';
 import type { PlanModel } from '../../generated/prisma/models';
+import type { Prisma } from '../../generated/prisma/client';
 
 export interface SubscriptionStackEntry {
     id: string;
@@ -24,9 +25,16 @@ export class EffectivePlanService {
      * subscription. When none is valid the FREE plan is the fallback.
      */
     async getEffectivePlan(organizationId: string): Promise<PlanModel | null> {
+        return this.getEffectivePlanInTransaction(organizationId, this.prisma);
+    }
+
+    async getEffectivePlanInTransaction(
+        organizationId: string,
+        tx: Prisma.TransactionClient,
+    ): Promise<PlanModel | null> {
         const now = new Date();
 
-        const subscription = await this.prisma.subscription.findFirst({
+        const subscription = await tx.subscription.findFirst({
             where: {
                 organizationId,
                 status: SubscriptionStatus.ACTIVE,
@@ -41,7 +49,7 @@ export class EffectivePlanService {
             return subscription.plan;
         }
 
-        return this.prisma.plan.findUnique({ where: { code: 'FREE' } });
+        return tx.plan.findUnique({ where: { code: 'FREE' } });
     }
 
     async getSubscriptionStack(

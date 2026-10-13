@@ -1,0 +1,123 @@
+name: Local Monitor Validation
+
+on:
+    workflow_dispatch:
+    pull_request:
+        branches: [master]
+    push:
+        branches: [master]
+
+jobs:
+    application-protocols:
+        name: Application Protocol Driver Integration
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        services:
+            postgres:
+                image: postgres:16-alpine
+                env:
+                    POSTGRES_USER: monitor_test
+                    POSTGRES_PASSWORD: monitor_test_password
+                    POSTGRES_DB: beacon_monitor_test_ci
+                ports: ['5432:5432']
+                options: >-
+                    --health-cmd "pg_isready -U monitor_test -d beacon_monitor_test_ci"
+                    --health-interval 5s --health-timeout 5s --health-retries 10
+            mysql:
+                image: mysql:8.4
+                env:
+                    MYSQL_ROOT_PASSWORD: root_fixture_password
+                    MYSQL_DATABASE: beacon_monitor_test_ci
+                    MYSQL_USER: monitor_test
+                    MYSQL_PASSWORD: monitor_test_password
+                ports: ['3306:3306']
+                options: >-
+                    --health-cmd "mysqladmin ping -h 127.0.0.1 -proot_fixture_password"
+                    --health-interval 5s --health-timeout 5s --health-retries 20
+            mongo:
+                image: mongo:8
+                env:
+                    MONGO_INITDB_ROOT_USERNAME: monitor_test
+                    MONGO_INITDB_ROOT_PASSWORD: monitor_test_password
+                ports: ['27017:27017']
+                options: >-
+                    --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1})'"
+                    --health-interval 5s --health-timeout 5s --health-retries 15
+        steps:
+            - uses: actions/checkout@v7
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: '22'
+            - uses: pnpm/action-setup@v6
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm prisma:generate
+              env:
+                  DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/unused
+            - name: Start isolated Redis with two databases
+              run: docker run --detach --name beacon-monitor-redis --publish 127.0.0.1:6379:6379 redis:7-alpine redis-server --databases 2 --requirepass monitor_test_password
+            - name: Wait for Redis
+              run: |
+                  for attempt in $(seq 1 20); do
+                    if docker exec beacon-monitor-redis redis-cli --no-auth-warning -a monitor_test_password ping | grep -q PONG; then exit 0; fi
+                    sleep 1
+                  done
+                  exit 1
+            - name: Verify database drivers against disposable services
+              run: pnpm test:monitor:applications
+              env:
+                  APPLICATION_MONITOR_INTEGRATION: disposable-local-services
+            - name: Verify WebSocket, gRPC, Docker API and MongoDB teardown
+              run: pnpm test -- --runInBand src/modules/checker/checkers/application-protocols.integration.spec.ts src/modules/checker/checkers/mongodb-worker.spec.ts
+            - name: Stop isolated Redis
+              if: always()
+              run: docker rm --force beacon-monitor-redis
+    postgres-and-runtime:
+        name: PostgreSQL Migration & Runner Smoke
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        services:
+            postgres:
+                image: postgres:16-alpine
+                env:
+                    POSTGRES_USER: monitor_test
+                    POSTGRES_PASSWORD: monitor_test
+                    POSTGRES_DB: beacon_monitor_test_ci
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U monitor_test -d beacon_monitor_test_ci"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+        steps:
+            - uses: actions/checkout@v7
+            - uses: actions/setup-node@v6
+              with:
+                  node-version: '22'
+            - uses: pnpm/action-setup@v6
+            - run: pnpm install --frozen-lockfile
+            - name: Generate Prisma client
+              run: pnpm prisma:generate
+              env:
+                  DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/unused
+            - name: Test datasource safety checks
+              run: pnpm test:monitor:safety
+            - name: Replay migrations and verify real state transactions
+              run: pnpm test:monitor:postgres
+              env:
+                  MONITOR_TEST_DATABASE_URL: postgresql://monitor_test:monitor_test@127.0.0.1:5432/beacon_monitor_test_ci
+            - name: Build production runner
+              run: docker build --tag beacon-monitor-validation .
+            - name: Check runner ICMP without external networking or privileged mode
+              run: |
+                  docker run --rm --network none --entrypoint node beacon-monitor-validation -e '
+                    const assert = require("node:assert/strict");
+                    const { PingRunner } = require("./dist/src/modules/checker/checkers/ping.checker.js");
+                    new PingRunner().run("127.0.0.1", 3000).then(result => {
+                      assert.equal(result.code, undefined, JSON.stringify(result));
+                      assert.ok(!result.killed, "ping was killed");
+                      assert.match(result.stdout, /ttl=/i);
+                      assert.match(result.stdout, /time[=<]/i);
+                      console.log("Runner loopback ICMP passed");
+                    }).catch(error => { console.error(error); process.exitCode = 1; });
+                  '

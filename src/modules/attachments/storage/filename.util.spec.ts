@@ -2,6 +2,7 @@ import {
     buildObjectKey,
     buildPublicObjectKey,
     isPublicUploadKey,
+    isTaskUploadKey,
     normalizeUploadDirectory,
     normalizeUserUploadDirectory,
     sanitizeFilename,
@@ -25,6 +26,24 @@ describe('filename utilities', () => {
             'organizations/org_1/tasks/task_1/2026/10/object_1-design spec.pdf',
         );
     });
+
+    it.each(['report.txt%20', 'report.%2e%2e', 'report.opaque#private'])(
+        'generated object keys remain downloadable for %s',
+        (filename) => {
+            const input = {
+                organizationId: 'org_1',
+                taskId: 'task_1',
+                userId: 'user_1',
+                objectId: 'object_1',
+                filename,
+            };
+            expect(
+                isTaskUploadKey(buildObjectKey(input), 'org_1', 'task_1'),
+            ).toBe(true);
+            expect(isPublicUploadKey(buildPublicObjectKey(input))).toBe(true);
+            expect(buildObjectKey(input)).not.toContain('%');
+        },
+    );
 
     it('builds a public upload key under a sanitized directory', () => {
         expect(

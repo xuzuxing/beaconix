@@ -1,5 +1,6 @@
 import { ProjectsService } from './projects.service';
 import { ProjectsController } from './projects.controller';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
 
 function setup(overrides = {}) {
     const row = {
@@ -13,6 +14,22 @@ function setup(overrides = {}) {
     let inTransaction = false;
     const tx = {
         $queryRaw: jest.fn().mockResolvedValue([]),
+        user: {
+            findFirst: jest.fn().mockResolvedValue({
+                globalRole: 'USER',
+                platformAuthorityVersion: 0,
+            }),
+        },
+        organization: { findFirst: jest.fn().mockResolvedValue({ id: 'org' }) },
+        membership: {
+            findMany: jest.fn().mockResolvedValue([{ id: 'membership' }]),
+            findUnique: jest.fn().mockResolvedValue({
+                id: 'membership',
+                role: 'ADMIN',
+                projectPermissionsVersion: 0,
+            }),
+        },
+        projectMembership: { findUnique: jest.fn().mockResolvedValue(null) },
         project: {
             findFirst: jest.fn().mockResolvedValue(row),
             update: jest
@@ -47,7 +64,11 @@ function setup(overrides = {}) {
         }),
     };
     return {
-        service: new ProjectsService(prisma as never, notifications as never),
+        service: new ProjectsService(
+            prisma as never,
+            notifications as never,
+            new ProjectAccessService(prisma as never),
+        ),
         prisma,
         tx,
         notifications,
@@ -95,6 +116,7 @@ describe('ProjectsService lifecycle notifications', () => {
         const { service, tx, notifications } = setup();
         tx.project.findFirst.mockResolvedValue({
             id: 'project',
+            organizationId: 'org',
             status: 'ARCHIVED',
         });
         await expect(
@@ -126,16 +148,25 @@ describe('ProjectsService lifecycle notifications', () => {
     });
 
     it('leaves ordinary project title/description edits silent', async () => {
-        const { service, notifications, prisma } = setup();
+        const { service, notifications, prisma, tx } = setup();
         prisma.project.update.mockResolvedValue({
             id: 'project',
             name: 'Renamed',
         });
-        await service.update('org', 'project', {
+        await service.update('org', 'project', 'actor', {
             name: 'Renamed',
             description: 'New body',
         });
         expect(notifications.publish).not.toHaveBeenCalled();
+        const projectLock = tx.$queryRaw.mock.calls.find((call) =>
+            (call[0] as { sql?: string }).sql?.includes('"projects"'),
+        );
+        expect((projectLock?.[0] as { sql: string }).sql).toContain(
+            'FOR UPDATE',
+        );
+        expect((projectLock?.[0] as { sql: string }).sql).not.toContain(
+            'FOR SHARE',
+        );
     });
 
     it('propagates publication failure so the lifecycle transaction fails', async () => {

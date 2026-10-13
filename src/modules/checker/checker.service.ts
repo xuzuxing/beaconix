@@ -30,6 +30,9 @@ import { QueryCheckLogsDto } from './dto';
 import { CheckLogEntity } from './entities';
 import { MONITOR_CHECK_DEDUP_PREFIX, MONITOR_CHECK_JOB } from './checker.queue';
 import type { MonitorCheckJobData } from './checker.queue';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
+import { monitoringProjection } from '../../common/authorization/monitoring-projection';
 
 const PROBE_RESULT_WINDOW_INTERVALS = 2;
 const PROBE_RESULT_MIN_WINDOW_MS = 2 * 60 * 1000;
@@ -112,22 +115,49 @@ export class CheckerService {
         private readonly systemProbeScheduler: SystemProbeScheduler,
         private readonly ruleEvaluator: RuleEvaluatorService,
         private readonly ruleGroups: RuleGroupsService,
+        private readonly access: ProjectAccessService,
     ) {}
 
     /** Runs a check for one monitor of a project (tenant-scoped entry). */
     async checkMonitorForProject(
         projectId: string,
         monitorId: string,
+        principal: AccessPrincipal,
     ): Promise<CheckExecution> {
-        const monitor = await this.prisma.monitor.findFirst({
-            where: { id: monitorId, projectId, deletedAt: null },
-        });
+        const monitor = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.check',
+            async (tx, access) => {
+                const monitor = await tx.monitor.findFirst({
+                    where: {
+                        id: monitorId,
+                        projectId,
+                        organizationId: access.organizationId,
+                        deletedAt: null,
+                    },
+                });
 
-        if (!monitor) {
-            throw new NotFoundException('Monitor not found');
-        }
-        if (!monitor.enabled)
-            throw new BadRequestException('Monitor is paused');
+                if (!monitor) {
+                    throw new NotFoundException('Monitor not found');
+                }
+                if (!monitor.enabled)
+                    throw new BadRequestException('Monitor is paused');
+                await tx.auditLog.create({
+                    data: {
+                        actorId:
+                            principal.type === 'USER' ? principal.userId : null,
+                        organizationId: access.organizationId,
+                        projectId,
+                        entity: 'Monitor',
+                        entityId: monitorId,
+                        action: 'UPDATE',
+                        after: { action: 'monitor.check' },
+                    },
+                });
+                return monitor;
+            },
+        );
         await this.quotaService.assertMonitorTypeAllowed(
             monitor.organizationId,
             monitor.type,
@@ -137,12 +167,18 @@ export class CheckerService {
             monitor.interval,
         );
 
-        return this.execute(
+        const result = await this.execute(
             monitor,
             CheckSource.LOCAL,
             undefined,
             ExecutionTrigger.MANUAL,
         );
+        const current = await this.access.project(
+            principal,
+            projectId,
+            'monitor.read',
+        );
+        return monitoringProjection(result, current.effectiveRole);
     }
 
     /**
@@ -363,7 +399,13 @@ export class CheckerService {
         projectId: string,
         monitorId: string,
         query: QueryCheckLogsDto,
+        principal: AccessPrincipal,
     ) {
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'monitor.read',
+        );
         const monitor = await this.prisma.monitor.findFirst({
             where: { id: monitorId, projectId, deletedAt: null },
             select: { id: true },
@@ -377,7 +419,11 @@ export class CheckerService {
         const limit = query.limit ?? 20;
         const skip = (page - 1) * limit;
 
-        const where: Record<string, unknown> = { monitorId };
+        const where: Record<string, unknown> = {
+            monitorId,
+            projectId,
+            organizationId: access.organizationId,
+        };
         if (query.success !== undefined) where.success = query.success;
         if (query.source) where.source = query.source;
 
@@ -391,15 +437,18 @@ export class CheckerService {
             this.prisma.checkLog.count({ where }),
         ]);
 
-        return {
-            data: logs.map((log) => new CheckLogEntity(log)),
-            meta: {
-                total,
-                page,
-                limit,
-                totalPages: Math.ceil(total / limit),
+        return monitoringProjection(
+            {
+                data: logs.map((log) => new CheckLogEntity(log)),
+                meta: {
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit),
+                },
             },
-        };
+            access.effectiveRole,
+        );
     }
 
     // -- Internals -------------------------------------------------------

@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { MonitoringService } from './monitoring.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 
@@ -42,7 +43,10 @@ function createService() {
         checkLog: { count: jest.fn() },
     };
 
-    const service = new MonitoringService(prisma as unknown as PrismaService);
+    const service = new MonitoringService(
+        prisma as unknown as PrismaService,
+        mockProjectAccess(prisma),
+    );
 
     return { service, prisma };
 }
@@ -54,10 +58,17 @@ describe('MonitoringService', () => {
             prisma.monitor.findMany.mockResolvedValue([monitor()]);
             prisma.checkLog.count.mockResolvedValue(10);
 
-            await service.getOrganizationOverview('org-1');
+            await service.getOrganizationOverview('org-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.monitor.findMany).toHaveBeenCalledWith({
-                where: { organizationId: 'org-1', deletedAt: null },
+                where: {
+                    organizationId: 'org-1',
+                    deletedAt: null,
+                    project: { organizationId: 'org-1', deletedAt: null },
+                },
                 include: { state: true },
                 orderBy: { createdAt: 'asc' },
             });
@@ -83,7 +94,10 @@ describe('MonitoringService', () => {
                 Promise.resolve(where.success ? 8 : 10),
             );
 
-            const result = await service.getOrganizationOverview('org-1');
+            const result = await service.getOrganizationOverview('org-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(result.monitors).toEqual({
                 total: 2,
@@ -115,7 +129,10 @@ describe('MonitoringService', () => {
             const { service, prisma } = createService();
             prisma.monitor.findMany.mockResolvedValue([]);
 
-            const result = await service.getOrganizationOverview('org-1');
+            const result = await service.getOrganizationOverview('org-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(result.monitors).toEqual({
                 total: 0,
@@ -138,10 +155,17 @@ describe('MonitoringService', () => {
             const { service, prisma } = createService();
             prisma.monitor.findMany.mockResolvedValue([]);
 
-            await service.getProjectOverview('project-1');
+            await service.getProjectOverview('project-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.monitor.findMany).toHaveBeenCalledWith({
-                where: { projectId: 'project-1', deletedAt: null },
+                where: {
+                    projectId: 'project-1',
+                    organizationId: 'org-1',
+                    deletedAt: null,
+                },
                 include: { state: true },
                 orderBy: { createdAt: 'asc' },
             });

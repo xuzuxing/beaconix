@@ -19,6 +19,7 @@ import {
     PublicStatusPageMonitorEntity,
     StatusPageEntity,
 } from './entities';
+import { sanitizeMonitoringTarget } from '../../common/authorization/monitoring-projection';
 
 export const STATUS_PAGE_UPTIME_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -133,7 +134,7 @@ export class StatusPagesService {
     /** Public page. Disabled or missing pages both read as "not found". */
     async getPublicBySlug(slug: string): Promise<PublicStatusPageEntity> {
         const page = await this.prisma.statusPage.findUnique({
-            where: { slug },
+            where: { slug, organization: { deletedAt: null } },
         });
 
         if (!page || !page.enabled) {
@@ -145,6 +146,11 @@ export class StatusPagesService {
                 id: { in: page.visibleMonitorIds },
                 organizationId: page.organizationId,
                 deletedAt: null,
+                project: {
+                    organizationId: page.organizationId,
+                    deletedAt: null,
+                    organization: { deletedAt: null },
+                },
             },
             include: { state: true },
             orderBy: { createdAt: 'asc' },
@@ -180,7 +186,7 @@ export class StatusPagesService {
             id: monitor.id,
             name: monitor.name,
             type: monitor.type,
-            target: monitor.target,
+            target: sanitizeMonitoringTarget(monitor.target),
             status: state?.status ?? MonitorStatus.UNKNOWN,
             lastCheckAt: state?.lastCheckAt ?? null,
         };
@@ -222,7 +228,16 @@ export class StatusPagesService {
         if (ids.length === 0) return [];
 
         const found = await this.prisma.monitor.findMany({
-            where: { id: { in: ids }, organizationId: orgId, deletedAt: null },
+            where: {
+                id: { in: ids },
+                organizationId: orgId,
+                deletedAt: null,
+                project: {
+                    organizationId: orgId,
+                    deletedAt: null,
+                    organization: { deletedAt: null },
+                },
+            },
             select: { id: true },
         });
 

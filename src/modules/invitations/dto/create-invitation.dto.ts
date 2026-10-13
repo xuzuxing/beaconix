@@ -1,7 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsIn, IsOptional } from 'class-validator';
-import { Transform } from 'class-transformer';
+import {
+    ArrayMaxSize,
+    ArrayUnique,
+    IsArray,
+    IsEmail,
+    IsIn,
+    IsOptional,
+    ValidateNested,
+} from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import { MembershipRole } from '../../../generated/prisma/enums';
+import { ProjectGrantDto } from '../../memberships/dto/project-permissions.dto';
 
 export class CreateInvitationDto {
     @ApiProperty({
@@ -24,4 +33,13 @@ export class CreateInvitationDto {
         message: 'Role must be ADMIN, MEMBER, or VIEWER',
     })
     role?: MembershipRole;
+
+    @ApiPropertyOptional({ type: [ProjectGrantDto], maxItems: 100 })
+    @IsOptional()
+    @IsArray()
+    @ArrayMaxSize(100)
+    @ArrayUnique((grant: ProjectGrantDto) => grant.projectId)
+    @ValidateNested({ each: true })
+    @Type(() => ProjectGrantDto)
+    projects?: ProjectGrantDto[];
 }

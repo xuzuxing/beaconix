@@ -29,7 +29,7 @@ export class SaveAttachmentDto {
         example: '/api/tasks/task_xxx/attachments/att_xxx/download',
     })
     @IsNotEmpty()
-    @IsUrl()
+    @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
     url: string;
 
     @ApiPropertyOptional({

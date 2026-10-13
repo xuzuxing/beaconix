@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MonitorsService } from './monitors.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
@@ -57,6 +58,7 @@ const stateRow = {
 
 function createService() {
     const prisma = {
+        auditLog: { create: jest.fn().mockResolvedValue({}) },
         monitor: {
             create: jest.fn(),
             findMany: jest.fn(),
@@ -97,6 +99,7 @@ function createService() {
                 monitor: { secretKey: Buffer.alloc(32, 7).toString('base64') },
             }),
         ),
+        mockProjectAccess(prisma),
     );
 
     return {
@@ -134,9 +137,14 @@ describe('MonitorsService', () => {
                 ...existing,
                 ...data,
             }));
-            const response = await service.update('project-1', 'monitor-1', {
-                name: 'Renamed',
-            });
+            const response = await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    name: 'Renamed',
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
             const data = prisma.monitor.update.mock.calls[0][0].data;
             expect(data.revision).toBeUndefined();
             expect(data.credentialsEnc).toBe(existing.credentialsEnc);
@@ -153,9 +161,14 @@ describe('MonitorsService', () => {
                 ...existing,
                 ...data,
             }));
-            await service.update('project-1', 'monitor-1', {
-                config: { password: 'replacement-password' },
-            });
+            await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    config: { password: 'replacement-password' },
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
             const data = prisma.monitor.update.mock.calls[0][0].data;
             expect(data.revision).toEqual({ increment: 1 });
             expect(crypto.open({ ...existing, ...data }).password).toBe(
@@ -172,9 +185,14 @@ describe('MonitorsService', () => {
             const { service, prisma } = createService();
             prisma.monitor.findFirst.mockResolvedValue(existing);
             prisma.monitor.update.mockResolvedValue(existing);
-            await service.update('project-1', 'monitor-1', {
-                config: { password: 'private-password' },
-            });
+            await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    config: { password: 'private-password' },
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
             expect(
                 prisma.monitor.update.mock.calls[0][0].data.revision,
             ).toBeUndefined();
@@ -187,15 +205,25 @@ describe('MonitorsService', () => {
             prisma.monitor.findFirst.mockResolvedValue(existing);
             prisma.monitor.update.mockResolvedValue(existing);
             await expect(
-                service.update('project-1', 'monitor-1', {
-                    target: 'other.example.com:6379',
-                }),
+                service.update(
+                    'project-1',
+                    'monitor-1',
+                    {
+                        target: 'other.example.com:6379',
+                    },
+                    { type: 'USER', userId: 'user-1' },
+                ),
             ).rejects.toThrow('re-entered');
             expect(prisma.monitor.update).not.toHaveBeenCalled();
-            await service.update('project-1', 'monitor-1', {
-                target: 'other.example.com:6379',
-                config: definition,
-            });
+            await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    target: 'other.example.com:6379',
+                    config: definition,
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
             const data = prisma.monitor.update.mock.calls[0][0].data;
             expect(crypto.open({ ...existing, ...data }).password).toBe(
                 'private-password',
@@ -206,7 +234,12 @@ describe('MonitorsService', () => {
                     credentialsEnc: data.credentialsEnc,
                 }),
             ).toThrow();
-            await service.update('project-1', 'monitor-1', { config: {} });
+            await service.update(
+                'project-1',
+                'monitor-1',
+                { config: {} },
+                { type: 'USER', userId: 'user-1' },
+            );
             expect(
                 prisma.monitor.update.mock.calls[1][0].data.credentialsEnc,
             ).toBeNull();
@@ -220,11 +253,15 @@ describe('MonitorsService', () => {
                 state: stateRow,
             });
 
-            const result = await service.create('project-1', {
-                name: 'Production API',
-                type: 'HTTP',
-                target: 'https://api.example.com/health',
-            });
+            const result = await service.create(
+                'project-1',
+                {
+                    name: 'Production API',
+                    type: 'HTTP',
+                    target: 'https://api.example.com/health',
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
 
             expect(prisma.monitor.create).toHaveBeenCalledWith({
                 data: {
@@ -249,24 +286,49 @@ describe('MonitorsService', () => {
             const { service, prisma } = createService();
 
             await expect(
-                service.create('project-1', {
-                    name: 'Production API',
-                    type: 'HTTP',
-                    target: 'api.example.com/health',
-                }),
+                service.create(
+                    'project-1',
+                    {
+                        name: 'Production API',
+                        type: 'HTTP',
+                        target: 'api.example.com/health',
+                    },
+                    { type: 'USER', userId: 'user-1' },
+                ),
             ).rejects.toThrow(BadRequestException);
             expect(prisma.monitor.create).not.toHaveBeenCalled();
+        });
+
+        it('rejects HTTP userinfo before persisting or scheduling', async () => {
+            const { service, prisma, systemProbeScheduler } = createService();
+            await expect(
+                service.create(
+                    'project-1',
+                    {
+                        name: 'Production API',
+                        type: 'HTTP',
+                        target: 'https://user:private-password@example.com/check',
+                    },
+                    { type: 'USER', userId: 'user-1' },
+                ),
+            ).rejects.toThrow('must not contain URL credentials');
+            expect(prisma.monitor.create).not.toHaveBeenCalled();
+            expect(systemProbeScheduler.rebalance).not.toHaveBeenCalled();
         });
 
         it('rejects a TCP target without a valid port', async () => {
             const { service, prisma } = createService();
 
             await expect(
-                service.create('project-1', {
-                    name: 'Database',
-                    type: 'TCP',
-                    target: 'db.internal:not-a-port',
-                }),
+                service.create(
+                    'project-1',
+                    {
+                        name: 'Database',
+                        type: 'TCP',
+                        target: 'db.internal:not-a-port',
+                    },
+                    { type: 'USER', userId: 'user-1' },
+                ),
             ).rejects.toThrow(BadRequestException);
             expect(prisma.monitor.create).not.toHaveBeenCalled();
         });
@@ -280,12 +342,16 @@ describe('MonitorsService', () => {
                 notificationChannels: [{ channelId: 'channel-1' }],
             });
 
-            const result = await service.create('project-1', {
-                name: 'Production API',
-                type: 'HTTP',
-                target: 'https://api.example.com/health',
-                notificationChannelIds: ['channel-1'],
-            });
+            const result = await service.create(
+                'project-1',
+                {
+                    name: 'Production API',
+                    type: 'HTTP',
+                    target: 'https://api.example.com/health',
+                    notificationChannelIds: ['channel-1'],
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
 
             expect(prisma.notificationChannel.count).toHaveBeenCalledWith({
                 where: { id: { in: ['channel-1'] }, organizationId: 'org-1' },
@@ -306,12 +372,16 @@ describe('MonitorsService', () => {
             prisma.notificationChannel.count.mockResolvedValue(0);
 
             await expect(
-                service.create('project-1', {
-                    name: 'Production API',
-                    type: 'HTTP',
-                    target: 'https://api.example.com/health',
-                    notificationChannelIds: ['foreign-channel'],
-                }),
+                service.create(
+                    'project-1',
+                    {
+                        name: 'Production API',
+                        type: 'HTTP',
+                        target: 'https://api.example.com/health',
+                        notificationChannelIds: ['foreign-channel'],
+                    },
+                    { type: 'USER', userId: 'user-1' },
+                ),
             ).rejects.toThrow(BadRequestException);
             expect(prisma.monitor.create).not.toHaveBeenCalled();
         });
@@ -323,13 +393,18 @@ describe('MonitorsService', () => {
             const existing = { ...monitorRow, config: { keyword: 'healthy' } };
             prisma.monitor.findFirst.mockResolvedValue(existing);
             prisma.monitor.update.mockResolvedValue(existing);
-            await service.update('project-1', 'monitor-1', {
-                config: {
-                    maxBodyBytes: 65536,
-                    keywordMode: 'contains',
-                    keyword: 'healthy',
+            await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    config: {
+                        maxBodyBytes: 65536,
+                        keywordMode: 'contains',
+                        keyword: 'healthy',
+                    },
                 },
-            });
+                { type: 'USER', userId: 'user-1' },
+            );
             const data = prisma.monitor.update.mock.calls[0][0].data;
             expect(data.revision).toBeUndefined();
             expect(data.state).toBeUndefined();
@@ -356,7 +431,12 @@ describe('MonitorsService', () => {
                 };
                 prisma.monitor.findFirst.mockResolvedValue(existing);
                 prisma.monitor.update.mockResolvedValue(existing);
-                await service.update('project-1', 'monitor-1', { config });
+                await service.update(
+                    'project-1',
+                    'monitor-1',
+                    { config },
+                    { type: 'USER', userId: 'user-1' },
+                );
                 expect(prisma.monitor.update).toHaveBeenCalledWith(
                     expect.objectContaining({
                         data: expect.objectContaining({
@@ -387,9 +467,14 @@ describe('MonitorsService', () => {
             };
             prisma.monitor.findFirst.mockResolvedValue(existing);
             prisma.monitor.update.mockResolvedValue(existing);
-            await service.update('project-1', 'monitor-1', {
-                config: { recordType: 'A', expectedValues: ['1.1.1.1'] },
-            });
+            await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    config: { recordType: 'A', expectedValues: ['1.1.1.1'] },
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
             expect(
                 prisma.monitor.update.mock.calls[0][0].data.revision,
             ).toBeUndefined();
@@ -398,10 +483,15 @@ describe('MonitorsService', () => {
             const { service, prisma } = createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
             await expect(
-                service.update('project-1', 'monitor-1', {
-                    type: 'DNS',
-                    target: 'example.com',
-                }),
+                service.update(
+                    'project-1',
+                    'monitor-1',
+                    {
+                        type: 'DNS',
+                        target: 'example.com',
+                    },
+                    { type: 'USER', userId: 'user-1' },
+                ),
             ).rejects.toThrow('complete config');
             expect(prisma.monitor.update).not.toHaveBeenCalled();
         });
@@ -416,11 +506,22 @@ describe('MonitorsService', () => {
             };
             prisma.monitor.findFirst.mockResolvedValue(existing);
             prisma.monitor.update.mockResolvedValue(existing);
-            await service.update('project-1', 'monitor-1', {
-                config: { recordType: 'AAAA' },
-            });
+            await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    config: { recordType: 'AAAA' },
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1', revision: 1, deletedAt: null },
+                where: {
+                    id: 'monitor-1',
+                    projectId: 'project-1',
+                    organizationId: 'org-1',
+                    revision: 1,
+                    deletedAt: null,
+                },
                 data: expect.objectContaining({
                     config: { recordType: 'AAAA' },
                     revision: { increment: 1 },
@@ -445,11 +546,16 @@ describe('MonitorsService', () => {
                 new Error('not entitled'),
             );
             await expect(
-                service.update('project-1', 'monitor-1', {
-                    type: 'DNS',
-                    target: 'example.com',
-                    config: {},
-                }),
+                service.update(
+                    'project-1',
+                    'monitor-1',
+                    {
+                        type: 'DNS',
+                        target: 'example.com',
+                        config: {},
+                    },
+                    { type: 'USER', userId: 'user-1' },
+                ),
             ).rejects.toThrow('not entitled');
             expect(prisma.monitor.update).not.toHaveBeenCalled();
         });
@@ -471,9 +577,14 @@ describe('MonitorsService', () => {
                 eligible: false,
                 reason: 'MONITOR_TYPE_NOT_ALLOWED',
             });
-            const result = await service.update('project-1', 'monitor-1', {
-                enabled: false,
-            });
+            const result = await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    enabled: false,
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
             expect(
                 quotaService.assertMonitorTypeAllowed,
             ).not.toHaveBeenCalled();
@@ -492,12 +603,23 @@ describe('MonitorsService', () => {
                 state: { ...stateRow, status: 'UNKNOWN', failCount: 0 },
             });
 
-            await service.update('project-1', 'monitor-1', {
-                target: 'https://api.example.com/ready',
-            });
+            await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    target: 'https://api.example.com/ready',
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
 
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1', revision: 1, deletedAt: null },
+                where: {
+                    id: 'monitor-1',
+                    projectId: 'project-1',
+                    organizationId: 'org-1',
+                    revision: 1,
+                    deletedAt: null,
+                },
                 data: {
                     target: 'https://api.example.com/ready',
                     config: {},
@@ -545,12 +667,23 @@ describe('MonitorsService', () => {
                 state: stateRow,
             });
 
-            await service.update('project-1', 'monitor-1', {
-                name: 'Renamed API',
-            });
+            await service.update(
+                'project-1',
+                'monitor-1',
+                {
+                    name: 'Renamed API',
+                },
+                { type: 'USER', userId: 'user-1' },
+            );
 
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1', revision: 1, deletedAt: null },
+                where: {
+                    id: 'monitor-1',
+                    projectId: 'project-1',
+                    organizationId: 'org-1',
+                    revision: 1,
+                    deletedAt: null,
+                },
                 data: {
                     name: 'Renamed API',
                     config: {},
@@ -568,7 +701,10 @@ describe('MonitorsService', () => {
                 { ...monitorRow, state: null },
             ]);
 
-            const [result] = await service.findAll('project-1');
+            const [result] = await service.findAll('project-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.monitor.findMany).toHaveBeenCalledWith({
                 where: { projectId: 'project-1', deletedAt: null },
@@ -595,10 +731,18 @@ describe('MonitorsService', () => {
                 state: { ...stateRow, status: 'PAUSED' },
             });
 
-            const result = await service.pause('project-1', 'monitor-1');
+            const result = await service.pause('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1', revision: 1 },
+                where: {
+                    id: 'monitor-1',
+                    projectId: 'project-1',
+                    deletedAt: null,
+                    revision: 1,
+                },
                 data: {
                     enabled: false,
                     revision: { increment: 1 },
@@ -627,7 +771,10 @@ describe('MonitorsService', () => {
             });
 
             await expect(
-                service.pause('project-1', 'monitor-1'),
+                service.pause('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).rejects.toThrow(BadRequestException);
             expect(prisma.monitor.update).not.toHaveBeenCalled();
         });
@@ -644,10 +791,18 @@ describe('MonitorsService', () => {
                 state: { ...stateRow, status: 'UNKNOWN' },
             });
 
-            const result = await service.resume('project-1', 'monitor-1');
+            const result = await service.resume('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
 
             expect(prisma.monitor.update).toHaveBeenCalledWith({
-                where: { id: 'monitor-1', revision: 1 },
+                where: {
+                    id: 'monitor-1',
+                    projectId: 'project-1',
+                    deletedAt: null,
+                    revision: 1,
+                },
                 data: {
                     enabled: true,
                     revision: { increment: 1 },
@@ -682,7 +837,10 @@ describe('MonitorsService', () => {
                 deletedAt: new Date(),
             });
             prisma.monitor.update.mockResolvedValue(monitorRow);
-            await service.restore('project-1', 'monitor-1');
+            await service.restore('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
             expect(quotaService.assertCanCreate).toHaveBeenCalledWith(
                 'org-1',
                 'monitors',
@@ -704,7 +862,10 @@ describe('MonitorsService', () => {
             });
 
             await expect(
-                service.restore('project-1', 'monitor-1'),
+                service.restore('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).rejects.toThrow(BadRequestException);
         });
     });
@@ -715,7 +876,10 @@ describe('MonitorsService', () => {
             prisma.monitor.findFirst.mockResolvedValue(null);
 
             await expect(
-                service.findOne('project-1', 'monitor-1'),
+                service.findOne('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).rejects.toThrow(NotFoundException);
         });
     });
@@ -738,6 +902,7 @@ describe('MonitorsService', () => {
             const result = await service.sendTestAlert(
                 'project-1',
                 'monitor-1',
+                { type: 'USER', userId: 'user-1' },
             );
 
             expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
@@ -772,7 +937,10 @@ describe('MonitorsService', () => {
             prisma.monitor.findFirst.mockResolvedValue(null);
 
             await expect(
-                service.sendTestAlert('project-1', 'monitor-1'),
+                service.sendTestAlert('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
             ).rejects.toThrow(NotFoundException);
             expect(
                 notifierService.notifyAvailabilityAlert,

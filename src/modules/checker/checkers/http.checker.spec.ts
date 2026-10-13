@@ -197,6 +197,44 @@ describe('HttpChecker', () => {
         expect(spy).not.toHaveBeenCalled();
     });
 
+    it('rejects credentialed legacy URLs without constructing a request', async () => {
+        const spy = mockFetch(
+            () => new Request("https://old:private'password@example.com"),
+        );
+        const result = await checker.check(
+            "https://old:private'password@example.com/check?key=private-token",
+            1000,
+            200,
+        );
+        expect(result).toMatchObject({
+            success: false,
+            evaluated: false,
+            failureKind: 'CONFIGURATION',
+        });
+        expect(JSON.stringify(result)).not.toContain("private'password");
+        expect(JSON.stringify(result)).not.toContain('private-token');
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('sanitizes credentialed diagnostic URLs returned by transport failures', async () => {
+        mockFetch(() =>
+            Promise.reject(
+                new Error(
+                    'Redirect failed at https://old:private-password@example.com/check?key=private-token',
+                ),
+            ),
+        );
+        const result = await checker.check(
+            'https://example.com/check',
+            1000,
+            200,
+        );
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Redirect failed');
+        expect(result.error).not.toContain('private-password');
+        expect(result.error).not.toContain('private-token');
+    });
+
     it('rejects a non-http protocol', async () => {
         const spy = mockFetch(() => Promise.resolve(response(200)));
 

@@ -23,6 +23,10 @@ import { hashSecret } from '../src/modules/probes/probe-secret.util';
 import { CheckerService } from '../src/modules/checker/checker.service';
 import { MonitorDataCleanupService } from '../src/modules/cron/jobs/monitor-data-cleanup.service';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { ProjectAccessService } from '../src/common/authorization/project-access.service';
+import { ResourceContextResolver } from '../src/common/authorization/resource-context.resolver';
+import { ProjectAccessGuard } from '../src/common/authorization/project-access.guard';
+import { systemPrincipal } from '../src/common/authorization/access.types';
 
 // An explicit dedicated database is mandatory. Never default to the developer DB.
 const databaseUrl = process.env.MONITORING_TEST_DATABASE_URL;
@@ -108,6 +112,9 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
                 MonitoringDashboardService,
                 MonitoringEtagInterceptor,
                 OrgMemberGuard,
+                ProjectAccessService,
+                ResourceContextResolver,
+                ProjectAccessGuard,
                 { provide: APP_GUARD, useClass: JwtAuthGuard },
             ],
         }).compile();
@@ -168,6 +175,19 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
                 },
             })
         ).id;
+        const membership = await prisma.membership.findUniqueOrThrow({
+            where: {
+                userId_organizationId: { userId: user, organizationId: org },
+            },
+        });
+        await prisma.projectMembership.createMany({
+            data: [project, emptyProject, otherProject].map((projectId) => ({
+                projectId,
+                organizationId: org,
+                membershipId: membership.id,
+                role: 'VIEWER' as const,
+            })),
+        });
         await prisma.monitoringCoverage.updateMany({
             where: { projectId: { in: [project, emptyProject, otherProject] } },
             data: {
@@ -249,7 +269,9 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             new AlertEventsService(
                 prisma,
                 notifications as NotificationsService,
+                new ProjectAccessService(prisma),
             ),
+            new ProjectAccessService(prisma),
         );
     }, 30000);
 
@@ -900,12 +922,22 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             new AlertEventsService(
                 prisma,
                 notifications as NotificationsService,
-            ).retry(otherProject, delivery.id),
+                new ProjectAccessService(prisma),
+            ).retry(
+                otherProject,
+                delivery.id,
+                systemPrincipal('alert integration fixture'),
+            ),
         ).rejects.toThrow();
         await new AlertEventsService(
             prisma,
             notifications as NotificationsService,
-        ).retry(project, delivery.id);
+            new ProjectAccessService(prisma),
+        ).retry(
+            project,
+            delivery.id,
+            systemPrincipal('alert integration fixture'),
+        );
         expect(
             (
                 await prisma.alertDelivery.findUniqueOrThrow({
@@ -1157,6 +1189,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             scheduler as never,
             {} as never,
             { findBindingsForMonitor: () => Promise.resolve([]) } as never,
+            new ProjectAccessService(prisma),
         );
         const probes = new ProbesService(
             prisma,

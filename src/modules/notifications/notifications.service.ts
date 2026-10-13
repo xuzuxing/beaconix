@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+    BadRequestException,
+    Injectable,
+    NotFoundException,
+} from '@nestjs/common';
 import { toIsoString } from '../../common/utils/date.util';
 import { createHash, randomUUID } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
@@ -12,11 +16,15 @@ import {
     NotificationEvent,
     NotificationRecipient,
     ADMIN_ROLES,
+    ADMIN_NOTIFICATION_TYPES,
+    NotificationAudience,
 } from './notification-event';
 import { NotificationDeliveryService } from './notification-delivery.service';
 import { NotificationStreamService } from './notification-stream.service';
 import { EmailTemplate, EmailPayloadMap } from '../email/email.types';
 import { projectInvitationState } from './invitation-notification-state';
+import { NotificationAccessService } from './notification-access.service';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
 
 function deliveryKey(value: string): string {
     return createHash('sha256').update(value).digest('hex');
@@ -53,6 +61,8 @@ export class NotificationsService {
         private readonly prisma: PrismaService,
         private readonly delivery: NotificationDeliveryService,
         private readonly streams: NotificationStreamService,
+        private readonly authorization: NotificationAccessService,
+        private readonly access: ProjectAccessService,
     ) {}
 
     async publish(
@@ -60,6 +70,7 @@ export class NotificationsService {
         tx?: NotificationDb,
     ): Promise<void> {
         const persist = async (db: NotificationDb) => {
+            const scope = await this.eventScope(event, db);
             // First-wins allows mention/reply/assignment recipients to override
             // an ordinary watcher without receiving two messages for one event.
             const recipients = new Map<string, NotificationRecipient>();
@@ -92,6 +103,12 @@ export class NotificationsService {
                 select: { id: true, email: true, emailVerified: true },
             });
             for (const user of users) {
+                const audience: NotificationAudience = {
+                    ...scope,
+                    userId: user.id,
+                };
+                if (!(await this.authorization.eligible(audience, db)))
+                    continue;
                 const recipient = recipients.get(user.id)!;
                 const key = deliveryKey(`${event.eventKey}:user:${user.id}`);
                 const sseKey = deliveryKey(`${key}:sse`);
@@ -107,6 +124,9 @@ export class NotificationsService {
                     create: {
                         dedupKey: key,
                         userId: user.id,
+                        accessScope: scope.accessScope,
+                        organizationId: scope.organizationId ?? null,
+                        projectId: scope.projectId ?? null,
                         type: recipient.type ?? event.type,
                         title: recipient.title ?? event.title,
                         body: recipient.body ?? event.body ?? null,
@@ -132,13 +152,7 @@ export class NotificationsService {
                             notificationId: notice.id,
                             userId: user.id,
                             eventKey: event.eventKey,
-                            audience: {
-                                userId: user.id,
-                                ...(event.organizationId
-                                    ? { organizationId: event.organizationId }
-                                    : {}),
-                                allowOutsideOrg: event.allowOutsideOrg ?? false,
-                            },
+                            audience: { ...audience },
                         },
                     },
                 });
@@ -152,11 +166,7 @@ export class NotificationsService {
                         },
                         `${key}:email`,
                         db,
-                        {
-                            userId: user.id,
-                            organizationId: event.organizationId,
-                            allowOutsideOrg: event.allowOutsideOrg,
-                        },
+                        { ...audience, email: user.email },
                     );
                 }
             }
@@ -173,20 +183,25 @@ export class NotificationsService {
         payload: EmailPayloadMap[T],
         eventKey: string,
         tx?: NotificationDb,
-        audience?: {
-            userId: string;
-            organizationId?: string;
-            allowOutsideOrg?: boolean;
-        },
+        audience?: NotificationAudience,
     ): Promise<void> {
         const db = tx ?? this.prisma;
+        if (!audience)
+            throw new BadRequestException(
+                'Explicit notification audience required',
+            );
+        const deliveryAudience = { ...audience, email: payload.to };
         await db.notificationDelivery.createMany({
             data: [
                 {
                     dedupKey: deliveryKey(`email:${eventKey}`),
                     channel: 'EMAIL',
                     payload: JSON.parse(
-                        JSON.stringify({ template, data: payload, audience }),
+                        JSON.stringify({
+                            template,
+                            data: payload,
+                            audience: deliveryAudience,
+                        }),
                     ) as Prisma.InputJsonValue,
                 },
             ],
@@ -203,6 +218,7 @@ export class NotificationsService {
             ...dto,
             eventKey: randomUUID(),
             recipients: [userId],
+            accessScope: 'ACCOUNT',
         });
     }
 
@@ -214,6 +230,7 @@ export class NotificationsService {
             ...dto,
             eventKey: randomUUID(),
             recipients: userIds,
+            accessScope: 'ACCOUNT',
         });
     }
 
@@ -269,6 +286,7 @@ export class NotificationsService {
             where: { id: taskId },
             select: {
                 organizationId: true,
+                projectId: true,
                 createdById: true,
                 assignedToId: true,
                 watchers: { select: { userId: true } },
@@ -276,7 +294,15 @@ export class NotificationsService {
         });
         if (!task) return [];
         const members = new Set(
-            await this.organizationRecipients(task.organizationId, db),
+            (
+                await db.membership.findMany({
+                    where: this.access.projectMemberFilter(
+                        task.organizationId,
+                        task.projectId,
+                    ),
+                    select: { userId: true },
+                })
+            ).map(({ userId }) => userId),
         );
         return [
             ...new Set([
@@ -309,7 +335,15 @@ export class NotificationsService {
         });
         if (!project) return [];
         const members = new Set(
-            await this.organizationRecipients(project.organizationId, db),
+            (
+                await db.membership.findMany({
+                    where: this.access.projectMemberFilter(
+                        project.organizationId,
+                        projectId,
+                    ),
+                    select: { userId: true },
+                })
+            ).map(({ userId }) => userId),
         );
         const admins = await this.organizationRecipients(
             project.organizationId,
@@ -381,7 +415,7 @@ export class NotificationsService {
         await this.syncPendingInvitations(userId);
         const page = query.page ?? 1;
         const limit = query.limit ?? 20;
-        const where: Prisma.NotificationWhereInput = { userId };
+        const where = await this.authorization.visibleWhere(userId);
         if (query.isRead !== undefined) where.isRead = query.isRead;
         const [notifications, total] = await Promise.all([
             this.prisma.notification.findMany({
@@ -405,7 +439,10 @@ export class NotificationsService {
         await this.syncPendingInvitations(userId);
         return {
             count: await this.prisma.notification.count({
-                where: { userId, isRead: false },
+                where: {
+                    ...(await this.authorization.visibleWhere(userId)),
+                    isRead: false,
+                },
             }),
         };
     }
@@ -415,7 +452,10 @@ export class NotificationsService {
         notificationId: string,
     ): Promise<NotificationEntity> {
         const notification = await this.prisma.notification.findFirst({
-            where: { id: notificationId, userId },
+            where: {
+                ...(await this.authorization.visibleWhere(userId)),
+                id: notificationId,
+            },
         });
         if (!notification)
             throw new NotFoundException('Notification not found');
@@ -427,42 +467,138 @@ export class NotificationsService {
     }
 
     async markAsRead(userId: string, notificationId: string) {
-        const notification = await this.prisma.notification.findFirst({
-            where: { id: notificationId, userId },
+        return this.authorization.withWrite(userId, async (tx, where) => {
+            const notification = await tx.notification.findFirst({
+                where: { ...where, id: notificationId },
+            });
+            if (!notification)
+                throw new NotFoundException('Notification not found');
+            const updated = await tx.notification.update({
+                where: { id: notificationId, AND: where },
+                data: {
+                    isRead: true,
+                    readAt: notification.readAt ?? new Date(),
+                },
+            });
+            return (
+                await projectInvitationState(tx, [
+                    new NotificationEntity(updated),
+                ])
+            )[0];
         });
-        if (!notification)
-            throw new NotFoundException('Notification not found');
-        const updated = await this.prisma.notification.update({
-            where: { id: notificationId },
-            data: { isRead: true, readAt: notification.readAt ?? new Date() },
-        });
-        return (
-            await projectInvitationState(this.prisma, [
-                new NotificationEntity(updated),
-            ])
-        )[0];
     }
 
     async markAllAsRead(userId: string) {
-        const { count } = await this.prisma.notification.updateMany({
-            where: { userId, isRead: false },
-            data: { isRead: true, readAt: new Date() },
+        return this.authorization.withWrite(userId, async (tx, where) => {
+            const { count } = await tx.notification.updateMany({
+                where: { ...where, isRead: false },
+                data: { isRead: true, readAt: new Date() },
+            });
+            return { updated: count };
         });
-        return { updated: count };
     }
 
     async remove(userId: string, notificationId: string) {
-        const notification = await this.prisma.notification.findFirst({
-            where: { id: notificationId, userId },
-        });
-        if (!notification)
-            throw new NotFoundException('Notification not found');
-        await this.prisma.notification.delete({
-            where: { id: notificationId },
+        await this.authorization.withWrite(userId, async (tx, where) => {
+            const notification = await tx.notification.findFirst({
+                where: { ...where, id: notificationId },
+            });
+            if (!notification)
+                throw new NotFoundException('Notification not found');
+            await tx.notification.delete({
+                where: { id: notificationId, AND: where },
+            });
         });
     }
 
     getStream(userId: string) {
         return this.streams.getStream(userId);
+    }
+
+    private async eventScope(
+        event: NotificationEvent,
+        db: NotificationDb,
+    ): Promise<Omit<NotificationAudience, 'userId'>> {
+        if (
+            event.accessScope === 'ACCOUNT' ||
+            event.type === 'ORGANIZATION_DELETED'
+        ) {
+            return { accessScope: 'ACCOUNT' };
+        }
+        if (event.accessScope === 'ORGANIZATION' && event.organizationId) {
+            return {
+                accessScope: 'ORGANIZATION',
+                organizationId: event.organizationId,
+                ...(ADMIN_NOTIFICATION_TYPES.includes(event.type)
+                    ? { organizationRoles: ADMIN_ROLES }
+                    : {}),
+            };
+        }
+        if (
+            event.resourceType === 'Invitation' &&
+            event.type === 'INVITATION_RECEIVED'
+        ) {
+            const invitation = await db.invitation.findUnique({
+                where: { id: event.resourceId },
+                select: { id: true, email: true, organizationId: true },
+            });
+            if (!invitation)
+                throw new BadRequestException('Invitation scope unavailable');
+            return {
+                accessScope: 'INVITATION',
+                invitationId: invitation.id,
+                organizationId: invitation.organizationId,
+                email: invitation.email,
+            };
+        }
+        let projectId = event.projectId;
+        if (event.resourceType === 'Project') projectId = event.resourceId;
+        if (!projectId && event.resourceType === 'Task') {
+            projectId = (
+                await db.task.findUnique({
+                    where: { id: event.resourceId },
+                    select: { projectId: true },
+                })
+            )?.projectId;
+        }
+        if (!projectId && event.resourceType === 'Sprint') {
+            projectId = (
+                await db.sprint.findUnique({
+                    where: { id: event.resourceId },
+                    select: { projectId: true },
+                })
+            )?.projectId;
+        }
+        if (!projectId && event.resourceType === 'Monitor') {
+            projectId = (
+                await db.monitor.findUnique({
+                    where: { id: event.resourceId },
+                    select: { projectId: true },
+                })
+            )?.projectId;
+        }
+        if (projectId && event.organizationId) {
+            const project = await db.project.findFirst({
+                where: { id: projectId, organizationId: event.organizationId },
+                select: { id: true },
+            });
+            if (!project)
+                throw new BadRequestException('Project scope mismatch');
+            return {
+                accessScope: 'PROJECT',
+                organizationId: event.organizationId,
+                projectId,
+            };
+        }
+        if (
+            event.organizationId &&
+            ['Organization', 'Invitation'].includes(event.resourceType ?? '')
+        ) {
+            return {
+                accessScope: 'ORGANIZATION',
+                organizationId: event.organizationId,
+            };
+        }
+        throw new BadRequestException('Explicit notification scope required');
     }
 }

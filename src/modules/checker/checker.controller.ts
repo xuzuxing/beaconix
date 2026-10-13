@@ -23,20 +23,24 @@ import {
 import { CheckerService } from './checker.service';
 import { QueryCheckLogsDto } from './dto';
 import { CheckLogEntity } from './entities';
-import { Roles, AuditLog } from '../../common/decorators';
-import { RolesGuard, OrgMemberGuard } from '../../common/guards';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
+import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 
 @ApiTags('Monitor Checks')
 @ApiBearerAuth('access-token')
 @Controller('projects/:projectId/monitors')
+@UseGuards(ProjectAccessGuard)
 export class CheckerController {
     constructor(private readonly checkerService: CheckerService) {}
 
     @Post(':monitorId/check')
     @HttpCode(HttpStatus.OK)
-    @UseGuards(OrgMemberGuard, RolesGuard)
-    @Roles('MEMBER')
-    @AuditLog({ entity: 'Monitor', action: 'UPDATE', idParam: 'monitorId' })
+    @ProjectPermission('monitor.check', {
+        resourceType: 'MONITOR',
+        idParam: 'monitorId',
+    })
     @ApiOperation({
         summary: 'Run a check for a monitor right now',
     })
@@ -53,12 +57,20 @@ export class CheckerController {
     async check(
         @Param('projectId') projectId: string,
         @Param('monitorId') monitorId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.checkerService.checkMonitorForProject(projectId, monitorId);
+        return this.checkerService.checkMonitorForProject(
+            projectId,
+            monitorId,
+            principal,
+        );
     }
 
     @Get(':monitorId/checks')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('monitor.read', {
+        resourceType: 'MONITOR',
+        idParam: 'monitorId',
+    })
     @ApiOperation({ summary: 'List the check history of a monitor' })
     @ApiParam({ name: 'projectId', description: 'Project CUID' })
     @ApiParam({ name: 'monitorId', description: 'Monitor CUID' })
@@ -74,7 +86,13 @@ export class CheckerController {
         @Param('projectId') projectId: string,
         @Param('monitorId') monitorId: string,
         @Query() query: QueryCheckLogsDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
     ) {
-        return this.checkerService.listCheckLogs(projectId, monitorId, query);
+        return this.checkerService.listCheckLogs(
+            projectId,
+            monitorId,
+            query,
+            principal,
+        );
     }
 }

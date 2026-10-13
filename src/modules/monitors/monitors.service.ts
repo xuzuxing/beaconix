@@ -33,6 +33,13 @@ import type {
     InputJsonValue,
     JsonValue,
 } from '../../generated/prisma/internal/prismaNamespace';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
+import type { AccessDb } from '../../common/authorization/access-locks';
+import {
+    monitoringProjection,
+    sanitizeMonitoringTarget,
+} from '../../common/authorization/monitoring-projection';
 
 /** A monitor row with its companion state row and channel bindings loaded. */
 type MonitorWithState = MonitorModel & {
@@ -48,9 +55,15 @@ export class MonitorsService {
         private readonly quotaService: QuotaService,
         private readonly notifierService: NotifierService,
         private readonly secrets: MonitorSecretsService,
+        private readonly access: ProjectAccessService,
     ) {}
 
-    async create(projectId: string, dto: CreateMonitorDto) {
+    async create(
+        projectId: string,
+        dto: CreateMonitorDto,
+        principal: AccessPrincipal,
+    ) {
+        await this.access.project(principal, projectId, 'monitor.manage');
         this.rejectNullFields(dto);
         const project = await this.ensureProjectExists(projectId);
         await this.quotaService.assertCanCreate(
@@ -82,38 +95,57 @@ export class MonitorsService {
 
         // The nested write creates the companion MonitorState row and the
         // channel bindings in the same transaction as the monitor itself.
-        const monitor = await this.prisma.monitor.create({
-            data: {
-                ...monitorData,
-                config: sealed.config,
-                ...(sealed.credentialsEnc
-                    ? { credentialsEnc: sealed.credentialsEnc }
-                    : {}),
-                ...(dto.timeout === undefined &&
-                APPLICATION_MONITOR_TYPES.includes(dto.type)
-                    ? { timeout: 10000 }
-                    : {}),
-                configVersion: CONFIG_VERSION,
-                organizationId: project.organizationId,
-                projectId,
-                state: { create: {} },
-                notificationChannels: notificationChannelIds?.length
-                    ? {
-                          create: notificationChannelIds.map((channelId) => ({
-                              channelId,
-                          })),
-                      }
-                    : undefined,
+        const monitor = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.manage',
+            async (tx) => {
+                await this.assertChannelsBelongToOrg(
+                    project.organizationId,
+                    notificationChannelIds,
+                    tx,
+                );
+                return tx.monitor.create({
+                    data: {
+                        ...monitorData,
+                        config: sealed.config,
+                        ...(sealed.credentialsEnc
+                            ? { credentialsEnc: sealed.credentialsEnc }
+                            : {}),
+                        ...(dto.timeout === undefined &&
+                        APPLICATION_MONITOR_TYPES.includes(dto.type)
+                            ? { timeout: 10000 }
+                            : {}),
+                        configVersion: CONFIG_VERSION,
+                        organizationId: project.organizationId,
+                        projectId,
+                        state: { create: {} },
+                        notificationChannels: notificationChannelIds?.length
+                            ? {
+                                  create: notificationChannelIds.map(
+                                      (channelId) => ({
+                                          channelId,
+                                      }),
+                                  ),
+                              }
+                            : undefined,
+                    },
+                    include: { state: true, notificationChannels: true },
+                });
             },
-            include: { state: true, notificationChannels: true },
-        });
+        );
 
         await this.systemProbeScheduler.rebalance();
 
         return this.toEntity(monitor);
     }
 
-    async findAll(projectId: string) {
+    async findAll(projectId: string, principal: AccessPrincipal) {
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'monitor.read',
+        );
         const project = await this.ensureProjectExists(projectId);
 
         const monitors = await this.prisma.monitor.findMany({
@@ -125,27 +157,72 @@ export class MonitorsService {
         const policy = await this.quotaService.getMonitorPolicy(
             project.organizationId,
         );
-        return Promise.all(monitors.map((m) => this.toEntity(m, policy)));
+        return monitoringProjection(
+            await Promise.all(monitors.map((m) => this.toEntity(m, policy))),
+            access.effectiveRole,
+        );
     }
 
     /** Cross-project listing used by the developer API. */
-    async findAllByOrg(orgId: string) {
+    async findAllByOrg(orgId: string, principal: AccessPrincipal) {
+        const project = await this.access.projectFilter(principal, orgId);
         const monitors = await this.prisma.monitor.findMany({
-            where: { organizationId: orgId, deletedAt: null },
+            where: { organizationId: orgId, deletedAt: null, project },
             include: { state: true, notificationChannels: true },
             orderBy: { createdAt: 'desc' },
         });
 
         const policy = await this.quotaService.getMonitorPolicy(orgId);
-        return Promise.all(monitors.map((m) => this.toEntity(m, policy)));
+        const roles = new Map<string, 'ADMIN' | 'MEMBER' | 'VIEWER'>();
+        for (const projectId of new Set(
+            monitors.map((monitor) => monitor.projectId),
+        )) {
+            roles.set(
+                projectId,
+                (
+                    await this.access.project(
+                        principal,
+                        projectId,
+                        'monitor.read',
+                        orgId,
+                    )
+                ).effectiveRole,
+            );
+        }
+        return Promise.all(
+            monitors.map(async (m) =>
+                monitoringProjection(
+                    await this.toEntity(m, policy),
+                    roles.get(m.projectId)!,
+                ),
+            ),
+        );
     }
 
-    async findOne(projectId: string, monitorId: string) {
+    async findOne(
+        projectId: string,
+        monitorId: string,
+        principal: AccessPrincipal,
+    ) {
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'monitor.read',
+        );
         const monitor = await this.ensureMonitorExists(projectId, monitorId);
-        return this.toEntity(monitor);
+        return monitoringProjection(
+            await this.toEntity(monitor),
+            access.effectiveRole,
+        );
     }
 
-    async update(projectId: string, monitorId: string, dto: UpdateMonitorDto) {
+    async update(
+        projectId: string,
+        monitorId: string,
+        dto: UpdateMonitorDto,
+        principal: AccessPrincipal,
+    ) {
+        await this.access.project(principal, projectId, 'monitor.manage');
         this.rejectNullFields(dto);
         const existing = await this.ensureMonitorExists(projectId, monitorId);
         const nextType = dto.type ?? existing.type;
@@ -251,73 +328,90 @@ export class MonitorsService {
             notificationChannelIds,
         );
 
-        const monitor = await this.prisma.monitor.update({
-            where: {
-                id: monitorId,
-                revision: existing.revision,
-                deletedAt: null,
-            },
-            data: {
-                ...monitorData,
-                config: sealed.config,
-                ...(dto.config !== undefined || existing.credentialsEnc
-                    ? { credentialsEnc: sealed.credentialsEnc }
-                    : {}),
-                ...(definitionChanged || lifecycleChanged
-                    ? {
-                          revision: { increment: 1 },
-                      }
-                    : {}),
-                state:
-                    definitionChanged || lifecycleChanged
-                        ? {
-                              upsert: {
-                                  create: {
-                                      status:
-                                          (dto.enabled ?? existing.enabled)
-                                              ? 'UNKNOWN'
-                                              : 'PAUSED',
+        const monitor = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.manage',
+            async (tx) => {
+                await this.ensureMonitorExists(projectId, monitorId, tx);
+                await this.assertChannelsBelongToOrg(
+                    existing.organizationId,
+                    notificationChannelIds,
+                    tx,
+                );
+                return tx.monitor.update({
+                    where: {
+                        id: monitorId,
+                        projectId,
+                        organizationId: existing.organizationId,
+                        revision: existing.revision,
+                        deletedAt: null,
+                    },
+                    data: {
+                        ...monitorData,
+                        config: sealed.config,
+                        ...(dto.config !== undefined || existing.credentialsEnc
+                            ? { credentialsEnc: sealed.credentialsEnc }
+                            : {}),
+                        ...(definitionChanged || lifecycleChanged
+                            ? {
+                                  revision: { increment: 1 },
+                              }
+                            : {}),
+                        state:
+                            definitionChanged || lifecycleChanged
+                                ? {
+                                      upsert: {
+                                          create: {
+                                              status:
+                                                  (dto.enabled ??
+                                                  existing.enabled)
+                                                      ? 'UNKNOWN'
+                                                      : 'PAUSED',
+                                          },
+                                          update: {
+                                              status:
+                                                  (dto.enabled ??
+                                                  existing.enabled)
+                                                      ? 'UNKNOWN'
+                                                      : 'PAUSED',
+                                              failCount: 0,
+                                              connectivityFailCount: 0,
+                                              lastAppliedObservationAt: null,
+                                              lastAppliedObservationId: null,
+                                              lastCheckAt: null,
+                                              lastLocalCheckAt: null,
+                                              executionBlockedReason: null,
+                                              lastError: null,
+                                              lastLatency: null,
+                                              lastNotifiedStatus: null,
+                                              sslExpiresAt: null,
+                                              sslDaysRemaining: null,
+                                              sslIssuer: null,
+                                              sslSubject: null,
+                                              sslLastNotifiedAt: null,
+                                              availabilityAlertActive: false,
+                                              availabilityAlertPendingId: null,
+                                              lastAvailabilityAlertAt: null,
+                                          },
+                                      },
+                                  }
+                                : undefined,
+                        ...(notificationChannelIds !== undefined
+                            ? {
+                                  notificationChannels: {
+                                      deleteMany: {},
+                                      create: notificationChannelIds.map(
+                                          (channelId) => ({ channelId }),
+                                      ),
                                   },
-                                  update: {
-                                      status:
-                                          (dto.enabled ?? existing.enabled)
-                                              ? 'UNKNOWN'
-                                              : 'PAUSED',
-                                      failCount: 0,
-                                      connectivityFailCount: 0,
-                                      lastAppliedObservationAt: null,
-                                      lastAppliedObservationId: null,
-                                      lastCheckAt: null,
-                                      lastLocalCheckAt: null,
-                                      executionBlockedReason: null,
-                                      lastError: null,
-                                      lastLatency: null,
-                                      lastNotifiedStatus: null,
-                                      sslExpiresAt: null,
-                                      sslDaysRemaining: null,
-                                      sslIssuer: null,
-                                      sslSubject: null,
-                                      sslLastNotifiedAt: null,
-                                      availabilityAlertActive: false,
-                                      availabilityAlertPendingId: null,
-                                      lastAvailabilityAlertAt: null,
-                                  },
-                              },
-                          }
-                        : undefined,
-                ...(notificationChannelIds !== undefined
-                    ? {
-                          notificationChannels: {
-                              deleteMany: {},
-                              create: notificationChannelIds.map(
-                                  (channelId) => ({ channelId }),
-                              ),
-                          },
-                      }
-                    : {}),
+                              }
+                            : {}),
+                    },
+                    include: { state: true, notificationChannels: true },
+                });
             },
-            include: { state: true, notificationChannels: true },
-        });
+        );
 
         if (targetChanged || dto.enabled !== undefined) {
             await this.systemProbeScheduler.rebalance();
@@ -326,37 +420,58 @@ export class MonitorsService {
         return this.toEntity(monitor);
     }
 
-    async pause(projectId: string, monitorId: string) {
+    async pause(
+        projectId: string,
+        monitorId: string,
+        principal: AccessPrincipal,
+    ) {
+        await this.access.project(principal, projectId, 'monitor.manage');
         const monitor = await this.ensureMonitorExists(projectId, monitorId);
 
         if (!monitor.enabled) {
             throw new BadRequestException('Monitor is already paused');
         }
 
-        const updated = await this.prisma.monitor.update({
-            where: { id: monitorId, revision: monitor.revision },
-            data: {
-                enabled: false,
-                revision: { increment: 1 },
-                state: {
-                    upsert: {
-                        create: { status: 'PAUSED' },
-                        update: {
-                            status: 'PAUSED',
-                            availabilityAlertPendingId: null,
+        const updated = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.manage',
+            (tx) =>
+                tx.monitor.update({
+                    where: {
+                        id: monitorId,
+                        projectId,
+                        deletedAt: null,
+                        revision: monitor.revision,
+                    },
+                    data: {
+                        enabled: false,
+                        revision: { increment: 1 },
+                        state: {
+                            upsert: {
+                                create: { status: 'PAUSED' },
+                                update: {
+                                    status: 'PAUSED',
+                                    availabilityAlertPendingId: null,
+                                },
+                            },
                         },
                     },
-                },
-            },
-            include: { state: true, notificationChannels: true },
-        });
+                    include: { state: true, notificationChannels: true },
+                }),
+        );
 
         await this.systemProbeScheduler.rebalance();
 
         return this.toEntity(updated);
     }
 
-    async resume(projectId: string, monitorId: string) {
+    async resume(
+        projectId: string,
+        monitorId: string,
+        principal: AccessPrincipal,
+    ) {
+        await this.access.project(principal, projectId, 'monitor.manage');
         const monitor = await this.ensureMonitorExists(projectId, monitorId);
 
         if (monitor.enabled) {
@@ -371,52 +486,84 @@ export class MonitorsService {
             monitor.interval,
         );
 
-        const updated = await this.prisma.monitor.update({
-            where: { id: monitorId, revision: monitor.revision },
-            data: {
-                enabled: true,
-                revision: { increment: 1 },
-                // The real status is re-derived by the next check.
-                state: {
-                    upsert: {
-                        create: {},
-                        update: {
-                            status: 'UNKNOWN',
-                            failCount: 0,
-                            connectivityFailCount: 0,
-                            lastAppliedObservationAt: null,
-                            lastAppliedObservationId: null,
-                            lastLocalCheckAt: null,
-                            executionBlockedReason: null,
-                            availabilityAlertActive: false,
-                            availabilityAlertPendingId: null,
+        const updated = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.manage',
+            (tx) =>
+                tx.monitor.update({
+                    where: {
+                        id: monitorId,
+                        projectId,
+                        deletedAt: null,
+                        revision: monitor.revision,
+                    },
+                    data: {
+                        enabled: true,
+                        revision: { increment: 1 },
+                        // The real status is re-derived by the next check.
+                        state: {
+                            upsert: {
+                                create: {},
+                                update: {
+                                    status: 'UNKNOWN',
+                                    failCount: 0,
+                                    connectivityFailCount: 0,
+                                    lastAppliedObservationAt: null,
+                                    lastAppliedObservationId: null,
+                                    lastLocalCheckAt: null,
+                                    executionBlockedReason: null,
+                                    availabilityAlertActive: false,
+                                    availabilityAlertPendingId: null,
+                                },
+                            },
                         },
                     },
-                },
-            },
-            include: { state: true, notificationChannels: true },
-        });
+                    include: { state: true, notificationChannels: true },
+                }),
+        );
 
         await this.systemProbeScheduler.rebalance();
 
         return this.toEntity(updated);
     }
 
-    async softDelete(projectId: string, monitorId: string) {
+    async softDelete(
+        projectId: string,
+        monitorId: string,
+        principal: AccessPrincipal,
+    ) {
+        await this.access.project(principal, projectId, 'monitor.manage');
         const monitor = await this.ensureMonitorExists(projectId, monitorId);
 
-        const updated = await this.prisma.monitor.update({
-            where: { id: monitorId, revision: monitor.revision },
-            data: { deletedAt: new Date(), revision: { increment: 1 } },
-            include: { state: true, notificationChannels: true },
-        });
+        const updated = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.manage',
+            (tx) =>
+                tx.monitor.update({
+                    where: {
+                        id: monitorId,
+                        projectId,
+                        deletedAt: null,
+                        revision: monitor.revision,
+                    },
+                    data: { deletedAt: new Date(), revision: { increment: 1 } },
+                    include: { state: true, notificationChannels: true },
+                }),
+        );
 
         await this.systemProbeScheduler.rebalance();
 
         return this.toEntity(updated);
     }
 
-    async restore(projectId: string, monitorId: string) {
+    async restore(
+        projectId: string,
+        monitorId: string,
+        principal: AccessPrincipal,
+    ) {
+        await this.access.project(principal, projectId, 'monitor.restore');
         await this.ensureProjectExists(projectId);
 
         const monitor = await this.prisma.monitor.findFirst({
@@ -444,32 +591,47 @@ export class MonitorsService {
             monitor.interval,
         );
 
-        const updated = await this.prisma.monitor.update({
-            where: { id: monitorId, revision: monitor.revision },
-            data: {
-                deletedAt: null,
-                revision: { increment: 1 },
-                state: {
-                    upsert: {
-                        create: {
-                            status: monitor.enabled ? 'UNKNOWN' : 'PAUSED',
-                        },
-                        update: {
-                            status: monitor.enabled ? 'UNKNOWN' : 'PAUSED',
-                            failCount: 0,
-                            connectivityFailCount: 0,
-                            lastAppliedObservationAt: null,
-                            lastAppliedObservationId: null,
-                            lastLocalCheckAt: null,
-                            executionBlockedReason: null,
-                            availabilityAlertActive: false,
-                            availabilityAlertPendingId: null,
+        const updated = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.restore',
+            (tx) =>
+                tx.monitor.update({
+                    where: {
+                        id: monitorId,
+                        projectId,
+                        deletedAt: { not: null },
+                        revision: monitor.revision,
+                    },
+                    data: {
+                        deletedAt: null,
+                        revision: { increment: 1 },
+                        state: {
+                            upsert: {
+                                create: {
+                                    status: monitor.enabled
+                                        ? 'UNKNOWN'
+                                        : 'PAUSED',
+                                },
+                                update: {
+                                    status: monitor.enabled
+                                        ? 'UNKNOWN'
+                                        : 'PAUSED',
+                                    failCount: 0,
+                                    connectivityFailCount: 0,
+                                    lastAppliedObservationAt: null,
+                                    lastAppliedObservationId: null,
+                                    lastLocalCheckAt: null,
+                                    executionBlockedReason: null,
+                                    availabilityAlertActive: false,
+                                    availabilityAlertPendingId: null,
+                                },
+                            },
                         },
                     },
-                },
-            },
-            include: { state: true, notificationChannels: true },
-        });
+                    include: { state: true, notificationChannels: true },
+                }),
+        );
 
         await this.systemProbeScheduler.rebalance();
 
@@ -483,8 +645,42 @@ export class MonitorsService {
      * (or the organization fallback) so operators can verify delivery without
      * waiting for a real outage. The payload is flagged as a test.
      */
-    async sendTestAlert(projectId: string, monitorId: string) {
-        const monitor = await this.ensureMonitorExists(projectId, monitorId);
+    async sendTestAlert(
+        projectId: string,
+        monitorId: string,
+        principal: AccessPrincipal,
+    ) {
+        const monitor = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.test-alert',
+            async (tx) => {
+                const monitor = await this.ensureMonitorExists(
+                    projectId,
+                    monitorId,
+                    tx,
+                );
+                await tx.auditLog.create({
+                    data: {
+                        actorId:
+                            principal.type === 'USER' ? principal.userId : null,
+                        organizationId: monitor.organizationId,
+                        projectId,
+                        entity: 'Monitor',
+                        entityId: monitorId,
+                        action: 'UPDATE',
+                        after: {
+                            action: 'monitor.test-alert',
+                            principal:
+                                principal.type === 'SYSTEM'
+                                    ? { type: 'SYSTEM' }
+                                    : principal,
+                        },
+                    },
+                });
+                return monitor;
+            },
+        );
 
         const window = monitor.availabilityWindow ?? 10;
         const threshold = monitor.availabilityThreshold ?? 90;
@@ -622,6 +818,11 @@ export class MonitorsService {
                 'HTTP monitor target must start with http:// or https://',
             );
         }
+        if (parsed.username || parsed.password) {
+            throw new BadRequestException(
+                'HTTP monitor target must not contain URL credentials',
+            );
+        }
     }
 
     private validateTcpTarget(target: string): void {
@@ -635,8 +836,9 @@ export class MonitorsService {
     private async ensureMonitorExists(
         projectId: string,
         monitorId: string,
+        db: AccessDb = this.prisma,
     ): Promise<MonitorWithState> {
-        const monitor = await this.prisma.monitor.findFirst({
+        const monitor = await db.monitor.findFirst({
             where: { id: monitorId, projectId, deletedAt: null },
             include: { state: true, notificationChannels: true },
         });
@@ -652,11 +854,12 @@ export class MonitorsService {
     private async assertChannelsBelongToOrg(
         organizationId: string,
         channelIds?: string[],
+        db: AccessDb = this.prisma,
     ): Promise<void> {
         if (!channelIds || channelIds.length === 0) return;
 
         const uniqueIds = [...new Set(channelIds)];
-        const found = await this.prisma.notificationChannel.count({
+        const found = await db.notificationChannel.count({
             where: { id: { in: uniqueIds }, organizationId },
         });
 
@@ -686,6 +889,7 @@ export class MonitorsService {
 
         return new MonitorEntity({
             ...rest,
+            target: sanitizeMonitoringTarget(monitor.target),
             config: this.secrets.publicConfig(monitor.config) as JsonValue,
             hasCredentials: !!credentialsEnc,
             executionEligible: reason === null,
@@ -696,7 +900,9 @@ export class MonitorsService {
             failCount: state?.failCount ?? 0,
             lastCheckAt: state?.lastCheckAt ?? null,
             lastLatency: state?.lastLatency ?? null,
-            lastError: state?.lastError ?? null,
+            lastError: state?.lastError
+                ? monitoringProjection(state.lastError, 'ADMIN')
+                : null,
             lastNotifiedStatus: state?.lastNotifiedStatus ?? null,
             sslExpiresAt: state?.sslExpiresAt ?? null,
             sslDaysRemaining: state?.sslDaysRemaining ?? null,

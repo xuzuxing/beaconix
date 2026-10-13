@@ -29,6 +29,24 @@ function createService() {
 }
 
 describe('EffectivePlanService', () => {
+    it('resolves active plans and FREE fallback using the explicit transaction', async () => {
+        const { service, prisma } = createService();
+        const tx = {
+            subscription: {
+                findFirst: jest.fn().mockResolvedValue({ plan: proPlan }),
+            },
+            plan: { findUnique: jest.fn().mockResolvedValue(freePlan) },
+        };
+        await expect(
+            service.getEffectivePlanInTransaction('org-1', tx as never),
+        ).resolves.toEqual(proPlan);
+        tx.subscription.findFirst.mockResolvedValue(null);
+        await expect(
+            service.getEffectivePlanInTransaction('org-1', tx as never),
+        ).resolves.toEqual(freePlan);
+        expect(prisma.subscription.findFirst).not.toHaveBeenCalled();
+        expect(prisma.plan.findUnique).not.toHaveBeenCalled();
+    });
     it('returns the highest-priority ACTIVE unexpired plan', async () => {
         const { service, prisma } = createService();
         prisma.subscription.findFirst.mockResolvedValue({

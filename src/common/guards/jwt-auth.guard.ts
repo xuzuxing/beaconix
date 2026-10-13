@@ -3,6 +3,7 @@ import {
     CanActivate,
     ExecutionContext,
     UnauthorizedException,
+    ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
@@ -12,7 +13,7 @@ import { JwtPayload } from '../interfaces/jwt-payload.interface';
 import { PrismaService } from '../../infra/database/prisma.service';
 
 type AccessPayload = JwtPayload & {
-    kind?: 'pat';
+    kind?: string;
     patId?: string;
 };
 
@@ -41,39 +42,39 @@ export class JwtAuthGuard implements CanActivate {
             const payload =
                 await this.jwtService.verifyAsync<AccessPayload>(token);
 
-            // PATs are revocable: reject revoked/expired tokens even when the
-            // JWT signature itself is still valid.
             if (payload.kind === 'pat') {
-                if (!payload.patId) {
-                    throw new UnauthorizedException(
-                        'Invalid personal access token',
-                    );
-                }
-                const pat = await this.prisma.personalAccessToken.findUnique({
-                    where: { id: payload.patId },
-                    select: { revokedAt: true, expiresAt: true },
-                });
-                if (!pat || pat.revokedAt) {
-                    throw new UnauthorizedException(
-                        'Personal access token revoked',
-                    );
-                }
-                if (pat.expiresAt && pat.expiresAt <= new Date()) {
-                    throw new UnauthorizedException(
-                        'Personal access token expired',
-                    );
-                }
-                void this.prisma.personalAccessToken
-                    .update({
-                        where: { id: payload.patId },
-                        data: { lastUsedAt: new Date() },
-                    })
-                    .catch(() => undefined);
+                throw new ForbiddenException(
+                    'Personal access tokens are only accepted on the developer API',
+                );
             }
-
-            request['user'] = payload;
+            if (
+                !payload.sub ||
+                (payload.kind !== undefined && payload.kind !== 'pat')
+            ) {
+                throw new UnauthorizedException(
+                    'Invalid access token identity',
+                );
+            }
+            const current = await this.prisma.user.findFirst({
+                where: { id: payload.sub, isActive: true, deletedAt: null },
+                select: { id: true, email: true, globalRole: true },
+            });
+            if (!current)
+                throw new UnauthorizedException('User is no longer active');
+            request['user'] = {
+                sub: current.id,
+                email: current.email,
+                globalRole: current.globalRole,
+                iat: payload.iat,
+                exp: payload.exp,
+            };
+            request['accessPrincipal'] = { type: 'USER', userId: current.id };
         } catch (error) {
-            if (error instanceof UnauthorizedException) throw error;
+            if (
+                error instanceof UnauthorizedException ||
+                error instanceof ForbiddenException
+            )
+                throw error;
             throw new UnauthorizedException('Invalid or expired access token');
         }
 

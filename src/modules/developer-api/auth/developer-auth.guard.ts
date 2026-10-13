@@ -16,6 +16,8 @@ import { ApiCredentialsService } from '../credentials/api-credentials.service';
 import { API_KEY_PREFIX } from '../common/credentials.util';
 import { REQUIRE_SCOPES_KEY } from './require-scopes.decorator';
 import { ApiScope } from '../common/scopes';
+import { ProjectAccessService } from '../../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../../common/authorization/access.types';
 
 type PatPayload = JwtPayload & {
     kind?: 'pat';
@@ -37,6 +39,7 @@ export class DeveloperAuthGuard implements CanActivate {
         private readonly credentialsService: ApiCredentialsService,
         private readonly prisma: PrismaService,
         private readonly jwtService: JwtService,
+        private readonly access: ProjectAccessService,
     ) {}
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -58,10 +61,29 @@ export class DeveloperAuthGuard implements CanActivate {
                 orgId,
                 requiredScopes,
             );
-            return true;
+        } else {
+            await this.authenticatePat(
+                request,
+                rawToken,
+                orgId,
+                requiredScopes,
+            );
         }
-
-        await this.authenticatePat(request, rawToken, orgId, requiredScopes);
+        const principal = request['accessPrincipal'] as AccessPrincipal;
+        const organization = await this.access.organization(principal, orgId!);
+        // Shared infrastructure and status-page management are organization
+        // administration, even when the credential carries write scopes.
+        if (
+            requiredScopes?.some(
+                (scope) =>
+                    scope.startsWith('probes:') ||
+                    scope.startsWith('status-pages:'),
+            ) &&
+            principal.type === 'USER' &&
+            !organization.canManageOrganization
+        ) {
+            throw new ForbiddenException('Organization administrator required');
+        }
         return true;
     }
 
@@ -92,15 +114,12 @@ export class DeveloperAuthGuard implements CanActivate {
 
         request['authType'] = 'apiKey';
         request['apiKey'] = apiKey;
-        // The audit interceptor derives actorId from request.user. API keys are
-        // not users, so attribute the action to the user who created the key.
-        if (apiKey.createdById) {
-            request['user'] = {
-                sub: apiKey.createdById,
-                email: 'api-key',
-                globalRole: GlobalRole.USER,
-            };
-        }
+        request['accessPrincipal'] = {
+            type: 'API_KEY',
+            keyId: apiKey.id,
+            organizationId: orgId,
+        };
+        delete request['user'];
     }
 
     private async authenticatePat(
@@ -125,7 +144,7 @@ export class DeveloperAuthGuard implements CanActivate {
         const pat = await this.credentialsService.findValidPatById(
             payload.patId,
         );
-        if (!pat) {
+        if (!pat || pat.userId !== payload.sub) {
             throw new UnauthorizedException(
                 'Personal access token revoked or expired',
             );
@@ -135,8 +154,12 @@ export class DeveloperAuthGuard implements CanActivate {
             throw new ForbiddenException('Organization context required');
         }
 
-        // PATs act as their user, so tenant isolation still requires a membership.
-        if (payload.globalRole !== GlobalRole.SUPER_ADMIN) {
+        const user = await this.prisma.user.findFirst({
+            where: { id: payload.sub, isActive: true, deletedAt: null },
+            select: { email: true, globalRole: true },
+        });
+        if (!user) throw new UnauthorizedException('User is no longer active');
+        if (user.globalRole !== GlobalRole.SUPER_ADMIN) {
             const membership = await this.prisma.membership.findUnique({
                 where: {
                     userId_organizationId: {
@@ -157,7 +180,16 @@ export class DeveloperAuthGuard implements CanActivate {
 
         request['authType'] = 'pat';
         request['patId'] = pat.id;
-        request['user'] = payload;
+        request['user'] = {
+            ...payload,
+            email: user.email,
+            globalRole: user.globalRole,
+        };
+        request['accessPrincipal'] = {
+            type: 'USER',
+            userId: payload.sub,
+            patId: pat.id,
+        };
     }
 
     // -- Helpers ----------------------------------------------------------
@@ -166,7 +198,8 @@ export class DeveloperAuthGuard implements CanActivate {
         granted: string[],
         required: ApiScope[] | undefined,
     ): void {
-        if (!required?.length) return;
+        if (!required?.length)
+            throw new ForbiddenException('Credential scope metadata required');
 
         const missing = required.filter((scope) => !granted.includes(scope));
         if (missing.length > 0) {

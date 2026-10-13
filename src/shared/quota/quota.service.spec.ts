@@ -29,6 +29,7 @@ function createService() {
     };
     const effectivePlanService = {
         getEffectivePlan: jest.fn().mockResolvedValue(freePlan),
+        getEffectivePlanInTransaction: jest.fn().mockResolvedValue(freePlan),
     };
 
     const service = new QuotaService(
@@ -40,6 +41,36 @@ function createService() {
 }
 
 describe('QuotaService', () => {
+    it('checks member limits with the supplied transaction only', async () => {
+        const { service, prisma, effectivePlanService } = createService();
+        const tx = { membership: { count: jest.fn().mockResolvedValue(2) } };
+        await service.assertCanAddMember('org-1', tx as never);
+        expect(
+            effectivePlanService.getEffectivePlanInTransaction,
+        ).toHaveBeenCalledWith('org-1', tx);
+        expect(tx.membership.count).toHaveBeenCalledWith({
+            where: { organizationId: 'org-1' },
+        });
+        expect(prisma.membership.count).not.toHaveBeenCalled();
+        expect(effectivePlanService.getEffectivePlan).not.toHaveBeenCalled();
+    });
+    it('blocks the last member slot and retains the FREE fallback in the same transaction', async () => {
+        const { service, effectivePlanService } = createService();
+        effectivePlanService.getEffectivePlanInTransaction.mockResolvedValue(
+            null,
+        );
+        const tx = { membership: { count: jest.fn().mockResolvedValue(3) } };
+        await expect(
+            service.assertCanAddMember('org-1', tx as never),
+        ).rejects.toMatchObject({
+            response: {
+                code: 'QUOTA_EXCEEDED',
+                resource: 'members',
+                current: 3,
+                limit: 3,
+            },
+        });
+    });
     it('aggregates usage across the quota resources', async () => {
         const { service, prisma } = createService();
         prisma.monitor.count.mockResolvedValue(3);

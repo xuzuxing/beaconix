@@ -36,7 +36,6 @@ export class CommentEntity {
     author?: {
         id: string;
         name: string;
-        email: string;
         avatarUrl: string | null;
     } | null;
     replies?: CommentEntity[];

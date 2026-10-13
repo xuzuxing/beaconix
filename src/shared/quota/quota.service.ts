@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { MonitorType, ProbeScope } from '../../generated/prisma/enums';
 import type { PlanModel } from '../../generated/prisma/models';
+import type { Prisma } from '../../generated/prisma/client';
 import { EffectivePlanService } from '../subscription/effective-plan.service';
 
 export type QuotaResource =
@@ -48,6 +49,30 @@ export class QuotaService {
         private readonly prisma: PrismaService,
         private readonly effectivePlanService: EffectivePlanService,
     ) {}
+
+    // Caller must hold Organization FOR UPDATE in this same transaction.
+    async assertCanAddMember(
+        organizationId: string,
+        tx: Prisma.TransactionClient,
+    ) {
+        const plan =
+            (await this.effectivePlanService.getEffectivePlanInTransaction(
+                organizationId,
+                tx,
+            )) ?? FREE_FALLBACK;
+        const current = await tx.membership.count({
+            where: { organizationId },
+        });
+        if (current >= plan.maxMembers) {
+            throw new ForbiddenException({
+                code: 'QUOTA_EXCEEDED',
+                resource: 'members',
+                current,
+                limit: plan.maxMembers,
+                message: `${RESOURCE_LABELS.members}已达上限（${plan.maxMembers}），请升级套餐`,
+            });
+        }
+    }
 
     async getUsage(organizationId: string) {
         const [monitors, probes, members, channels, apiKeys] =

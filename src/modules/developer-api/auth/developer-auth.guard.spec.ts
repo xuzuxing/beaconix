@@ -5,8 +5,9 @@ import {
 } from '@nestjs/common';
 import { DeveloperAuthGuard } from './developer-auth.guard';
 import type { PrismaService } from '../../../infra/database/prisma.service';
+import { mockProjectAccess } from '../../../common/authorization/access-test.fixture';
 
-function createGuard(requiredScopes?: string[]) {
+function createGuard(requiredScopes: string[] | undefined = ['monitors:read']) {
     const reflector = {
         getAllAndOverride: jest.fn().mockReturnValue(requiredScopes),
     };
@@ -17,6 +18,12 @@ function createGuard(requiredScopes?: string[]) {
         touchPat: jest.fn(),
     };
     const prisma = {
+        user: {
+            findFirst: jest.fn().mockResolvedValue({
+                email: 'dev@example.com',
+                globalRole: 'USER',
+            }),
+        },
         project: { findFirst: jest.fn() },
         membership: { findUnique: jest.fn() },
     };
@@ -27,6 +34,7 @@ function createGuard(requiredScopes?: string[]) {
         credentialsService as any,
         prisma as unknown as PrismaService,
         jwtService as any,
+        mockProjectAccess(prisma),
     );
 
     return { guard, reflector, credentialsService, prisma, jwtService };
@@ -94,7 +102,7 @@ describe('DeveloperAuthGuard', () => {
             );
         });
 
-        it('attaches the api key and user context when valid', async () => {
+        it('attaches the machine principal without fabricating a creator user', async () => {
             const { guard, credentialsService } = createGuard([
                 'monitors:read',
             ]);
@@ -108,9 +116,12 @@ describe('DeveloperAuthGuard', () => {
             await expect(guard.canActivate(ctx)).resolves.toBe(true);
             expect(request['apiKey']).toEqual(validKey);
             expect(request['authType']).toBe('apiKey');
-            expect(request['user']).toEqual(
-                expect.objectContaining({ sub: 'user-1' }),
-            );
+            expect(request['user']).toBeUndefined();
+            expect(request['accessPrincipal']).toEqual({
+                type: 'API_KEY',
+                keyId: 'key-1',
+                organizationId: 'org-1',
+            });
         });
 
         it('resolves the organization through projectId', async () => {
@@ -131,6 +142,94 @@ describe('DeveloperAuthGuard', () => {
     });
 
     describe('Personal access tokens', () => {
+        it('rejects an inactive user despite a valid token and stale SUPER_ADMIN claim', async () => {
+            const { guard, jwtService, credentialsService, prisma } =
+                createGuard();
+            jwtService.verifyAsync.mockResolvedValue({
+                sub: 'user-1',
+                kind: 'pat',
+                patId: 'pat-1',
+                globalRole: 'SUPER_ADMIN',
+            });
+            credentialsService.findValidPatById.mockResolvedValue(validPat);
+            prisma.user.findFirst.mockResolvedValue(null);
+            await expect(
+                guard.canActivate(
+                    contextWithRequest({
+                        headers: { authorization: 'Bearer jwt' },
+                        params: { orgId: 'org-1' },
+                    }),
+                ),
+            ).rejects.toThrow(UnauthorizedException);
+            expect(credentialsService.touchPat).not.toHaveBeenCalled();
+        });
+
+        it('uses current database role instead of an old SUPER_ADMIN claim', async () => {
+            const { guard, jwtService, credentialsService, prisma } =
+                createGuard();
+            jwtService.verifyAsync.mockResolvedValue({
+                sub: 'user-1',
+                kind: 'pat',
+                patId: 'pat-1',
+                globalRole: 'SUPER_ADMIN',
+            });
+            credentialsService.findValidPatById.mockResolvedValue(validPat);
+            prisma.membership.findUnique.mockResolvedValue(null);
+            await expect(
+                guard.canActivate(
+                    contextWithRequest({
+                        headers: { authorization: 'Bearer jwt' },
+                        params: { orgId: 'org-1' },
+                    }),
+                ),
+            ).rejects.toThrow(ForbiddenException);
+            expect(prisma.membership.findUnique).toHaveBeenCalled();
+        });
+
+        it.each(['probes:read', 'status-pages:write'])(
+            'requires organization administration for shared scope %s',
+            async (scope) => {
+                const { guard, jwtService, credentialsService, prisma } =
+                    createGuard([scope]);
+                jwtService.verifyAsync.mockResolvedValue({
+                    sub: 'user-1',
+                    kind: 'pat',
+                    patId: 'pat-1',
+                });
+                credentialsService.findValidPatById.mockResolvedValue({
+                    ...validPat,
+                    scopes: [scope],
+                });
+                prisma.membership.findUnique.mockResolvedValue({
+                    id: 'm-1',
+                    role: 'MEMBER',
+                });
+                jest.spyOn(guard['access'], 'organization').mockResolvedValue({
+                    principal: {
+                        type: 'USER',
+                        userId: 'user-1',
+                        patId: 'pat-1',
+                    },
+                    organizationId: 'org-1',
+                    globalRole: 'USER',
+                    organizationRole: 'MEMBER',
+                    membershipId: 'm-1',
+                    projectPermissionsVersion: 1,
+                    platformAuthorityVersion: null,
+                    accessMode: 'SELECTED_PROJECTS',
+                    canManageOrganization: false,
+                    canGrantOrganizationAdmin: false,
+                });
+                await expect(
+                    guard.canActivate(
+                        contextWithRequest({
+                            headers: { authorization: 'Bearer jwt' },
+                            params: { orgId: 'org-1' },
+                        }),
+                    ),
+                ).rejects.toThrow('Organization administrator required');
+            },
+        );
         it('rejects non-PAT JWTs', async () => {
             const { guard, jwtService } = createGuard();
             jwtService.verifyAsync.mockResolvedValue({ sub: 'user-1' });
@@ -232,4 +331,22 @@ describe('DeveloperAuthGuard', () => {
             );
         });
     });
+
+    it.each([undefined, []])(
+        'fails closed without scope metadata (%s)',
+        async (scopes) => {
+            const { guard, reflector, credentialsService } = createGuard();
+            reflector.getAllAndOverride.mockReturnValue(scopes);
+            credentialsService.findValidApiKey.mockResolvedValue(validKey);
+            await expect(
+                guard.canActivate(
+                    contextWithRequest({
+                        headers: { authorization: 'Bearer bk_org_abc' },
+                        params: { orgId: 'org-1' },
+                    }),
+                ),
+            ).rejects.toThrow('Credential scope metadata required');
+            expect(credentialsService.touchApiKey).not.toHaveBeenCalled();
+        },
+    );
 });

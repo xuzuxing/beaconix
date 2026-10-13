@@ -54,7 +54,19 @@ export class MonitoringEtagInterceptor implements NestInterceptor {
         }
         return next.handle().pipe(
             map((body: unknown) => {
-                const tag = weakEtag(body);
+                const access = request['accessContext'];
+                const tag = weakEtag({
+                    body,
+                    authorization: access
+                        ? {
+                              principal: access.principal,
+                              membershipId: access.membershipId,
+                              version: access.projectPermissionsVersion,
+                              role: access.effectiveRole,
+                              globalRole: access.globalRole,
+                          }
+                        : null,
+                });
                 response.setHeader('ETag', tag);
                 response.setHeader('Cache-Control', 'private, no-cache');
                 if (etagMatches(request.headers['if-none-match'], tag)) {

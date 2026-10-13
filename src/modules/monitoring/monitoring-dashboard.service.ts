@@ -20,6 +20,9 @@ import {
     roundPercent,
     zoned,
 } from './monitoring-window.util';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
+import { monitoringProjection } from '../../common/authorization/monitoring-projection';
 
 type Tx = Prisma.TransactionClient;
 type Metrics = {
@@ -62,6 +65,7 @@ export class MonitoringDashboardService {
         private readonly prisma: PrismaService,
         private readonly cache: MultiLevelCacheService,
         private readonly probes: SystemProbeScheduler,
+        private readonly access: ProjectAccessService,
     ) {}
 
     async assertProject(projectId: string) {
@@ -78,15 +82,20 @@ export class MonitoringDashboardService {
 
     private async cached<T>(
         projectId: string,
+        principal: AccessPrincipal,
         name: string,
         query: object,
         ttl: number,
         build: (tx: Tx, asOf: Date) => Promise<T>,
         prepare?: () => Promise<void>,
     ) {
-        await this.assertProject(projectId);
-        return this.cache.getOrSet(
-            `monitoring:v1:${projectId}:${name}:${JSON.stringify(query)}`,
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'monitoring.read',
+        );
+        const snapshot = await this.cache.getOrSet(
+            `monitoring:v2:${projectId}:${name}:${JSON.stringify(query)}`,
             async () => {
                 await prepare?.();
                 return this.prisma.$transaction(
@@ -95,7 +104,10 @@ export class MonitoringDashboardService {
                         const [clock] = await tx.$queryRaw<
                             { at: Date }[]
                         >`SELECT clock_timestamp() AT TIME ZONE 'UTC' AS at`;
-                        return build(tx, clock.at);
+                        return monitoringProjection(
+                            await build(tx, clock.at),
+                            'ADMIN',
+                        );
                     },
                     { isolationLevel: 'RepeatableRead', timeout: 30_000 },
                 );
@@ -103,6 +115,7 @@ export class MonitoringDashboardService {
             ttl,
             { l1Ttl: ttl },
         );
+        return monitoringProjection(snapshot, access.effectiveRole);
     }
 
     private async coverage(tx: Tx, projectId: string, asOf: Date) {
@@ -161,10 +174,15 @@ export class MonitoringDashboardService {
             ) h ON true GROUP BY p.key ORDER BY p.key`;
     }
 
-    async dashboard(projectId: string, query: QueryMonitoringDashboardDto) {
+    async dashboard(
+        projectId: string,
+        query: QueryMonitoringDashboardDto,
+        principal: AccessPrincipal,
+    ) {
         let assigned: string[] = [];
         return this.cached(
             projectId,
+            principal,
             'dashboard',
             query,
             30,
@@ -657,9 +675,11 @@ export class MonitoringDashboardService {
     async availability(
         projectId: string,
         query: QueryMonitoringAvailabilityDto,
+        principal: AccessPrincipal,
     ) {
         return this.cached(
             projectId,
+            principal,
             'availability',
             query,
             300,
@@ -742,9 +762,14 @@ export class MonitoringDashboardService {
         );
     }
 
-    async statusCodes(projectId: string, query: QueryMonitoringStatusCodesDto) {
+    async statusCodes(
+        projectId: string,
+        query: QueryMonitoringStatusCodesDto,
+        principal: AccessPrincipal,
+    ) {
         return this.cached(
             projectId,
+            principal,
             'status-codes',
             query,
             60,

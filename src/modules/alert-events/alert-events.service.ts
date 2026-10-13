@@ -1,8 +1,4 @@
-import {
-    ConflictException,
-    Injectable,
-    NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { toIsoString } from '../../common/utils/date.util';
 import type { Prisma } from '../../generated/prisma/client';
@@ -14,6 +10,8 @@ import type { CheckOutcome, DerivedState } from '../state/state.service';
 import type { NotificationPayload } from '../notifier/notifier.types';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ADMIN_ROLES } from '../notifications/notification-event';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 
 type Tx = Prisma.TransactionClient;
 type Evidence = {
@@ -31,34 +29,44 @@ export class AlertEventsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notifications: NotificationsService,
+        private readonly access: ProjectAccessService,
     ) {}
 
-    async retry(projectId: string, deliveryId: string) {
-        const project = await this.prisma.project.findFirst({
-            where: {
-                id: projectId,
-                deletedAt: null,
-                organization: { deletedAt: null },
+    async retry(
+        projectId: string,
+        deliveryId: string,
+        principal: AccessPrincipal,
+    ) {
+        return this.access.withProject(
+            principal,
+            projectId,
+            'alert.retry',
+            async (tx, access) => {
+                const result = await tx.alertDelivery.updateMany({
+                    where: {
+                        id: deliveryId,
+                        status: 'FAILED',
+                        event: {
+                            projectId,
+                            organizationId: access.organizationId,
+                        },
+                    },
+                    data: {
+                        status: 'PENDING',
+                        attempts: 0,
+                        leaseUntil: null,
+                        leaseToken: null,
+                        nextAttemptAt: new Date(),
+                        lastError: null,
+                    },
+                });
+                if (!result.count)
+                    throw new ConflictException(
+                        'Only failed deliveries in this project can be retried',
+                    );
+                return { id: deliveryId, status: 'PENDING' };
             },
-            select: { id: true },
-        });
-        if (!project) throw new NotFoundException('Project not found');
-        const result = await this.prisma.alertDelivery.updateMany({
-            where: { id: deliveryId, status: 'FAILED', event: { projectId } },
-            data: {
-                status: 'PENDING',
-                attempts: 0,
-                leaseUntil: null,
-                leaseToken: null,
-                nextAttemptAt: new Date(),
-                lastError: null,
-            },
-        });
-        if (!result.count)
-            throw new ConflictException(
-                'Only failed deliveries in this project can be retried',
-            );
-        return { id: deliveryId, status: 'PENDING' };
+        );
     }
     async record(
         tx: Tx,

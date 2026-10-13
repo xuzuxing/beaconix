@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { SprintsService } from './sprints.service';
 import { SprintsController } from './sprints.controller';
 
@@ -77,7 +78,11 @@ function setup(status = 'PLANNED', creator: string | null = 'project-creator') {
         }),
     };
     return {
-        service: new SprintsService(prisma as never, notifications as never),
+        service: new SprintsService(
+            prisma as never,
+            notifications as never,
+            mockProjectAccess(prisma, 'org'),
+        ),
         prisma,
         tx,
         notifications,

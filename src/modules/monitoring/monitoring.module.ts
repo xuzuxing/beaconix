@@ -8,9 +8,10 @@ import { AdminModule } from '../admin/admin.module';
 import { CacheModule } from '../../infra/cache/cache.module';
 import { MonitorInsightsController } from './monitor-insights.controller';
 import { MonitorInsightsService } from './monitor-insights.service';
+import { AuthorizationModule } from '../../common/authorization/authorization.module';
 
 @Module({
-    imports: [AdminModule, CacheModule],
+    imports: [AdminModule, CacheModule, AuthorizationModule],
     controllers: [
         MonitoringController,
         MonitoringDashboardController,

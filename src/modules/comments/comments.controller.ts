@@ -6,7 +6,6 @@ import {
     Delete,
     Body,
     Param,
-    Req,
     HttpCode,
     HttpStatus,
     UseGuards,
@@ -29,29 +28,43 @@ import { CommentsService } from './comments.service';
 import { CreateCommentDto, UpdateCommentDto } from './dto';
 import { CommentEntity } from './entities';
 import { CurrentUser, AuditLog } from '../../common/decorators';
-import { OrgMemberGuard } from '../../common/guards';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
+import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
 @ApiTags('Comments')
 @ApiBearerAuth('access-token')
 @Controller('tasks/:taskId/comments')
+@UseGuards(ProjectAccessGuard)
 export class CommentsController {
     constructor(private readonly commentsService: CommentsService) {}
 
     @Get()
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('project.read', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @ApiOperation({ summary: 'List threaded comments for a task' })
     @ApiParam({ name: 'taskId', description: 'Task CUID' })
     @ApiOkResponse({ type: [CommentEntity], description: 'Threaded comments' })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Not a member of the organization' })
     @ApiNotFoundResponse({ description: 'Task not found' })
-    async findAll(@Param('taskId') taskId: string) {
-        return this.commentsService.findAll(taskId);
+    async findAll(
+        @Param('taskId') taskId: string,
+        @CurrentUser() user: JwtPayload,
+    ) {
+        return this.commentsService.findAll(taskId, {
+            type: 'USER',
+            userId: user.sub,
+        });
     }
 
     @Post()
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('comment.write', {
+        resourceType: 'TASK',
+        idParam: 'taskId',
+    })
     @AuditLog({ entity: 'Comment' })
     @ApiOperation({ summary: 'Add a comment to a task' })
     @ApiParam({ name: 'taskId', description: 'Task CUID' })
@@ -72,7 +85,10 @@ export class CommentsController {
     }
 
     @Patch(':id')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('comment.write', {
+        resourceType: 'COMMENT',
+        idParam: 'id',
+    })
     @AuditLog({ entity: 'Comment' })
     @ApiOperation({ summary: 'Edit a comment (author only)' })
     @ApiParam({ name: 'taskId', description: 'Task CUID' })
@@ -93,7 +109,10 @@ export class CommentsController {
     }
 
     @Delete(':id')
-    @UseGuards(OrgMemberGuard)
+    @ProjectPermission('comment.write', {
+        resourceType: 'COMMENT',
+        idParam: 'id',
+    })
     @HttpCode(HttpStatus.NO_CONTENT)
     @AuditLog({ entity: 'Comment', action: 'DELETE' })
     @ApiOperation({ summary: 'Soft-delete a comment (author or ADMIN+)' })
@@ -107,14 +126,7 @@ export class CommentsController {
         @Param('taskId') taskId: string,
         @Param('id') commentId: string,
         @CurrentUser() user: JwtPayload,
-        @Req() req: any,
     ) {
-        const role = req['membership']?.role ?? 'VIEWER';
-        await this.commentsService.softDelete(
-            taskId,
-            commentId,
-            user.sub,
-            role,
-        );
+        await this.commentsService.softDelete(taskId, commentId, user.sub);
     }
 }

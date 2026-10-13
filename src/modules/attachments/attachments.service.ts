@@ -13,11 +13,15 @@ import { AttachmentEntity, PublicUploadEntity } from './entities';
 import { StorageService } from './storage';
 import {
     isPublicUploadKey,
+    isTaskUploadKey,
     normalizeUserUploadDirectory,
 } from './storage/filename.util';
 import { SettingsService } from '../settings';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
+import type { AccessDb } from '../../common/authorization/access-locks';
 
-const uploaderSelect = { id: true, name: true, email: true } as const;
+const uploaderSelect = { id: true, name: true } as const;
 const ALLOWED_BLOB_MIME_TYPES = new Set([
     'text/plain',
     'text/csv',
@@ -34,13 +38,14 @@ export class AttachmentsService {
         private readonly prisma: PrismaService,
         private readonly storage: StorageService,
         private readonly settingsService: SettingsService,
+        private readonly access: ProjectAccessService,
     ) {}
 
-    async findAll(taskId: string) {
-        await this.ensureTaskExists(taskId);
+    async findAll(taskId: string, principal: AccessPrincipal) {
+        await this.access.task(principal, taskId);
 
         const attachments = await this.prisma.attachment.findMany({
-            where: { taskId },
+            where: { taskId, visibility: { in: ['PRIVATE', 'EXTERNAL'] } },
             include: { uploadedBy: { select: uploaderSelect } },
             orderBy: { createdAt: 'desc' },
         });
@@ -49,28 +54,39 @@ export class AttachmentsService {
     }
 
     async save(taskId: string, userId: string, dto: SaveAttachmentDto) {
-        await this.ensureTaskExists(taskId);
-
-        const attachment = await this.prisma.attachment.create({
-            data: {
-                filename: dto.filename,
-                mimeType: dto.mimeType,
-                size: dto.size,
-                url: dto.url,
-                fileKey: dto.fileKey ?? null,
-                storageProvider:
-                    (dto.storageProvider as any) ??
-                    (dto.source === 'UPLOAD'
-                        ? await this.storage.activeProviderName()
-                        : 'EXTERNAL'),
-                bucket: dto.bucket ?? null,
-                checksum: dto.checksum ?? null,
-                source: (dto.source as any) ?? 'UPLOAD',
-                taskId,
-                uploadedById: userId,
-            },
-            include: { uploadedBy: { select: uploaderSelect } },
-        });
+        if (
+            !dto.source ||
+            dto.source === 'UPLOAD' ||
+            dto.fileKey ||
+            dto.bucket ||
+            dto.checksum ||
+            (dto.storageProvider && dto.storageProvider !== 'EXTERNAL')
+        ) {
+            throw new BadRequestException(
+                'First-party attachments must use the private upload endpoint',
+            );
+        }
+        const attachment = await this.access.withTask(
+            { type: 'USER', userId },
+            taskId,
+            'attachment.write',
+            async (tx) =>
+                tx.attachment.create({
+                    data: {
+                        filename: dto.filename,
+                        mimeType: dto.mimeType,
+                        size: dto.size,
+                        url: dto.url,
+                        storageProvider: 'EXTERNAL',
+                        visibility: 'EXTERNAL',
+                        source: dto.source as
+                            'URL' | 'GOOGLE_DRIVE' | 'DROPBOX',
+                        taskId,
+                        uploadedById: userId,
+                    },
+                    include: { uploadedBy: { select: uploaderSelect } },
+                }),
+        );
 
         return new AttachmentEntity(attachment);
     }
@@ -84,7 +100,13 @@ export class AttachmentsService {
             throw new BadRequestException('File is required');
         }
 
-        const task = await this.ensureTaskExists(taskId);
+        const principal: AccessPrincipal = { type: 'USER', userId };
+        const task = await this.access.withTask(
+            principal,
+            taskId,
+            'attachment.write',
+            (_tx, _access, task) => Promise.resolve(task),
+        );
         await this.validateFile(file);
 
         const stored = await this.storage.putObject({
@@ -95,38 +117,55 @@ export class AttachmentsService {
             organizationId: task.organizationId,
             taskId,
             uploadedById: userId,
+            visibility: 'PRIVATE',
         });
 
-        const created = await this.prisma.attachment.create({
-            data: {
-                filename: file.originalname,
-                mimeType: file.mimetype || 'application/octet-stream',
-                size: file.size,
-                url: stored.url || '',
-                fileKey: stored.key,
-                storageProvider: stored.provider,
-                bucket: stored.bucket ?? null,
-                checksum: stored.checksum ?? null,
-                source: 'UPLOAD',
+        try {
+            return await this.access.withTask(
+                principal,
                 taskId,
-                uploadedById: userId,
-            },
-            include: { uploadedBy: { select: uploaderSelect } },
-        });
+                'attachment.write',
+                async (tx) => {
+                    const created = await tx.attachment.create({
+                        data: {
+                            filename: file.originalname,
+                            mimeType:
+                                file.mimetype || 'application/octet-stream',
+                            size: file.size,
+                            url: '',
+                            fileKey: stored.key,
+                            storageProvider: stored.provider,
+                            bucket: stored.bucket ?? null,
+                            checksum: stored.checksum ?? null,
+                            source: 'UPLOAD',
+                            visibility: 'PRIVATE',
+                            taskId,
+                            uploadedById: userId,
+                        },
+                        include: { uploadedBy: { select: uploaderSelect } },
+                    });
 
-        if (created.url) {
-            return new AttachmentEntity(created);
+                    const updated = await tx.attachment.update({
+                        where: { id: created.id },
+                        data: {
+                            url: `/api/tasks/${taskId}/attachments/${created.id}/download`,
+                        },
+                        include: { uploadedBy: { select: uploaderSelect } },
+                    });
+
+                    return new AttachmentEntity(updated);
+                },
+            );
+        } catch (error) {
+            await this.storage
+                .deleteObject(stored.provider, stored.key, stored.bucket)
+                .catch(() =>
+                    this.logger.warn(
+                        'Failed to clean up uncommitted private attachment',
+                    ),
+                );
+            throw error;
         }
-
-        const updated = await this.prisma.attachment.update({
-            where: { id: created.id },
-            data: {
-                url: `/api/tasks/${taskId}/attachments/${created.id}/download`,
-            },
-            include: { uploadedBy: { select: uploaderSelect } },
-        });
-
-        return new AttachmentEntity(updated);
     }
 
     async uploadPublic(
@@ -140,6 +179,12 @@ export class AttachmentsService {
 
         await this.validateFile(file);
         const uploadDirectory = normalizeUserUploadDirectory(userId, directory);
+        if (
+            uploadDirectory.toLowerCase() === 'organizations' ||
+            uploadDirectory.toLowerCase().startsWith('organizations/')
+        ) {
+            throw new BadRequestException('Reserved attachment directory');
+        }
 
         const stored = await this.storage.putObject({
             buffer: file.buffer,
@@ -151,6 +196,7 @@ export class AttachmentsService {
             uploadedById: userId,
             directory: uploadDirectory,
             publicUpload: true,
+            visibility: 'PUBLIC',
         });
 
         return new PublicUploadEntity({
@@ -186,21 +232,39 @@ export class AttachmentsService {
                 storageProvider,
                 key,
                 bucket,
+                'PUBLIC',
             ),
         };
     }
 
-    async getDownload(taskId: string, attachmentId: string) {
-        await this.ensureTaskExists(taskId);
+    async getDownload(
+        taskId: string,
+        attachmentId: string,
+        principal: AccessPrincipal,
+    ) {
+        const { task } = await this.access.task(principal, taskId);
 
         const attachment = await this.findAttachment(taskId, attachmentId);
-        if (attachment.source !== 'UPLOAD') {
+        if (attachment.visibility === 'UNKNOWN') {
+            throw new NotFoundException(
+                'Attachment is not available until classified',
+            );
+        }
+        if (
+            attachment.visibility === 'EXTERNAL' &&
+            attachment.source !== 'UPLOAD'
+        ) {
             return {
                 attachment,
                 download: { type: 'redirect', url: attachment.url } as const,
             };
         }
-        if (!attachment.fileKey) {
+        if (
+            attachment.visibility !== 'PRIVATE' ||
+            attachment.source !== 'UPLOAD' ||
+            !attachment.fileKey ||
+            !isTaskUploadKey(attachment.fileKey, task.organizationId, taskId)
+        ) {
             throw new NotFoundException('Attachment object key not found');
         }
 
@@ -210,62 +274,79 @@ export class AttachmentsService {
                 attachment.storageProvider,
                 attachment.fileKey,
                 attachment.bucket,
+                'PRIVATE',
             ),
         };
     }
 
-    async remove(
-        taskId: string,
-        attachmentId: string,
-        userId: string,
-        userRole: string,
-    ) {
-        await this.ensureTaskExists(taskId);
+    async remove(taskId: string, attachmentId: string, userId: string) {
+        const attachment = await this.access.withTask(
+            { type: 'USER', userId },
+            taskId,
+            'attachment.write',
+            async (tx, access) => {
+                const attachment = await this.findAttachment(
+                    taskId,
+                    attachmentId,
+                    tx,
+                );
 
-        const attachment = await this.findAttachment(taskId, attachmentId);
+                // Uploader or ADMIN+ can delete
+                const isAdmin = access.effectiveRole === 'ADMIN';
+                if (attachment.uploadedById !== userId && !isAdmin) {
+                    throw new ForbiddenException(
+                        'Only the uploader or an admin can delete this attachment',
+                    );
+                }
 
-        // Uploader or ADMIN+ can delete
-        const isAdmin = ['OWNER', 'ADMIN'].includes(userRole);
-        if (attachment.uploadedById !== userId && !isAdmin) {
-            throw new ForbiddenException(
-                'Only the uploader or an admin can delete this attachment',
-            );
-        }
-
+                await tx.attachment.delete({
+                    where: { id: attachmentId, taskId },
+                });
+                await tx.auditLog.create({
+                    data: {
+                        actorId: userId,
+                        organizationId: access.organizationId,
+                        projectId: access.projectId,
+                        action: 'DELETE',
+                        entity: 'Attachment',
+                        entityId: attachmentId,
+                        before: {
+                            filename: attachment.filename,
+                            visibility: attachment.visibility,
+                        },
+                    },
+                });
+                return attachment;
+            },
+        );
         // Delete the stored object when Beacon owns the upload.
-        if (attachment.source === 'UPLOAD' && attachment.fileKey) {
+        if (
+            attachment.visibility === 'PRIVATE' &&
+            attachment.source === 'UPLOAD' &&
+            attachment.fileKey
+        ) {
             await this.storage
                 .deleteObject(
                     attachment.storageProvider,
                     attachment.fileKey,
                     attachment.bucket,
                 )
-                .catch((error) => {
+                .catch(() => {
                     this.logger.warn(
-                        `Failed to delete attachment object ${attachment.fileKey}: ${error instanceof Error ? error.message : String(error)}`,
+                        'Failed to delete committed private attachment object',
                     );
                 });
         }
-
-        await this.prisma.attachment.delete({ where: { id: attachmentId } });
     }
 
     // ── PRIVATE HELPERS ─────────────────────────────────────────────────
 
-    private async ensureTaskExists(taskId: string) {
-        const task = await this.prisma.task.findFirst({
-            where: { id: taskId, deletedAt: null },
-            select: { id: true, organizationId: true, projectId: true },
-        });
-        if (!task) throw new NotFoundException('Task not found');
-        return task;
-    }
-
     private async findAttachment(
         taskId: string,
         attachmentId: string,
+        db: AccessDb = this.prisma,
     ): Promise<Attachment> {
-        const attachment = await this.prisma.attachment.findFirst({
+        const attachment = await db.attachment.findFirst({
             where: { id: attachmentId, taskId },
         });
 

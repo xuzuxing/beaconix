@@ -101,6 +101,7 @@ export class SubscriptionExpiryService implements OnModuleInit {
                             {
                                 eventKey: `subscription-expired:${subscription.id}:${expiry}`,
                                 type: NotificationType.SUBSCRIPTION_EXPIRED,
+                                accessScope: 'ORGANIZATION',
                                 title: 'Subscription expired',
                                 body: effectivePlanChanged
                                     ? `The ${subscription.plan.name} subscription expired. The effective plan is now ${afterPlan?.name ?? 'unavailable'}.`
@@ -137,6 +138,7 @@ export class SubscriptionExpiryService implements OnModuleInit {
                         {
                             eventKey: `subscription-expiring:${subscription.id}:${expiry}:${days}`,
                             type: NotificationType.SUBSCRIPTION_EXPIRING,
+                            accessScope: 'ORGANIZATION',
                             title: 'Subscription nearing expiry',
                             body: `The ${subscription.plan.name} subscription expires within ${days} day${days === 1 ? '' : 's'}.`,
                             organizationId,

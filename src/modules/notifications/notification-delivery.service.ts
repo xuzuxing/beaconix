@@ -16,6 +16,15 @@ import { EmailTemplate, EmailPayloadMap } from '../email/email.types';
 import { NotificationEntity } from './entities';
 import { NotificationStreamService } from './notification-stream.service';
 import { projectInvitationState } from './invitation-notification-state';
+import { NotificationAccessService } from './notification-access.service';
+import type { NotificationAudience } from './notification-event';
+import {
+    lockIdentities,
+    lockMemberships,
+    lockOrganization,
+    lockProjects,
+} from '../../common/authorization/access-locks';
+import type { NotificationDelivery } from '../../generated/prisma/client';
 
 @Injectable()
 export class NotificationDeliveryService
@@ -30,6 +39,7 @@ export class NotificationDeliveryService
         private readonly email: EmailService,
         private readonly streams: NotificationStreamService,
         private readonly registry: ScheduledJobRegistry,
+        private readonly authorization: NotificationAccessService,
     ) {}
 
     onModuleInit(): void {
@@ -94,84 +104,69 @@ export class NotificationDeliveryService
                             leaseToken,
                             leaseUntil: new Date(Date.now() + 120_000),
                             attempts: { increment: 1 },
+                            dispatchAuthorizedAt: null,
                         },
                     });
                 if (!claimed.count) continue;
                 try {
-                    const payload = job.payload as Record<string, unknown>;
-                    const audience = payload.audience as
-                        | {
-                              userId: string;
-                              organizationId?: string;
-                              allowOutsideOrg?: boolean;
-                          }
-                        | undefined;
-                    const eligible =
-                        !audience ||
-                        (await this.prisma.user.findFirst({
-                            where: {
-                                id: audience.userId,
-                                isActive: true,
-                                deletedAt: null,
-                                ...(job.channel === 'EMAIL'
-                                    ? { emailVerified: true }
-                                    : {}),
-                                ...(audience.organizationId &&
-                                !audience.allowOutsideOrg
-                                    ? {
-                                          memberships: {
-                                              some: {
-                                                  organizationId:
-                                                      audience.organizationId,
-                                              },
-                                          },
-                                      }
-                                    : {}),
-                            },
-                            select: { id: true },
-                        }));
+                    const authorized = await this.authorizeDispatch(
+                        job,
+                        leaseToken,
+                    );
+                    if (!authorized) continue;
+                    const payload = authorized.payload as Record<
+                        string,
+                        unknown
+                    >;
+                    const renew = async () =>
+                        (
+                            await this.prisma.notificationDelivery.updateMany({
+                                where: {
+                                    id: job.id,
+                                    leaseToken,
+                                    status: 'SENDING',
+                                    dispatchAuthorizedAt: { not: null },
+                                    leaseUntil: { gt: new Date() },
+                                },
+                                data: {
+                                    leaseUntil: new Date(Date.now() + 120_000),
+                                },
+                            })
+                        ).count > 0;
                     let delivered = false;
                     if (job.channel === 'SSE') {
                         const notice =
                             await this.prisma.notification.findUnique({
                                 where: { id: String(payload.notificationId) },
                             });
-                        const activeLegacyRecipient =
-                            !notice ||
-                            audience ||
-                            (await this.prisma.user.findFirst({
-                                where: {
-                                    id: notice.userId,
-                                    isActive: true,
-                                    deletedAt: null,
-                                },
-                                select: { id: true },
-                            }));
-                        if (notice && eligible && activeLegacyRecipient) {
+                        const audience =
+                            payload.audience as NotificationAudience;
+                        if (
+                            notice &&
+                            notice.accessScope === audience.accessScope &&
+                            notice.userId === audience.userId &&
+                            notice.organizationId ===
+                                (audience.organizationId ?? null) &&
+                            notice.projectId === (audience.projectId ?? null)
+                        ) {
                             const [projected] = await projectInvitationState(
                                 this.prisma,
                                 [new NotificationEntity(notice)],
                             );
+                            if (!(await renew())) continue;
                             await this.streams.emit(projected);
                             delivered = true;
                         }
                     } else if (job.channel === 'EMAIL') {
                         const data =
                             payload.data as EmailPayloadMap[EmailTemplate];
-                        const validInvitation =
-                            payload.template !== EmailTemplate.INVITATION ||
-                            (await this.prisma.invitation.findFirst({
-                                where: {
-                                    token: (
-                                        data as EmailPayloadMap[EmailTemplate.INVITATION]
-                                    ).token,
-                                    status: 'PENDING',
-                                    expiresAt: { gt: new Date() },
-                                    organization: { deletedAt: null },
-                                },
-                                select: { id: true },
-                            }));
-                        if (eligible && validInvitation) {
+                        const audience =
+                            payload.audience as NotificationAudience;
+                        if (
+                            audience.accessScope !== 'INVITATION' ||
+                            payload.template === EmailTemplate.INVITATION
+                        ) {
+                            if (!(await renew())) continue;
                             await this.email.send(
                                 payload.template as EmailTemplate,
                                 data,
@@ -185,7 +180,12 @@ export class NotificationDeliveryService
                         );
                     }
                     await this.prisma.notificationDelivery.updateMany({
-                        where: { id: job.id, leaseToken },
+                        where: {
+                            id: job.id,
+                            leaseToken,
+                            status: 'SENDING',
+                            leaseUntil: { gt: new Date() },
+                        },
                         data: {
                             status: delivered ? 'SENT' : 'SKIPPED',
                             deliveredAt: delivered ? new Date() : null,
@@ -196,7 +196,12 @@ export class NotificationDeliveryService
                     });
                 } catch {
                     await this.prisma.notificationDelivery.updateMany({
-                        where: { id: job.id, leaseToken },
+                        where: {
+                            id: job.id,
+                            leaseToken,
+                            status: 'SENDING',
+                            leaseUntil: { gt: new Date() },
+                        },
                         data: {
                             status: 'PENDING',
                             availableAt: new Date(
@@ -209,6 +214,7 @@ export class NotificationDeliveryService
                             ),
                             leaseToken: null,
                             leaseUntil: null,
+                            dispatchAuthorizedAt: null,
                             lastError: 'Delivery failed; retry scheduled',
                         },
                     });
@@ -220,5 +226,79 @@ export class NotificationDeliveryService
         } finally {
             this.processing = false;
         }
+    }
+
+    private async authorizeDispatch(
+        job: NotificationDelivery,
+        leaseToken: string,
+    ) {
+        const audience = (job.payload as Record<string, unknown>)?.audience as
+            NotificationAudience | undefined;
+        return this.prisma.$transaction(async (tx) => {
+            if (audience?.userId) {
+                await lockIdentities(tx, [
+                    { type: 'USER', userId: audience.userId },
+                ]);
+            }
+            if (audience?.organizationId) {
+                await lockOrganization(tx, audience.organizationId);
+                if (audience.userId) {
+                    const members = await tx.membership.findMany({
+                        where: {
+                            organizationId: audience.organizationId,
+                            userId: audience.userId,
+                        },
+                        select: { id: true },
+                    });
+                    await lockMemberships(tx, members);
+                }
+                if (audience.projectId)
+                    await lockProjects(tx, [audience.projectId]);
+                if (audience.invitationId) {
+                    await tx.$queryRaw`
+                        SELECT "id" FROM "invitations" WHERE "id" = ${audience.invitationId} FOR SHARE
+                    `;
+                }
+            }
+            await tx.$queryRaw`
+                SELECT "id" FROM "notification_deliveries" WHERE "id" = ${job.id} FOR UPDATE
+            `;
+            const current = await tx.notificationDelivery.findFirst({
+                where: {
+                    id: job.id,
+                    leaseToken,
+                    status: 'SENDING',
+                    leaseUntil: { gt: new Date() },
+                },
+            });
+            if (!current) return null;
+            const currentAudience = (current.payload as Record<string, unknown>)
+                ?.audience as NotificationAudience | undefined;
+            const eligible =
+                JSON.stringify(currentAudience) === JSON.stringify(audience) &&
+                (await this.authorization.eligible(
+                    currentAudience,
+                    tx,
+                    current.channel === 'EMAIL',
+                ));
+            const changed = await tx.notificationDelivery.updateMany({
+                where: {
+                    id: job.id,
+                    leaseToken,
+                    status: 'SENDING',
+                    leaseUntil: { gt: new Date() },
+                },
+                data: eligible
+                    ? { dispatchAuthorizedAt: new Date() }
+                    : {
+                          status: 'SKIPPED',
+                          leaseToken: null,
+                          leaseUntil: null,
+                          dispatchAuthorizedAt: null,
+                          deliveredAt: null,
+                      },
+            });
+            return eligible && changed.count ? current : null;
+        });
     }
 }

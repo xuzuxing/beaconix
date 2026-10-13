@@ -972,6 +972,7 @@ export class ProbesService implements OnModuleInit {
                 title,
                 organizationId: orgId,
                 resourceType: 'Probe',
+                accessScope: 'ORGANIZATION',
                 resourceId: probeId,
                 actorId,
                 includeActor: true,

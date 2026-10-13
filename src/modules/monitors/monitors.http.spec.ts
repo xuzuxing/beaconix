@@ -12,15 +12,25 @@ import { MonitorsService } from './monitors.service';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { MonitorSecurityModule } from './monitor-security.module';
 import { ConfigService } from '@nestjs/config';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import { ResourceContextResolver } from '../../common/authorization/resource-context.resolver';
+import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
 
 /** Real HTTP/DTO/tenant guards with isolated persistence; no external DB or JWT service. */
 describe('Monitor HTTP integration', () => {
     let app: INestApplication;
     const prisma = {
+        user: { findFirst: jest.fn() },
         project: { findFirst: jest.fn() },
         organization: { findFirst: jest.fn() },
-        membership: { findUnique: jest.fn() },
+        membership: {
+            findUnique: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([{ id: 'membership' }]),
+        },
+        projectMembership: { findUnique: jest.fn().mockResolvedValue(null) },
         monitor: { create: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        $transaction: jest.fn(),
     };
     const quota = {
         assertCanCreate: jest.fn(),
@@ -30,11 +40,15 @@ describe('Monitor HTTP integration', () => {
     };
 
     beforeAll(async () => {
+        prisma.$transaction.mockImplementation((work) => work(prisma));
         const module = await Test.createTestingModule({
             imports: [MonitorSecurityModule],
             controllers: [MonitorsController],
             providers: [
                 MonitorsService,
+                ProjectAccessService,
+                ResourceContextResolver,
+                ProjectAccessGuard,
                 { provide: PrismaService, useValue: prisma },
                 { provide: QuotaService, useValue: quota },
                 {
@@ -73,12 +87,17 @@ describe('Monitor HTTP integration', () => {
 
     beforeEach(() => {
         jest.clearAllMocks();
+        prisma.user.findFirst.mockResolvedValue({ globalRole: 'USER' });
         prisma.project.findFirst.mockResolvedValue({
             id: 'project-1',
             organizationId: 'org-1',
+            status: 'ACTIVE',
         });
         prisma.organization.findFirst.mockResolvedValue({ id: 'org-1' });
-        prisma.membership.findUnique.mockResolvedValue({ role: 'ADMIN' });
+        prisma.membership.findUnique.mockResolvedValue({
+            id: 'membership',
+            role: 'ADMIN',
+        });
         quota.monitorEligibility.mockResolvedValue({
             eligible: true,
             reason: null,
@@ -94,6 +113,15 @@ describe('Monitor HTTP integration', () => {
         }));
     });
     afterAll(async () => app.close());
+
+    it('rejects a no-longer-active user through the real tenant guard', async () => {
+        prisma.user.findFirst.mockResolvedValue(null);
+        await request(app.getHttpServer())
+            .post('/api/projects/project-1/monitors')
+            .send({ name: 'DNS', type: 'DNS', target: 'example.com' })
+            .expect(401);
+        expect(prisma.monitor.create).not.toHaveBeenCalled();
+    });
 
     it.each([
         [
@@ -225,8 +253,15 @@ describe('Monitor HTTP integration', () => {
         await request(app.getHttpServer())
             .post('/api/projects/project-1/monitors')
             .send({ name: 'DNS', type: 'DNS', target: 'example.com' })
-            .expect(403);
-        prisma.membership.findUnique.mockResolvedValue({ role: 'VIEWER' });
+            .expect(404);
+        prisma.membership.findUnique.mockResolvedValue({
+            id: 'membership',
+            role: 'VIEWER',
+        });
+        prisma.projectMembership.findUnique.mockResolvedValue({
+            organizationId: 'org-1',
+            role: 'VIEWER',
+        });
         await request(app.getHttpServer())
             .post('/api/projects/project-1/monitors')
             .send({ name: 'DNS', type: 'DNS', target: 'example.com' })
@@ -336,7 +371,13 @@ describe('Monitor HTTP integration', () => {
         expect(response.body.data.revision).toBe(2);
         expect(prisma.monitor.update).toHaveBeenCalledWith(
             expect.objectContaining({
-                where: { id: 'monitor-1', revision: 1, deletedAt: null },
+                where: {
+                    id: 'monitor-1',
+                    projectId: 'project-1',
+                    organizationId: 'org-1',
+                    revision: 1,
+                    deletedAt: null,
+                },
                 data: expect.objectContaining({ revision: { increment: 1 } }),
             }),
         );

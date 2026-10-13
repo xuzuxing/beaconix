@@ -25,7 +25,7 @@ import {
 import { MembershipsService } from './memberships.service';
 import { UpdateMemberRoleDto } from './dto';
 import { MembershipEntity } from './entities';
-import { CurrentUser, Roles, AuditLog } from '../../common/decorators';
+import { CurrentUser, Roles } from '../../common/decorators';
 import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
@@ -36,7 +36,8 @@ export class MembershipsController {
     constructor(private readonly membershipsService: MembershipsService) {}
 
     @Get()
-    @UseGuards(OrgMemberGuard)
+    @UseGuards(RolesGuard)
+    @Roles('ADMIN')
     @ApiOperation({ summary: 'List organization members' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiOkResponse({
@@ -52,7 +53,6 @@ export class MembershipsController {
     @Patch(':userId')
     @UseGuards(RolesGuard)
     @Roles('ADMIN')
-    @AuditLog({ entity: 'Membership', idParam: 'userId' })
     @ApiOperation({ summary: "Change a member's role" })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiParam({ name: 'userId', description: 'Target user CUID' })
@@ -82,7 +82,6 @@ export class MembershipsController {
     @Delete('me')
     @HttpCode(HttpStatus.NO_CONTENT)
     @UseGuards(OrgMemberGuard)
-    @AuditLog({ entity: 'Membership', action: 'LEAVE' })
     @ApiOperation({ summary: 'Leave the organization' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiNoContentResponse({ description: 'Left the organization' })
@@ -101,7 +100,6 @@ export class MembershipsController {
     @HttpCode(HttpStatus.NO_CONTENT)
     @UseGuards(RolesGuard)
     @Roles('ADMIN')
-    @AuditLog({ entity: 'Membership', idParam: 'userId', action: 'DELETE' })
     @ApiOperation({ summary: 'Remove a member from the organization' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })
     @ApiParam({ name: 'userId', description: 'Target user CUID' })

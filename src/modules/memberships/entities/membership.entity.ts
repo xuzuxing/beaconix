@@ -16,6 +16,9 @@ export class MembershipEntity {
     })
     role: string;
 
+    @ApiProperty({ minimum: 0 })
+    projectPermissionsVersion: number;
+
     @ApiProperty({ example: '2026-03-05T12:00:00.000Z' })
     joinedAt: Date;
 

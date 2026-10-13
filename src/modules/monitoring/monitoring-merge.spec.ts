@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { Prisma } from '../../generated/prisma/client';
 import { MonitorType } from '../../generated/prisma/enums';
 import { MonitoringDashboardService } from './monitoring-dashboard.service';
@@ -95,8 +96,12 @@ function fixture() {
             prisma as never,
             cache as never,
             probes as never,
+            mockProjectAccess(prisma),
         ),
-        insights: new MonitorInsightsService(prisma as never),
+        insights: new MonitorInsightsService(
+            prisma as never,
+            mockProjectAccess(prisma),
+        ),
     };
 }
 
@@ -106,6 +111,7 @@ describe('Monitoring protocol merge compatibility', () => {
         const result = await dashboard.dashboard(
             'project',
             new QueryMonitoringDashboardDto(),
+            { type: 'USER', userId: 'user-1' },
         );
         expect(result.distribution.protocols).toEqual([
             { type: 'HTTP', count: 1 },
@@ -115,10 +121,12 @@ describe('Monitoring protocol merge compatibility', () => {
         await dashboard.availability(
             'project',
             new QueryMonitoringAvailabilityDto(),
+            { type: 'USER', userId: 'user-1' },
         );
         await dashboard.statusCodes(
             'project',
             new QueryMonitoringStatusCodesDto(),
+            { type: 'USER', userId: 'user-1' },
         );
         expect(
             queries.filter((sql) => sql.includes('FROM check_logs')).length,
@@ -136,6 +144,7 @@ describe('Monitoring protocol merge compatibility', () => {
             'project',
             'HTTP',
             new QueryMonitorInsightsDto(),
+            { type: 'USER', userId: 'user-1' },
         );
         expect(result.metrics.uptimePercent).toBe(100);
         expect(result.metrics.avgLatencyMs).toBe(20);

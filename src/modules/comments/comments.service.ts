@@ -12,11 +12,12 @@ import type {
     NotificationDb,
     NotificationEvent,
 } from '../notifications/notification-event';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
+import type { AccessPrincipal } from '../../common/authorization/access.types';
 
 const authorSelect = {
     id: true,
     name: true,
-    email: true,
     avatarUrl: true,
 } as const;
 
@@ -25,10 +26,11 @@ export class CommentsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
+        private readonly access: ProjectAccessService,
     ) {}
 
-    async findAll(taskId: string) {
-        await this.ensureTaskExists(taskId);
+    async findAll(taskId: string, principal: AccessPrincipal) {
+        await this.access.task(principal, taskId);
 
         // Fetch top-level comments with one level of replies (threaded)
         const comments = await this.prisma.comment.findMany({
@@ -36,7 +38,7 @@ export class CommentsService {
             include: {
                 author: { select: authorSelect },
                 replies: {
-                    where: { deletedAt: null },
+                    where: { taskId, deletedAt: null },
                     include: {
                         author: { select: authorSelect },
                     },
@@ -50,83 +52,93 @@ export class CommentsService {
     }
 
     async create(taskId: string, userId: string, dto: CreateCommentDto) {
-        const task = await this.ensureTaskExists(taskId);
+        const comment = await this.access.withTask(
+            { type: 'USER', userId },
+            taskId,
+            'comment.write',
+            async (tx, _access, task) => {
+                const parent = dto.parentId
+                    ? await tx.comment.findFirst({
+                          where: { id: dto.parentId, taskId, deletedAt: null },
+                      })
+                    : null;
+                if (dto.parentId && !parent) {
+                    throw new BadRequestException('Parent comment not found');
+                }
 
-        const comment = await this.prisma.$transaction(async (tx) => {
-            const parent = dto.parentId
-                ? await tx.comment.findFirst({
-                      where: { id: dto.parentId, taskId, deletedAt: null },
-                  })
-                : null;
-            if (dto.parentId && !parent) {
-                throw new BadRequestException('Parent comment not found');
-            }
-
-            const created = await tx.comment.create({
-                data: {
-                    body: dto.body,
-                    taskId,
-                    authorId: userId,
-                    parentId: dto.parentId ?? null,
-                },
-                include: { author: { select: authorSelect } },
-            });
-            const mentioned = await this.findMentionedUserIds(
-                dto.body,
-                task.organizationId,
-                userId,
-                tx,
-            );
-            const candidates: NotificationEvent['recipients'] = [
-                ...mentioned.map((id) => ({
-                    userId: id,
-                    type: 'MENTION' as const,
-                    title: `You were mentioned on task #${task.number}`,
-                })),
-                ...(parent?.authorId
-                    ? [
-                          {
-                              userId: parent.authorId,
-                              type: 'COMMENT_REPLIED' as const,
-                              title: `New reply to your comment on task #${task.number}`,
-                          },
-                      ]
-                    : []),
-                ...(await this.notificationsService.taskRecipients(taskId, tx)),
-            ];
-            // First match wins: mention, reply author, then ordinary participants.
-            const recipients = new Map<
-                string,
-                NotificationEvent['recipients'][number]
-            >();
-            for (const recipient of candidates) {
-                const id =
-                    typeof recipient === 'string'
-                        ? recipient
-                        : recipient.userId;
-                if (id !== userId && !recipients.has(id))
-                    recipients.set(id, recipient);
-            }
-            await this.notificationsService.publish(
-                {
-                    eventKey: `comment:${created.id}:created`,
-                    type: 'TASK_COMMENTED',
-                    title: `New comment on task #${task.number}`,
-                    body: dto.body.replace(/\s+/g, ' ').trim().slice(0, 100),
-                    organizationId: task.organizationId,
-                    actorId: userId,
-                    resourceType: 'Task',
-                    resourceId: taskId,
-                    meta: {
-                        commentId: created.id,
+                const created = await tx.comment.create({
+                    data: {
+                        body: dto.body,
+                        taskId,
+                        authorId: userId,
                         parentId: dto.parentId ?? null,
                     },
-                    recipients: [...recipients.values()],
-                },
-                tx,
-            );
-            return created;
-        });
+                    include: { author: { select: authorSelect } },
+                });
+                const mentioned = await this.findMentionedUserIds(
+                    dto.body,
+                    task.organizationId,
+                    task.projectId,
+                    userId,
+                    tx,
+                );
+                const candidates: NotificationEvent['recipients'] = [
+                    ...mentioned.map((id) => ({
+                        userId: id,
+                        type: 'MENTION' as const,
+                        title: `You were mentioned on task #${task.number}`,
+                    })),
+                    ...(parent?.authorId
+                        ? [
+                              {
+                                  userId: parent.authorId,
+                                  type: 'COMMENT_REPLIED' as const,
+                                  title: `New reply to your comment on task #${task.number}`,
+                              },
+                          ]
+                        : []),
+                    ...(await this.notificationsService.taskRecipients(
+                        taskId,
+                        tx,
+                    )),
+                ];
+                // First match wins: mention, reply author, then ordinary participants.
+                const recipients = new Map<
+                    string,
+                    NotificationEvent['recipients'][number]
+                >();
+                for (const recipient of candidates) {
+                    const id =
+                        typeof recipient === 'string'
+                            ? recipient
+                            : recipient.userId;
+                    if (id !== userId && !recipients.has(id))
+                        recipients.set(id, recipient);
+                }
+                await this.notificationsService.publish(
+                    {
+                        eventKey: `comment:${created.id}:created`,
+                        type: 'TASK_COMMENTED',
+                        title: `New comment on task #${task.number}`,
+                        body: dto.body
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .slice(0, 100),
+                        organizationId: task.organizationId,
+                        actorId: userId,
+                        resourceType: 'Task',
+                        resourceId: taskId,
+                        meta: {
+                            commentId: created.id,
+                            parentId: dto.parentId ?? null,
+                        },
+                        recipients: [...recipients.values()],
+                    },
+                    tx,
+                );
+                return created;
+            },
+        );
 
         return new CommentEntity(comment);
     }
@@ -137,46 +149,65 @@ export class CommentsService {
         userId: string,
         dto: UpdateCommentDto,
     ) {
-        const comment = await this.findCommentOrFail(taskId, commentId);
+        return this.access.withTask(
+            { type: 'USER', userId },
+            taskId,
+            'comment.write',
+            async (tx) => {
+                const comment = await this.findCommentOrFail(
+                    taskId,
+                    commentId,
+                    tx,
+                );
 
-        if (comment.authorId !== userId) {
-            throw new ForbiddenException('You can only edit your own comments');
-        }
+                if (comment.authorId !== userId) {
+                    throw new ForbiddenException(
+                        'You can only edit your own comments',
+                    );
+                }
 
-        const updated = await this.prisma.comment.update({
-            where: { id: commentId },
-            data: {
-                body: dto.body,
-                isEdited: true,
+                const updated = await tx.comment.update({
+                    where: { id: commentId, taskId, deletedAt: null },
+                    data: {
+                        body: dto.body,
+                        isEdited: true,
+                    },
+                    include: {
+                        author: { select: authorSelect },
+                    },
+                });
+
+                return new CommentEntity(updated);
             },
-            include: {
-                author: { select: authorSelect },
-            },
-        });
-
-        return new CommentEntity(updated);
+        );
     }
 
-    async softDelete(
-        taskId: string,
-        commentId: string,
-        userId: string,
-        userRole: string,
-    ) {
-        const comment = await this.findCommentOrFail(taskId, commentId);
+    async softDelete(taskId: string, commentId: string, userId: string) {
+        await this.access.withTask(
+            { type: 'USER', userId },
+            taskId,
+            'comment.write',
+            async (tx, access) => {
+                const comment = await this.findCommentOrFail(
+                    taskId,
+                    commentId,
+                    tx,
+                );
 
-        // Author or ADMIN+ can delete
-        const isAdmin = ['OWNER', 'ADMIN'].includes(userRole);
-        if (comment.authorId !== userId && !isAdmin) {
-            throw new ForbiddenException(
-                'You can only delete your own comments or be an admin',
-            );
-        }
+                // Author or ADMIN+ can delete
+                const isAdmin = access.effectiveRole === 'ADMIN';
+                if (comment.authorId !== userId && !isAdmin) {
+                    throw new ForbiddenException(
+                        'You can only delete your own comments or be an admin',
+                    );
+                }
 
-        await this.prisma.comment.update({
-            where: { id: commentId },
-            data: { deletedAt: new Date() },
-        });
+                await tx.comment.update({
+                    where: { id: commentId, taskId, deletedAt: null },
+                    data: { deletedAt: new Date() },
+                });
+            },
+        );
     }
 
     // ── PRIVATE HELPERS ─────────────────────────────────────────────────
@@ -191,13 +222,14 @@ export class CommentsService {
     private async findMentionedUserIds(
         body: string,
         organizationId: string,
+        projectId: string,
         authorId: string,
         tx: NotificationDb,
     ): Promise<string[]> {
         if (!body.includes('@')) return [];
 
         const members = await tx.membership.findMany({
-            where: { organizationId },
+            where: this.access.projectMemberFilter(organizationId, projectId),
             select: { userId: true, user: { select: { name: true } } },
         });
 
@@ -225,16 +257,12 @@ export class CommentsService {
         ).test(body);
     }
 
-    private async ensureTaskExists(taskId: string) {
-        const task = await this.prisma.task.findFirst({
-            where: { id: taskId, deletedAt: null },
-        });
-        if (!task) throw new NotFoundException('Task not found');
-        return task;
-    }
-
-    private async findCommentOrFail(taskId: string, commentId: string) {
-        const comment = await this.prisma.comment.findFirst({
+    private async findCommentOrFail(
+        taskId: string,
+        commentId: string,
+        db: NotificationDb,
+    ) {
+        const comment = await db.comment.findFirst({
             where: { id: commentId, taskId, deletedAt: null },
         });
         if (!comment) throw new NotFoundException('Comment not found');

@@ -5,6 +5,7 @@ import { TaskOverdueService } from './task-overdue.service';
 const taskRow = {
     id: 'task-1',
     organizationId: 'org',
+    projectId: 'project',
     assignedToId: 'user-2',
     number: 7,
     title: 'Ship monitoring',
@@ -118,7 +119,13 @@ describe('TaskOverdueService', () => {
             expect.objectContaining({ to: 'bob@example.com' }),
             expect.any(String),
             tx,
-            { userId: 'user-2', organizationId: 'org' },
+            {
+                accessScope: 'PROJECT',
+                userId: 'user-2',
+                organizationId: 'org',
+                projectId: 'project',
+                minimumRole: 'MEMBER',
+            },
         );
         expect(notificationsService.taskRecipients).toHaveBeenCalledWith(
             'task-1',

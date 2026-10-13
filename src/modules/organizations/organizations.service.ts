@@ -18,6 +18,10 @@ import {
 import { OrganizationEntity } from './entities';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ADMIN_ROLES } from '../notifications/notification-event';
+import {
+    lockIdentities,
+    lockOrganizationMembers,
+} from '../../common/authorization/access-locks';
 
 /** Only the delegates onboarding touches — works for the client and a transaction. */
 type OnboardingDb = Pick<
@@ -64,6 +68,8 @@ export class OrganizationsService {
         }
 
         const org = await this.prisma.$transaction(async (tx) => {
+            await lockIdentities(tx, [{ type: 'USER', userId }]);
+            await this.assertActiveUser(tx, userId);
             const organization = await tx.organization.create({
                 data: {
                     name: dto.name,
@@ -135,6 +141,13 @@ export class OrganizationsService {
         }
 
         const updated = await this.prisma.$transaction(async (tx) => {
+            await lockOrganizationMembers(tx, orgId, [userId], [], 'UPDATE');
+            await this.assertActiveUser(tx, userId);
+            const current = await this.ensureOrgExists(orgId, tx);
+            if (current.ownerId !== userId)
+                throw new ForbiddenException(
+                    'Only the owner can delete the organization',
+                );
             const members = await tx.membership.findMany({
                 where: { organizationId: orgId },
                 select: { userId: true, role: true },
@@ -201,6 +214,49 @@ export class OrganizationsService {
         }
 
         const updated = await this.prisma.$transaction(async (tx) => {
+            await lockOrganizationMembers(
+                tx,
+                orgId,
+                [currentUserId, dto.newOwnerId],
+                [currentUserId, dto.newOwnerId],
+                'UPDATE',
+            );
+            await this.assertActiveUser(tx, currentUserId);
+            await this.assertActiveUser(tx, dto.newOwnerId);
+            const current = await this.ensureOrgExists(orgId, tx);
+            if (current.ownerId !== currentUserId)
+                throw new ForbiddenException(
+                    'Only the owner can transfer ownership',
+                );
+            const currentNewOwner = await tx.membership.findUnique({
+                where: {
+                    userId_organizationId: {
+                        userId: dto.newOwnerId,
+                        organizationId: orgId,
+                    },
+                },
+            });
+            if (
+                !currentNewOwner ||
+                currentNewOwner.id !== newOwnerMembership.id
+            ) {
+                throw new ConflictException(
+                    'New owner membership changed; reload and retry',
+                );
+            }
+            const previousOwner = await tx.membership.findUnique({
+                where: {
+                    userId_organizationId: {
+                        userId: currentUserId,
+                        organizationId: orgId,
+                    },
+                },
+            });
+            if (!previousOwner || previousOwner.role !== 'OWNER') {
+                throw new ConflictException(
+                    'Owner membership changed; reload and retry',
+                );
+            }
             // Update org owner
             const updatedOrg = await tx.organization.update({
                 where: { id: orgId },
@@ -209,8 +265,11 @@ export class OrganizationsService {
 
             // Promote new owner to OWNER role
             await tx.membership.update({
-                where: { id: newOwnerMembership.id },
-                data: { role: 'OWNER' },
+                where: { id: currentNewOwner.id },
+                data: {
+                    role: 'OWNER',
+                    projectPermissionsVersion: { increment: 1 },
+                },
             });
 
             // Demote previous owner to ADMIN
@@ -221,7 +280,51 @@ export class OrganizationsService {
                         organizationId: orgId,
                     },
                 },
-                data: { role: 'ADMIN' },
+                data: {
+                    role: 'ADMIN',
+                    projectPermissionsVersion: { increment: 1 },
+                },
+            });
+            await tx.auditLog.create({
+                data: {
+                    actorId: currentUserId,
+                    organizationId: orgId,
+                    action: 'UPDATE',
+                    entity: 'OrganizationOwnership',
+                    entityId: orgId,
+                    before: {
+                        ownerId: currentUserId,
+                        memberships: [previousOwner, currentNewOwner].map(
+                            (member) => ({
+                                membershipId: member.id,
+                                userId: member.userId,
+                                role: member.role,
+                                projectPermissionsVersion:
+                                    member.projectPermissionsVersion,
+                            }),
+                        ),
+                    },
+                    after: {
+                        ownerId: dto.newOwnerId,
+                        memberships: [
+                            {
+                                membershipId: previousOwner.id,
+                                userId: currentUserId,
+                                role: 'ADMIN',
+                                projectPermissionsVersion:
+                                    previousOwner.projectPermissionsVersion + 1,
+                            },
+                            {
+                                membershipId: currentNewOwner.id,
+                                userId: dto.newOwnerId,
+                                role: 'OWNER',
+                                projectPermissionsVersion:
+                                    currentNewOwner.projectPermissionsVersion +
+                                    1,
+                            },
+                        ],
+                    },
+                },
             });
 
             await this.notifications.publish(
@@ -389,8 +492,22 @@ export class OrganizationsService {
             .replace(/^-+|-+$/g, '');
     }
 
-    private async ensureOrgExists(orgId: string) {
-        const org = await this.prisma.organization.findUnique({
+    private async assertActiveUser(
+        tx: Prisma.TransactionClient,
+        userId: string,
+    ) {
+        const user = await tx.user.findFirst({
+            where: { id: userId, isActive: true, deletedAt: null },
+            select: { id: true },
+        });
+        if (!user) throw new ForbiddenException('User is no longer active');
+    }
+
+    private async ensureOrgExists(
+        orgId: string,
+        db: Prisma.TransactionClient = this.prisma,
+    ) {
+        const org = await db.organization.findUnique({
             where: { id: orgId, deletedAt: null },
         });
         if (!org) {

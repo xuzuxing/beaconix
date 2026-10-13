@@ -25,9 +25,11 @@ import { MongodbChecker } from './checkers/mongodb.checker';
 import { DockerChecker } from './checkers/docker.checker';
 import { GrpcChecker } from './checkers/grpc.checker';
 import { WebsocketChecker } from './checkers/websocket.checker';
+import { AuthorizationModule } from '../../common/authorization/authorization.module';
 
 @Module({
     imports: [
+        AuthorizationModule,
         StateModule,
         NotifierModule,
         RulesModule,

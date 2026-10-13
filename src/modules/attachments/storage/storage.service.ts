@@ -7,6 +7,7 @@ import {
     DownloadResult,
     PutObjectInput,
     PutObjectResult,
+    StorageVisibility,
 } from './storage.types';
 
 @Injectable()
@@ -33,8 +34,9 @@ export class StorageService {
         provider: string,
         key: string,
         bucket?: string | null,
+        visibility: StorageVisibility = 'PRIVATE',
     ): Promise<DownloadResult> {
-        return this.provider(provider).getDownload(key, bucket);
+        return this.provider(provider).getDownload(key, bucket, visibility);
     }
 
     async activeProviderName(): Promise<'LOCAL' | 'OSS'> {
@@ -50,6 +52,8 @@ export class StorageService {
     }
 
     private provider(provider: string): AttachmentStorageProvider {
-        return provider === 'OSS' ? this.oss : this.local;
+        if (provider === 'OSS') return this.oss;
+        if (provider === 'LOCAL') return this.local;
+        throw new Error('Unknown storage provider');
     }
 }

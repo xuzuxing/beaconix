@@ -644,6 +644,7 @@ export class TwoFactorService {
             {
                 eventKey,
                 type,
+                accessScope: 'ACCOUNT',
                 title,
                 body: 'Contact support if you did not perform this security action.',
                 recipients: [user.id],
@@ -691,6 +692,7 @@ export class TwoFactorService {
         } as EmailPayloadMap[T];
 
         await this.notifications.enqueueEmail(template, payload, eventKey, tx, {
+            accessScope: 'ACCOUNT',
             userId: user.id,
         });
     }

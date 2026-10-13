@@ -17,13 +17,23 @@ export class OrgMemberGuard implements CanActivate {
         const user = request['user'] as JwtPayload | undefined;
         if (!user) throw new ForbiddenException('Authentication required');
 
-        // SUPER_ADMIN bypasses membership check
-        if (user.globalRole === 'SUPER_ADMIN') return true;
-
         const orgId = await this.resolveOrgId(request);
         if (!orgId) {
             throw new ForbiddenException('Organization context required');
         }
+        const currentUser = await this.prisma.user.findFirst({
+            where: { id: user.sub, isActive: true, deletedAt: null },
+            select: { globalRole: true },
+        });
+        if (!currentUser)
+            throw new ForbiddenException('User is no longer active');
+        const organization = await this.prisma.organization.findFirst({
+            where: { id: orgId, deletedAt: null },
+            select: { id: true },
+        });
+        if (!organization)
+            throw new NotFoundException('Organization not found');
+        if (currentUser.globalRole === 'SUPER_ADMIN') return true;
 
         const membership = await this.prisma.membership.findUnique({
             where: {

@@ -1,3 +1,4 @@
+import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { AlertEventsService } from './alert-events.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
@@ -62,6 +63,7 @@ function fixture() {
     const service = new AlertEventsService(
         {} as PrismaService,
         notifications as unknown as NotificationsService,
+        mockProjectAccess({}),
     );
     const record = (
         outcome: Partial<CheckOutcome>,

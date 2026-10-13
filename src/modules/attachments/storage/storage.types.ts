@@ -1,6 +1,7 @@
 import type { ReadStream } from 'node:fs';
 
 export type StorageProviderName = 'LOCAL' | 'OSS';
+export type StorageVisibility = 'PRIVATE' | 'PUBLIC';
 
 export interface PutObjectInput {
     buffer: Buffer;
@@ -12,6 +13,7 @@ export interface PutObjectInput {
     uploadedById?: string;
     directory?: string;
     publicUpload?: boolean;
+    visibility?: StorageVisibility;
 }
 
 export interface PutObjectResult {
@@ -35,5 +37,9 @@ export type DownloadResult =
 export interface AttachmentStorageProvider {
     putObject(input: PutObjectInput): Promise<PutObjectResult>;
     deleteObject(key: string, bucket?: string | null): Promise<void>;
-    getDownload(key: string, bucket?: string | null): Promise<DownloadResult>;
+    getDownload(
+        key: string,
+        bucket?: string | null,
+        visibility?: StorageVisibility,
+    ): Promise<DownloadResult>;
 }

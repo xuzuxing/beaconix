@@ -19,10 +19,29 @@ function fixture() {
         duplicate: jest.fn().mockReturnValue(subscriber),
         publish: jest.fn().mockResolvedValue(1),
     };
-    const service = new NotificationStreamService({
-        getClient: () => client,
-    } as unknown as RedisService);
-    return { service, client, subscriber, handlers };
+    const prisma = {
+        notification: {
+            findFirst: jest
+                .fn()
+                .mockImplementation(({ where }) =>
+                    Promise.resolve({ id: where.id, userId: where.userId }),
+                ),
+        },
+        invitation: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const authorization = {
+        visibleWhere: jest
+            .fn()
+            .mockImplementation((userId) => Promise.resolve({ userId })),
+    };
+    const service = new NotificationStreamService(
+        {
+            getClient: () => client,
+        } as unknown as RedisService,
+        prisma as never,
+        authorization as never,
+    );
+    return { service, client, subscriber, handlers, prisma, authorization };
 }
 
 describe('Notification SSE fan-out', () => {
@@ -41,6 +60,7 @@ describe('Notification SSE fan-out', () => {
             'test:workspace-notifications',
             JSON.stringify({ id: 'notice', userId: 'user' }),
         );
+        await new Promise(setImmediate);
         expect(target).toHaveBeenCalledWith({
             id: 'notice',
             data: { id: 'notice', userId: 'user' },
@@ -62,6 +82,7 @@ describe('Notification SSE fan-out', () => {
             'channel',
             JSON.stringify({ id: 'notice', userId: 'user' }),
         );
+        await new Promise(setImmediate);
         expect(secondNext).toHaveBeenCalledTimes(1);
         second.unsubscribe();
         const thirdNext = jest.fn();
@@ -70,6 +91,7 @@ describe('Notification SSE fan-out', () => {
             'channel',
             JSON.stringify({ id: 'next', userId: 'user' }),
         );
+        await new Promise(setImmediate);
         expect(thirdNext).toHaveBeenCalledTimes(1);
         third.unsubscribe();
         await service.onModuleDestroy();

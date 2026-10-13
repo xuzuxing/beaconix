@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { MonitoringController } from './monitoring.controller';
 import { MonitoringService } from './monitoring.service';
 import { OrgMemberGuard } from '../../common/guards';
+import { ResourceContextResolver } from '../../common/authorization/resource-context.resolver';
+import { ProjectAccessService } from '../../common/authorization/project-access.service';
 
 describe('MonitoringController', () => {
     let controller: MonitoringController;
@@ -10,6 +12,8 @@ describe('MonitoringController', () => {
         const module: TestingModule = await Test.createTestingModule({
             controllers: [MonitoringController],
             providers: [
+                { provide: ResourceContextResolver, useValue: {} },
+                { provide: ProjectAccessService, useValue: {} },
                 {
                     provide: MonitoringService,
                     useValue: {
