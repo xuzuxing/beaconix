@@ -36,6 +36,7 @@ coverage/
 # Docker files themselves
 Dockerfile
 docker-compose*.yml
+probes/docker-compose.probe-test.yml
 .dockerignore
 
 # Docs
@@ -48,3 +49,7 @@ LICENSE
 # Temp
 .temp/
 .tmp/
+
+# Probe credentials and test fleet state
+.beacon/
+scripts/probe.json

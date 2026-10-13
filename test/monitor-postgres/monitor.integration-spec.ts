@@ -10,7 +10,8 @@ import { PrismaService } from '../../src/infra/database/prisma.service';
 import { MonitorStatus, MonitorType } from '../../src/generated/prisma/enums';
 import { StateService } from '../../src/modules/state/state.service';
 import { AlertEventsService } from '../../src/modules/alert-events/alert-events.service';
-import type { NotificationsService } from '../../src/modules/notifications/notifications.service';
+import { NotificationsService } from '../../src/modules/notifications/notifications.service';
+import { NotificationAccessService } from '../../src/modules/notifications/notification-access.service';
 import type { CheckMetadata } from '../../src/modules/checker/checkers/check-result';
 import { ProjectAccessService } from '../../src/common/authorization/project-access.service';
 import { systemPrincipal } from '../../src/common/authorization/access.types';
@@ -174,21 +175,23 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
         await prisma.$connect();
         const db = prisma;
         const access = new ProjectAccessService(db);
-        const notifications: Pick<
-            NotificationsService,
-            'publish' | 'organizationRecipients' | 'eventRecipients'
-        > = {
-            publish: () => Promise.resolve(),
-            organizationRecipients: () => Promise.resolve([]),
-            eventRecipients: () => Promise.resolve([]),
-        };
+        const notifications = new NotificationsService(
+            db,
+            { kick: () => undefined } as never,
+            { getStream: () => undefined } as never,
+            new NotificationAccessService(db, access),
+            access,
+        );
+        await db.membership.create({
+            data: {
+                userId: 'fixture-user',
+                organizationId: 'fixture-org',
+                role: 'ADMIN',
+            },
+        });
         const state = new StateService(
             db,
-            new AlertEventsService(
-                db,
-                notifications as NotificationsService,
-                access,
-            ),
+            new AlertEventsService(db, notifications, access),
             access,
         );
         const createMonitor = (type: MonitorType = MonitorType.HTTP) =>
@@ -205,6 +208,50 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
                     failureThreshold: 2,
                 },
             });
+
+        await t.test(
+            'real monitor transitions persist station notices and delivery intents',
+            async () => {
+                const monitor = await createMonitor();
+                await state.record(monitor.id, { success: true, latency: 10 });
+                await state.record(monitor.id, { success: false, latency: 10 });
+                await state.record(monitor.id, { success: false, latency: 10 });
+                await state.record(monitor.id, { success: false, latency: 10 });
+                const openings = await db.notification.findMany({
+                    where: {
+                        resourceType: 'Monitor',
+                        resourceId: monitor.id,
+                        type: 'MONITOR_ALERT',
+                    },
+                });
+                assert.equal(openings.length, 1);
+                assert.equal(openings[0].userId, 'fixture-user');
+                await state.record(monitor.id, { success: true, latency: 10 });
+                const recoveries = await db.notification.findMany({
+                    where: {
+                        resourceType: 'Monitor',
+                        resourceId: monitor.id,
+                        type: 'MONITOR_RECOVERED',
+                    },
+                });
+                assert.equal(recoveries.length, 1);
+                assert.equal(recoveries[0].userId, 'fixture-user');
+                for (const notice of [...openings, ...recoveries]) {
+                    assert.equal(
+                        await db.notificationDelivery.count({
+                            where: {
+                                channel: 'SSE',
+                                payload: {
+                                    path: ['notificationId'],
+                                    equals: notice.id,
+                                },
+                            },
+                        }),
+                        1,
+                    );
+                }
+            },
+        );
 
         await t.test(
             'protocol configuration changes invalidate versioned probe observations',
@@ -509,11 +556,7 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
                 assert.ok(token);
                 const restarted = new StateService(
                     db,
-                    new AlertEventsService(
-                        db,
-                        notifications as NotificationsService,
-                        access,
-                    ),
+                    new AlertEventsService(db, notifications, access),
                     access,
                 );
                 assert.equal(

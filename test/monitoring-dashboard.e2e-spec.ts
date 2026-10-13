@@ -7,18 +7,21 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { PrismaService } from '../src/infra/database/prisma.service';
 import { MultiLevelCacheService } from '../src/infra/cache/multi-level-cache.service';
-import { JwtAuthGuard, OrgMemberGuard } from '../src/common/guards';
+import { JwtAuthGuard, OrgMemberGuard, RolesGuard } from '../src/common/guards';
 import { TransformInterceptor } from '../src/common/interceptors';
 import { MonitoringDashboardController } from '../src/modules/monitoring/monitoring-dashboard.controller';
 import { MonitoringDashboardService } from '../src/modules/monitoring/monitoring-dashboard.service';
 import { MonitoringEtagInterceptor } from '../src/modules/monitoring/monitoring-etag.interceptor';
 import { SystemProbeScheduler } from '../src/modules/admin/system-probes/system-probe-scheduler';
 import { AlertEventsService } from '../src/modules/alert-events/alert-events.service';
-import type { NotificationsService } from '../src/modules/notifications/notifications.service';
 import { StateService } from '../src/modules/state/state.service';
 import { NotifierService } from '../src/modules/notifier/notifier.service';
 import { AlertOutboxService } from '../src/modules/notifier/alert-outbox.service';
 import { ProbesService } from '../src/modules/probes/probes.service';
+import { ProbesController } from '../src/modules/probes/probes.controller';
+import { ProbeValidationService } from '../src/modules/probes/probe-validation.service';
+import { NotificationsService } from '../src/modules/notifications/notifications.service';
+import { NotificationAccessService } from '../src/modules/notifications/notification-access.service';
 import { hashSecret } from '../src/modules/probes/probe-secret.util';
 import { CheckerService } from '../src/modules/checker/checker.service';
 import { MonitorDataCleanupService } from '../src/modules/cron/jobs/monitor-data-cleanup.service';
@@ -27,6 +30,95 @@ import { ProjectAccessService } from '../src/common/authorization/project-access
 import { ResourceContextResolver } from '../src/common/authorization/resource-context.resolver';
 import { ProjectAccessGuard } from '../src/common/authorization/project-access.guard';
 import { systemPrincipal } from '../src/common/authorization/access.types';
+
+describe('Probe credential lifecycle actor forwarding (HTTP)', () => {
+    let app: INestApplication;
+    let base: string;
+    const probes = {
+        create: jest.fn().mockResolvedValue({ id: 'probe' }),
+        remove: jest.fn().mockResolvedValue(undefined),
+        rotateSecret: jest.fn().mockResolvedValue({ id: 'probe' }),
+    };
+    const actor = {
+        sub: 'probe-admin',
+        email: 'probe-admin@test.invalid',
+        globalRole: 'USER',
+    };
+
+    beforeAll(async () => {
+        const module = await Test.createTestingModule({
+            controllers: [ProbesController],
+            providers: [
+                { provide: ProbesService, useValue: probes },
+                { provide: ProbeValidationService, useValue: {} },
+            ],
+        })
+            .overrideGuard(RolesGuard)
+            .useValue({
+                canActivate: (context) => {
+                    context.switchToHttp().getRequest().user = actor;
+                    return true;
+                },
+            })
+            .overrideGuard(OrgMemberGuard)
+            .useValue({ canActivate: () => true })
+            .compile();
+        app = module.createNestApplication();
+        app.setGlobalPrefix('api');
+        app.useGlobalPipes(
+            new ValidationPipe({ whitelist: true, transform: true }),
+        );
+        await app.listen(0, '127.0.0.1');
+        base = await app.getUrl();
+    });
+
+    afterAll(async () => {
+        await app?.close();
+    });
+
+    it('forwards the authenticated actor when creating a probe', async () => {
+        const dto = {
+            name: 'Actor fixture',
+            provider: 'CUSTOM',
+            region: 'test',
+            callbackUrl: 'https://probe.test/callback',
+        };
+        const response = await fetch(`${base}/api/organizations/org/probes`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...dto, actorId: 'untrusted-body-actor' }),
+        });
+        expect(response.status).toBe(201);
+        expect(probes.create).toHaveBeenCalledWith('org', dto, actor.sub);
+    });
+
+    it('forwards the authenticated actor when removing a probe', async () => {
+        const response = await fetch(
+            `${base}/api/organizations/org/probes/probe`,
+            {
+                method: 'DELETE',
+            },
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ id: 'probe', deleted: true });
+        expect(probes.remove).toHaveBeenCalledWith('org', 'probe', actor.sub);
+    });
+
+    it('forwards the authenticated actor when rotating a probe credential', async () => {
+        const response = await fetch(
+            `${base}/api/organizations/org/probes/probe/rotate-secret`,
+            {
+                method: 'POST',
+            },
+        );
+        expect(response.status).toBe(200);
+        expect(probes.rotateSecret).toHaveBeenCalledWith(
+            'org',
+            'probe',
+            actor.sub,
+        );
+    });
+});
 
 // An explicit dedicated database is mandatory. Never default to the developer DB.
 const databaseUrl = process.env.MONITORING_TEST_DATABASE_URL;
@@ -45,6 +137,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
     let emptyProject: string;
     let otherProject: string;
     let state: StateService;
+    let notifications: NotificationsService;
     const assigned = new Set<string>();
     const systemProbes: string[] = [];
     const cache = new Map<string, unknown>();
@@ -52,14 +145,6 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
     const origin = Date.now();
     const ago = (days: number) => new Date(origin - days * 86400000);
     const send = jest.fn().mockResolvedValue(undefined);
-    const notifications: Pick<
-        NotificationsService,
-        'publish' | 'organizationRecipients' | 'eventRecipients'
-    > = {
-        publish: () => Promise.resolve(),
-        organizationRecipients: () => Promise.resolve([]),
-        eventRecipients: () => Promise.resolve([]),
-    };
     const channels: string[] = [];
     const api = async (path: string, jwt = token, headers = {}) => {
         const response = await fetch(`${base}/api/projects/${path}`, {
@@ -82,6 +167,17 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
                 database: { url: databaseUrl },
                 app: { isDevelopment: false },
             }),
+        );
+        // Keep transactional persistence real without starting network delivery.
+        notifications = new NotificationsService(
+            prisma,
+            { kick: jest.fn() } as never,
+            { getStream: jest.fn() } as never,
+            new NotificationAccessService(
+                prisma,
+                new ProjectAccessService(prisma),
+            ),
+            new ProjectAccessService(prisma),
         );
         const module = await Test.createTestingModule({
             imports: [JwtModule.register({ secret: 'monitoring-test-only' })],
@@ -268,7 +364,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             prisma,
             new AlertEventsService(
                 prisma,
-                notifications as NotificationsService,
+                notifications,
                 new ProjectAccessService(prisma),
             ),
             new ProjectAccessService(prisma),
@@ -304,6 +400,18 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             where: { projectId: { in: ids } },
         });
         if (org) await prisma.organization.delete({ where: { id: org } });
+        const notices = await prisma.notification.findMany({
+            where: { userId: user },
+            select: { id: true },
+        });
+        await prisma.notificationDelivery.deleteMany({
+            where: {
+                channel: 'SSE',
+                OR: notices.map((notice) => ({
+                    payload: { path: ['notificationId'], equals: notice.id },
+                })),
+            },
+        });
         if (user) await prisma.user.delete({ where: { id: user } });
         await app?.close();
         await prisma.$disconnect();
@@ -714,7 +822,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
                 {} as never,
                 {} as never,
                 { register: jest.fn() } as never,
-                notifications as NotificationsService,
+                notifications,
             );
             const current = await prisma.monitor.findUniqueOrThrow({
                 where: { id: monitor },
@@ -921,7 +1029,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
         await expect(
             new AlertEventsService(
                 prisma,
-                notifications as NotificationsService,
+                notifications,
                 new ProjectAccessService(prisma),
             ).retry(
                 otherProject,
@@ -931,7 +1039,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
         ).rejects.toThrow();
         await new AlertEventsService(
             prisma,
-            notifications as NotificationsService,
+            notifications,
             new ProjectAccessService(prisma),
         ).retry(
             project,
@@ -1198,7 +1306,7 @@ suite('Monitoring dashboard (PostgreSQL + real HTTP guards)', () => {
             {} as never,
             {} as never,
             {} as never,
-            notifications as NotificationsService,
+            notifications,
         );
         await probes.recordResults(raw, [
             {
