@@ -3,6 +3,9 @@
 /node_modules
 /build
 /.reasonix
+/advisor-plans
+/docs
+/plans
 
 # Logs
 logs
