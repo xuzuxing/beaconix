@@ -63,6 +63,8 @@ import { SettingsModule } from './modules/settings';
 import { ClsModule } from './infra/cls/cls.module';
 import { CacheModule } from './infra/cache/cache.module';
 import { LoggerModule } from './infra/logging/logger.module';
+import { HealthModule, MetricsModule } from './infra/observability';
+import { HealthController } from './health.controller';
 
 @Module({
     imports: [
@@ -122,7 +124,10 @@ import { LoggerModule } from './infra/logging/logger.module';
         // Serve static files from the views directory
         ServeStaticModule.forRoot({
             rootPath: join(__dirname, '..', 'web'),
-            exclude: ['/api/*path'], // 让 API 请求走控制器，不返回 index.html
+            exclude: [
+                '/api/*path', // 让 API 请求走控制器，不返回 index.html
+                '/metrics', // 交给 MetricsMiddleware，不返回 index.html
+            ],
         }),
         // Recurring work runs through ScheduledJobsModule (BullMQ), so the
         // in-process ScheduleModule is intentionally not registered: a `@Cron`
@@ -137,6 +142,8 @@ import { LoggerModule } from './infra/logging/logger.module';
         RedisModule,
         ScheduledJobsModule,
         WechatModule,
+        HealthModule,
+        MetricsModule,
         // business
         SettingsModule,
         EmailModule,
@@ -168,7 +175,7 @@ import { LoggerModule } from './infra/logging/logger.module';
         QuotaModule,
         AdminModule,
     ],
-    controllers: [AppController],
+    controllers: [AppController, HealthController],
     providers: [
         AppService,
         { provide: APP_GUARD, useClass: JwtAuthGuard },

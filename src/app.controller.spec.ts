@@ -7,7 +7,6 @@ import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { GlobalExceptionFilter } from './common/filters';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { TransformInterceptor } from './common/interceptors';
@@ -16,10 +15,7 @@ import { StatusPagesPublicController } from './modules/status-pages/status-pages
 import { StatusPagesService } from './modules/status-pages/status-pages.service';
 
 describe('AppController test pages', () => {
-    const controller = new AppController(
-        {} as AppService,
-        {} as StatusPagesService,
-    );
+    const controller = new AppController({} as StatusPagesService);
 
     it('exposes the rule engine test page data', () => {
         expect(controller.rulesTestPage()).toEqual({
@@ -56,7 +52,6 @@ describe('AppController status test endpoints', () => {
         const module = await Test.createTestingModule({
             controllers: [AppController, StatusPagesPublicController],
             providers: [
-                { provide: AppService, useValue: {} },
                 { provide: StatusPagesService, useValue: { getPublicBySlug } },
                 { provide: JwtService, useValue: { verifyAsync } },
                 { provide: PrismaService, useValue: {} },
