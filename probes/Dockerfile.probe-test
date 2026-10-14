@@ -9,9 +9,9 @@ ENV NODE_ENV=production \
     PROBE_ALLOW_INSECURE=false
 
 WORKDIR /app
-COPY probes/agent/bin probes/agent/bin
-COPY probes/agent/src probes/agent/src
-COPY probes/test-fleet/*.js probes/test-fleet/
+# src/version.js requires ../package.json, so the manifest must ship with the sources.
+COPY agent probes/agent
+COPY test-fleet/*.js probes/test-fleet/
 
 RUN mkdir -p /data && chown node:node /data
 USER node

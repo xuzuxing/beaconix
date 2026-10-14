@@ -4,8 +4,8 @@ name: beaconix
 services:
   probe-fleet:
     build:
-      context: ..
-      dockerfile: probes/Dockerfile.probe-test
+      context: .
+      dockerfile: Dockerfile.probe-test
     init: true
     environment:
       BEACON_API_URL: ${BEACON_API_URL:-http://host.docker.internal:9009/api}
