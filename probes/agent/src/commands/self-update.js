@@ -3,7 +3,7 @@
 const { VERSION } = require('../version');
 const logger = require('../logger');
 
-const DEFAULT_DOWNLOAD_BASE = 'https://get.beacon.dev/probe';
+const DEFAULT_DOWNLOAD_BASE = 'https://get.beaconix.app/probe';
 
 /** Fetch the published release manifest ({ version, installUrl? }). */
 async function fetchManifest(base) {
@@ -21,7 +21,7 @@ async function fetchManifest(base) {
 }
 
 /**
- * `beacon-probe self-update [--check]`.
+ * `beaconix-probe self-update [--check]`.
  *
  * Replacing the payload under /opt and refreshing the unit needs root, so this
  * command reports the installer invocation instead of mutating system files

@@ -103,7 +103,7 @@ class HealthResponseDto {
     @ApiProperty({ example: '2026-03-05T12:00:00.000Z' })
     timestamp: string;
 
-    @ApiProperty({ example: 'beacon' })
+    @ApiProperty({ example: 'beaconix' })
     appName: string;
 
     @ApiProperty({ example: 'development' })

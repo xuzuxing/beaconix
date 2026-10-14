@@ -11,7 +11,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-const CLI = path.join(REPO_ROOT, 'probes', 'agent', 'bin', 'beacon-probe.js');
+const CLI = path.join(REPO_ROOT, 'probes', 'agent', 'bin', 'beaconix-probe.js');
 const PKG = require(path.join(REPO_ROOT, 'probes', 'agent', 'package.json'));
 
 function runCli(args, home, extraEnv = {}) {
@@ -59,14 +59,14 @@ function startMock(handler) {
 }
 
 test('self-update --check reports an available update', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beacon-update-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-update-'));
     const server = await startMock((req, res) => {
         res.setHeader('content-type', 'application/json');
         if (req.url === '/latest.json') {
             res.end(
                 JSON.stringify({
                     version: '9.9.9',
-                    installUrl: 'https://get.beacon.dev/install.sh',
+                    installUrl: 'https://get.beaconix.app/install.sh',
                 }),
             );
             return;
@@ -90,7 +90,7 @@ test('self-update --check reports an available update', async () => {
 });
 
 test('self-update --check reports up to date when versions match', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beacon-update-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-update-'));
     const server = await startMock((req, res) => {
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({ version: PKG.version }));

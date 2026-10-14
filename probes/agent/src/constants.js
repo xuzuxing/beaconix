@@ -10,7 +10,7 @@ const DEFAULT_INTERVAL_SECONDS = 60;
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_RESULTS = 100;
 const MAX_ERROR_MESSAGE_LENGTH = 500;
-const VALIDATION_INFO = 'beacon-probe-validation-v1';
+const VALIDATION_INFO = 'beaconix-probe-validation-v1';
 
 /** How many monitors one round checks in parallel (default). */
 const DEFAULT_CONCURRENCY = 3;

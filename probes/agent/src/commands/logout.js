@@ -6,7 +6,7 @@ const { CREDENTIALS_PATH } = require('../paths');
 const logger = require('../logger');
 
 /**
- * `beacon-probe logout [--revoke]` — drop the stored credentials, optionally
+ * `beaconix-probe logout [--revoke]` — drop the stored credentials, optionally
  * telling the backend to revoke the probe first.
  */
 async function runLogout(config, args) {

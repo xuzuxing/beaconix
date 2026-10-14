@@ -90,7 +90,7 @@ describe('ProbeEnrollmentService', () => {
             redis.consumeJson.mockResolvedValueOnce({
                 probeId: 'probe-1',
                 secret: 'tnt-x',
-                apiUrl: 'https://api.beacon.dev/api',
+                apiUrl: 'https://api.beaconix.app/api',
             });
 
             await expect(service.pollDeviceToken('dc')).resolves.toEqual({
@@ -98,7 +98,7 @@ describe('ProbeEnrollmentService', () => {
                 credential: {
                     probeId: 'probe-1',
                     secret: 'tnt-x',
-                    apiUrl: 'https://api.beacon.dev/api',
+                    apiUrl: 'https://api.beaconix.app/api',
                 },
             });
             // The credential is already collected, so the probe no longer gets it.

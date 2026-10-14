@@ -57,7 +57,7 @@ export class ProbeEnrollmentController {
     @Public()
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
-        summary: 'Start a device authorization (CLI: beacon-probe login)',
+        summary: 'Start a device authorization (CLI: beaconix-probe login)',
     })
     @ApiBody({ type: DeviceAuthorizationDto })
     @ApiOkResponse({
@@ -123,7 +123,7 @@ export class ProbeEnrollmentController {
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary:
-            'Redeem a web-issued one-time token (CLI: beacon-probe enroll)',
+            'Redeem a web-issued one-time token (CLI: beaconix-probe enroll)',
     })
     @ApiBody({ type: RedeemEnrollmentDto })
     @ApiOkResponse({ description: '{ probeId, secret, apiUrl }' })

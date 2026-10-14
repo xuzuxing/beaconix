@@ -266,8 +266,8 @@ void test('historical migration staging preserves every file and adds compatibil
 void test('temporary cleanup refuses repository, traversed and merely prefix-matching unowned paths', async () => {
     for (const path of [
         root,
-        join(tmpdir(), 'beacon-project-access-migrations-unowned'),
-        join(tmpdir(), 'beacon-project-access-migrations-unowned', '..'),
+        join(tmpdir(), 'beaconix-project-access-migrations-unowned'),
+        join(tmpdir(), 'beaconix-project-access-migrations-unowned', '..'),
     ]) {
         await assert.rejects(removeStagedMigrations(path), /unowned/);
     }

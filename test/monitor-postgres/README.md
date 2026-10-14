@@ -37,8 +37,8 @@ pnpm test:monitor:safety
 已有 Docker 时，可启动独立、无数据卷的 PostgreSQL 16 测试容器。不要复用项目 `docker-compose.yml` 的已有数据库：
 
 ```powershell
-docker run --rm --detach --name beacon-monitor-acceptance --publish 127.0.0.1:55432:5432 --env POSTGRES_USER=monitor_test --env POSTGRES_PASSWORD=monitor_test --env POSTGRES_DB=beacon_monitor_test_local postgres:16-alpine
-docker exec beacon-monitor-acceptance pg_isready -U monitor_test -d beacon_monitor_test_local
+docker run --rm --detach --name beaconix-monitor-acceptance --publish 127.0.0.1:55432:5432 --env POSTGRES_USER=monitor_test --env POSTGRES_PASSWORD=monitor_test --env POSTGRES_DB=beacon_monitor_test_local postgres:16-alpine
+docker exec beaconix-monitor-acceptance pg_isready -U monitor_test -d beacon_monitor_test_local
 ```
 
 等待 `pg_isready` 成功后，在项目根目录执行：
@@ -50,7 +50,7 @@ pnpm test:monitor:postgres
 ```
 
 以上账号只用于新建的一次性本地实例。测试无论成功或失败都可能已写入测试数据，不会自动删除或重置数据库。
-完成后 `docker stop beacon-monitor-acceptance` 将移除这个无持久卷的专用容器。不要对项目数据库执行清理。
+完成后 `docker stop beaconix-monitor-acceptance` 将移除这个无持久卷的专用容器。不要对项目数据库执行清理。
 
 Linux shell 使用同一专用 URL：
 

@@ -59,7 +59,7 @@ export async function assertEmptyDatabase(client: Client): Promise<void> {
 
 export async function stageMigrations(): Promise<string> {
     const source = join(root, 'prisma/migrations');
-    const target = await mkdtemp(join(tmpdir(), 'beacon-monitor-migrations-'));
+    const target = await mkdtemp(join(tmpdir(), 'beaconix-monitor-migrations-'));
     try {
         for (const entry of await readdir(source, { withFileTypes: true })) {
             if (
@@ -93,7 +93,7 @@ export async function removeStagedMigrations(target: string): Promise<void> {
     const path = resolve(target);
     if (
         dirname(path) !== resolve(tmpdir()) ||
-        !basename(path).startsWith('beacon-monitor-migrations-')
+        !basename(path).startsWith('beaconix-monitor-migrations-')
     ) {
         throw new Error(
             'Refusing cleanup outside the temporary migration folder',

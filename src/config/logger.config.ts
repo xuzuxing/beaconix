@@ -24,7 +24,7 @@ function parseCsv(value: string): string[] {
 }
 
 export const loggerConfig = registerAs('logger', (): LoggerConfig => ({
-    serviceName: optionalEnv('LOGGER_SERVICE_NAME', 'beacon'),
+    serviceName: optionalEnv('LOGGER_SERVICE_NAME', 'beaconix'),
     dir: optionalEnv('LOGGER_DIR', 'logs'),
     level: optionalEnv('LOGGER_LEVEL', 'info'),
     prettyPrint: parseBoolean(optionalEnv('LOGGER_PRETTY_PRINT', 'true')),

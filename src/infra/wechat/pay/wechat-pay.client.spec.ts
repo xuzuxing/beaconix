@@ -16,7 +16,7 @@ import type {
 } from './wechat-pay.types';
 
 const API_V3_KEY = '0123456789abcdef0123456789abcdef';
-const NOTIFY_URL = 'https://beacon.example.com/api/payment/wechat/callback';
+const NOTIFY_URL = 'https://beaconix.example.com/api/payment/wechat/callback';
 
 let privateKeyPem: string;
 let publicKeyPem: string;

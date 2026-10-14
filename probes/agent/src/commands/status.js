@@ -4,7 +4,7 @@ const { initBackend, pidfile } = require('../service');
 const { loadCredentials } = require('../credentials');
 const { CREDENTIALS_PATH } = require('../paths');
 
-/** `beacon-probe status` — credentials + service + background process. */
+/** `beaconix-probe status` — credentials + service + background process. */
 async function runStatus() {
     const backend = initBackend();
     const serviceInstalled = Boolean(backend && backend.isInstalled());

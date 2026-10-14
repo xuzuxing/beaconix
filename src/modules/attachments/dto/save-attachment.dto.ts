@@ -57,7 +57,7 @@ export class SaveAttachmentDto {
     @IsEnum(['LOCAL', 'OSS', 'EXTERNAL'])
     storageProvider?: string;
 
-    @ApiPropertyOptional({ example: 'beacon-attachments' })
+    @ApiPropertyOptional({ example: 'beaconix-attachments' })
     @IsOptional()
     @IsString()
     @MaxLength(512)

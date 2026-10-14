@@ -3,7 +3,7 @@ import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 /** Client description the probe CLI sends when it starts a device flow. */
 export class DeviceAuthorizationDto {
-    @ApiPropertyOptional({ example: 'beacon-probe-cli' })
+    @ApiPropertyOptional({ example: 'beaconix-probe-cli' })
     @IsOptional()
     @IsString()
     @MaxLength(64)

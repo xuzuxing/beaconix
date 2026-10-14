@@ -38,7 +38,7 @@ export class PostgresChecker implements CheckerStrategy {
                     : false,
                 stream: socket,
                 keepAlive: false,
-                application_name: 'beacon-monitor',
+                application_name: 'beaconix-monitor',
             });
             client.on('error', () => undefined);
             context.cleanup(() => {

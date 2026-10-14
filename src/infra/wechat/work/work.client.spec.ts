@@ -103,7 +103,7 @@ describe('WorkClient', () => {
                     textcard: {
                         title: '服务异常',
                         description: '订单API 连续失败',
-                        url: 'https://beacon.example.com/monitors/1',
+                        url: 'https://beaconix.example.com/monitors/1',
                         btntxt: '查看',
                     },
                 },
@@ -115,7 +115,7 @@ describe('WorkClient', () => {
                 textcard: {
                     title: '服务异常',
                     description: '订单API 连续失败',
-                    url: 'https://beacon.example.com/monitors/1',
+                    url: 'https://beaconix.example.com/monitors/1',
                     btntxt: '查看',
                 },
             });

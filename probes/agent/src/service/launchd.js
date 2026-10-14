@@ -8,7 +8,7 @@ const { spawn } = require('node:child_process');
 const { SERVICE_NAME } = require('../paths');
 
 /** launchd user agent (macOS), the counterpart of the systemd backend. */
-const LABEL = `dev.beacon.${SERVICE_NAME}`;
+const LABEL = `dev.beaconix.${SERVICE_NAME}`;
 const PLIST_PATH = path.join(
     os.homedir(),
     'Library',

@@ -34,20 +34,20 @@ function daemonReload() {
 /**
  * Render the systemd system unit.
  *
- * Runs as the dedicated `beacon` user; credentials and the optional env file
- * live under /etc/beacon, so the unit never needs access to an interactive
+ * Runs as the dedicated `beaconix` user; credentials and the optional env file
+ * live under /etc/beaconix, so the unit never needs access to an interactive
  * user's home directory.
  */
 function renderUnit({
     execStart,
-    runUser = 'beacon',
-    runGroup = 'beacon',
+    runUser = 'beaconix',
+    runGroup = 'beaconix',
     workDir,
-    envFile = '/etc/beacon/probe.env',
+    envFile = '/etc/beaconix/probe.env',
 }) {
     return `[Unit]
 Description=Beacon probe agent
-Documentation=https://get.beacon.dev/
+Documentation=https://get.beaconix.app/
 After=network-online.target
 Wants=network-online.target
 
@@ -64,7 +64,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/etc/beacon /var/log/beacon /run/beacon
+ReadWritePaths=/etc/beaconix /var/log/beaconix /run/beaconix
 
 [Install]
 WantedBy=multi-user.target

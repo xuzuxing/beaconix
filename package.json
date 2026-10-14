@@ -1,5 +1,5 @@
 {
-  "name": "beacon",
+  "name": "beaconix",
   "version": "0.0.1",
   "author": "Xuzuxing",
   "packageManager": "pnpm@11.11.0",
@@ -37,12 +37,12 @@
     "prisma:validate": "npx prisma validate",
     "admin:create": "tsx scripts/create-admin.ts",
     "test:resend": "ts-node scripts/test-resend.ts",
-    "probe:cli": "node probes/agent/bin/beacon-probe.js",
-    "probe:login": "node probes/agent/bin/beacon-probe.js login",
-    "probe:run": "node probes/agent/bin/beacon-probe.js run",
-    "probe:validate": "node probes/agent/bin/beacon-probe.js validate",
-    "probe:status": "node probes/agent/bin/beacon-probe.js status",
-    "probe:stop": "node probes/agent/bin/beacon-probe.js stop",
+    "probe:cli": "node probes/agent/bin/beaconix-probe.js",
+    "probe:login": "node probes/agent/bin/beaconix-probe.js login",
+    "probe:run": "node probes/agent/bin/beaconix-probe.js run",
+    "probe:validate": "node probes/agent/bin/beaconix-probe.js validate",
+    "probe:status": "node probes/agent/bin/beaconix-probe.js status",
+    "probe:stop": "node probes/agent/bin/beaconix-probe.js stop",
     "probe:scf": "node probes/agent/functions/scf.js"
   },
   "dependencies": {

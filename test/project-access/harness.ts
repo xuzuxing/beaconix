@@ -26,7 +26,7 @@ export const compatibilityMigrations = [
     '20261011100000_merge_monitor_revision_tracking',
 ] as const;
 const allKinds = ['fresh', 'upgrade', 'http'] as const;
-const temporaryPrefix = 'beacon-project-access-migrations-';
+const temporaryPrefix = 'beaconix-project-access-migrations-';
 const preflightedDatabases = new WeakSet<ValidatedProjectAccessDatabase>();
 const stagedDirectories = new Set<string>();
 
@@ -99,7 +99,7 @@ export async function connectDatabase(
         connectionString: explicitConnectionString(database),
         connectionTimeoutMillis: 5000,
         query_timeout: 15_000,
-        application_name: 'beacon-project-access-acceptance',
+        application_name: 'beaconix-project-access-acceptance',
     });
     client.on('error', () => {
         // Query/connect failures are reported through the scrubbed boundary.

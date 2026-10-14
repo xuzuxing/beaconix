@@ -379,26 +379,26 @@ export class ProbeEnrollmentService {
             region: input.region || input.client.platform || 'unknown',
             // Probes are outbound-only; the callback URL is a placeholder that
             // satisfies the schema and identifies the enrolled host.
-            callbackUrl: `https://probe.beacon.dev/${encodeURIComponent(host)}`,
+            callbackUrl: `https://probe.beaconix.app/${encodeURIComponent(host)}`,
             enabled: true,
         };
     }
 
     private activationUrl(): string {
         return (
-            process.env.BEACON_ACTIVATE_URL || 'https://app.beacon.dev/activate'
+            process.env.BEACON_ACTIVATE_URL || 'https://app.beaconix.app/activate'
         );
     }
 
     private publicApiUrl(): string {
         return (
-            process.env.BEACON_PUBLIC_API_URL || 'https://api.beacon.dev/api'
+            process.env.BEACON_PUBLIC_API_URL || 'https://api.beaconix.app/api'
         ).replace(/\/+$/, '');
     }
 
     private downloadBase(): string {
         return (
-            process.env.BEACON_DOWNLOAD_BASE || 'https://get.beacon.dev/probe'
+            process.env.BEACON_DOWNLOAD_BASE || 'https://get.beaconix.app/probe'
         ).replace(/\/+$/, '');
     }
 }

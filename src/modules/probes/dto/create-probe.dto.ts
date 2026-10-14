@@ -32,7 +32,7 @@ export class CreateProbeDto {
     region: string;
 
     @ApiProperty({
-        example: 'https://probe.example.com/beacon/callback',
+        example: 'https://probe.example.com/beaconix/callback',
         description: 'URL the platform may call back for control messages',
     })
     @IsUrl({ require_tld: false })

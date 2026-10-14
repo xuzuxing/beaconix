@@ -9,7 +9,7 @@ const systemProbeRow = {
     name: 'Global Tokyo probe',
     provider: 'TENCENT',
     region: 'ap-northeast-1',
-    callbackUrl: 'https://probe.example.com/beacon/callback',
+    callbackUrl: 'https://probe.example.com/beaconix/callback',
     secret: 'secret-1',
     enabled: true,
     lastHeartbeat: null,
@@ -52,7 +52,7 @@ describe('SystemProbesService', () => {
             name: 'Global Tokyo probe',
             provider: 'TENCENT',
             region: 'ap-northeast-1',
-            callbackUrl: 'https://probe.example.com/beacon/callback',
+            callbackUrl: 'https://probe.example.com/beaconix/callback',
             maxTenants: 100,
             priority: 10,
         });

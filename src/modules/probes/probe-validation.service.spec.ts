@@ -10,7 +10,7 @@ import { ProbeValidationService } from './probe-validation.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { RedisService } from '../../infra/redis/redis.service';
 
-const VALIDATION_INFO = 'beacon-probe-validation-v1';
+const VALIDATION_INFO = 'beaconix-probe-validation-v1';
 const RAW_SECRET = 'tnt_good';
 
 function hashSecret(secret: string): string {

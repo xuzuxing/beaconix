@@ -320,11 +320,11 @@ graph TD
 ### Entity Relationship Diagram
 
 <p align="center">
-  <img src="assets/images/beacon-erd.png" alt="Beacon Entity Relationship Diagram" />
+  <img src="assets/images/beaconix-erd.png" alt="Beacon Entity Relationship Diagram" />
 </p>
 
 <p align="center">
-  <a href="https://dbdiagram.io/d/beacon-69a76b60a3f0aa31e1b72609">View interactive ERD on dbdiagram.io</a>
+  <a href="https://dbdiagram.io/d/beaconix-69a76b60a3f0aa31e1b72609">View interactive ERD on dbdiagram.io</a>
 </p>
 
 ### Authentication Flow
@@ -435,7 +435,7 @@ graph LR
 ## Project Structure
 
 ```
-beacon/
+beaconix/
 ├── .github/
 │   ├── workflows/
 │   │   └── ci.yml                      # GitHub Actions CI pipeline
@@ -1104,8 +1104,8 @@ The production container includes a health check endpoint (`GET /api`) and expos
 
 ```bash
 # Clone the repository
-git clone https://github.com/xuzuxing/beacon.git
-cd beacon
+git clone https://github.com/xuzuxing/beaconix.git
+cd beaconix
 
 # Install dependencies
 pnpm install
@@ -1121,7 +1121,7 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |---|---|---|
-| `APP_NAME` | No | Application name (default: `beacon`) |
+| `APP_NAME` | No | Application name (default: `beaconix`) |
 | `PORT` | No | Server port (default: `3000`) |
 | `NODE_ENV` | No | Environment: `development`, `production`, `test` |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
@@ -1167,7 +1167,7 @@ Runtime-tunable attachment settings live in the `settings` table and can be mana
 docker compose up -d
 
 # Set DATABASE_URL in .env:
-# DATABASE_URL=postgresql://postgres:postgres@localhost:5433/beacon
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5433/beaconix
 ```
 
 **Run database migrations:**
@@ -1234,7 +1234,7 @@ Contributions are welcome. Please read the [Contributing Guide](CONTRIBUTING.md)
 - [Bug Report Template](.github/ISSUE_TEMPLATE/bug_report.md)
 - [Feature Request Template](.github/ISSUE_TEMPLATE/feature_request.md)
 
-**Repository:** [https://github.com/xuzuxing/beacon](https://github.com/xuzuxing/beacon)
+**Repository:** [https://github.com/xuzuxing/beaconix](https://github.com/xuzuxing/beaconix)
 
 ---
 

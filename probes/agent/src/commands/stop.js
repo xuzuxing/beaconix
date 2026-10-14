@@ -4,7 +4,7 @@ const { initBackend, pidfile } = require('../service');
 const { SERVICE_NAME } = require('../paths');
 const logger = require('../logger');
 
-/** `beacon-probe stop` — stop the unit if installed, else the pidfile process. */
+/** `beaconix-probe stop` — stop the unit if installed, else the pidfile process. */
 async function runStop() {
     const backend = initBackend();
     if (backend && backend.isInstalled()) {

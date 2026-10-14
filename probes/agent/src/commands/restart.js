@@ -6,7 +6,7 @@ const logger = require('../logger');
 const { runStop } = require('./stop');
 const { runStart } = require('./start');
 
-/** `beacon-probe restart` — restart the unit if installed, else background. */
+/** `beaconix-probe restart` — restart the unit if installed, else background. */
 async function runRestart(config, args) {
     const backend = initBackend();
     if (backend && backend.isInstalled()) {

@@ -2,33 +2,33 @@
 #
 # Beacon probe agent installer.
 #
-#   curl -fsSL https://get.beacon.dev/install.sh | sudo sh -s -- [options]
+#   curl -fsSL https://get.beaconix.app/install.sh | sudo sh -s -- [options]
 #
-# Installs the CLI under /opt/beacon-probe as the dedicated `beacon` system
+# Installs the CLI under /opt/beaconix-probe as the dedicated `beaconix` system
 # user, registers a systemd **system** unit, and enrolls the probe — either by
 # redeeming a one-time token (handed out by the web UI) or through the
 # interactive device-code login.
 #
 set -eu
 
-DOWNLOAD_BASE="${BEACON_DOWNLOAD_BASE:-https://get.beacon.dev/probe}"
+DOWNLOAD_BASE="${BEACON_DOWNLOAD_BASE:-https://get.beaconix.app/probe}"
 API_URL="${BEACON_API_URL:-}"
 ENROLL_TOKEN=""
 VERSION="latest"
 MANAGE_SERVICE=1
 DO_UNINSTALL=0
 
-INSTALL_DIR="/opt/beacon-probe"
-BIN_LINK="/usr/local/bin/beacon-probe"
-RUN_USER="beacon"
-CONF_DIR="/etc/beacon"
-LOG_DIR="/var/log/beacon"
-RUN_DIR="/run/beacon"
-UNIT_PATH="/etc/systemd/system/beacon-probe.service"
-SERVICE_NAME="beacon-probe"
+INSTALL_DIR="/opt/beaconix-probe"
+BIN_LINK="/usr/local/bin/beaconix-probe"
+RUN_USER="beaconix"
+CONF_DIR="/etc/beaconix"
+LOG_DIR="/var/log/beaconix"
+RUN_DIR="/run/beaconix"
+UNIT_PATH="/etc/systemd/system/beaconix-probe.service"
+SERVICE_NAME="beaconix-probe"
 
-log() { printf '[beacon-probe] %s\n' "$*"; }
-die() { printf '[beacon-probe] ERROR: %s\n' "$*" >&2; exit 1; }
+log() { printf '[beaconix-probe] %s\n' "$*"; }
+die() { printf '[beaconix-probe] ERROR: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 usage() {
@@ -36,7 +36,7 @@ usage() {
 Beacon probe agent installer
 
 Usage:
-  curl -fsSL https://get.beacon.dev/install.sh | sudo sh -s -- [options]
+  curl -fsSL https://get.beaconix.app/install.sh | sudo sh -s -- [options]
 
 Options:
   --token <t>       One-time enrollment token issued in the web UI
@@ -130,7 +130,7 @@ prepare_dirs() {
 
 download_payload() {
     tmp="$(mktemp -d)"
-    url="$DOWNLOAD_BASE/beacon-probe-$VERSION.tar.gz"
+    url="$DOWNLOAD_BASE/beaconix-probe-$VERSION.tar.gz"
     log "downloading $url"
     if have curl; then
         curl -fsSL "$url" -o "$tmp/agent.tgz"
@@ -144,8 +144,8 @@ download_payload() {
     tar -xzf "$tmp/agent.tgz" -C "$INSTALL_DIR"
     rm -rf "$tmp"
 
-    chmod +x "$INSTALL_DIR/bin/beacon-probe.js"
-    ln -sf "$INSTALL_DIR/bin/beacon-probe.js" "$BIN_LINK"
+    chmod +x "$INSTALL_DIR/bin/beaconix-probe.js"
+    ln -sf "$INSTALL_DIR/bin/beaconix-probe.js" "$BIN_LINK"
     log "installed CLI to $INSTALL_DIR (linked at $BIN_LINK)"
 }
 
@@ -180,7 +180,7 @@ write_unit() {
     cat > "$UNIT_PATH" <<EOF
 [Unit]
 Description=Beacon probe agent
-Documentation=https://get.beacon.dev/
+Documentation=https://get.beaconix.app/
 After=network-online.target
 Wants=network-online.target
 
@@ -189,7 +189,7 @@ Type=simple
 User=$RUN_USER
 Group=$RUN_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$node_bin $INSTALL_DIR/bin/beacon-probe.js run
+ExecStart=$node_bin $INSTALL_DIR/bin/beaconix-probe.js run
 Restart=always
 RestartSec=5
 EnvironmentFile=-$CONF_DIR/probe.env

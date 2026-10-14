@@ -7,7 +7,7 @@ const { BEACON_HOME, CREDENTIALS_PATH, LOG_DIR, RUN_DIR } = require('./paths');
 /**
  * Local credential store.
  *
- * The file is written `0640` so the `beacon` service user can read it while
+ * The file is written `0640` so the `beaconix` service user can read it while
  * other accounts cannot. On non-POSIX filesystems the mode is best-effort.
  */
 function ensureStateDirs() {

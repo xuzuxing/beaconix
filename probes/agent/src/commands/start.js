@@ -7,7 +7,7 @@ const { SERVICE_NAME } = require('../paths');
 const logger = require('../logger');
 
 /**
- * `beacon-probe start [--foreground]` — prefer the init-system unit when it is
+ * `beaconix-probe start [--foreground]` — prefer the init-system unit when it is
  * installed, otherwise fall back to a pidfile-managed background process.
  */
 async function runStart(config, args) {
