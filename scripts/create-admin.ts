@@ -1,4 +1,4 @@
-// Bootstrap the initial SUPER_ADMIN user.
+// Bootstrap the initial SUPER_ADMIN user and their starter workspace/project.
 // Usage: pnpm admin:create
 // Required env (can be set in .env): DATABASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD
 // Optional env: ADMIN_NAME (used only when the user is newly created; defaults to "Super Admin")
@@ -11,6 +11,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import bcrypt from 'bcrypt';
 import { PrismaClient } from '../src/generated/prisma/client';
+import { provisionOrganizationForUser } from '../src/modules/organizations/organization-provisioning';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -43,31 +44,49 @@ async function main() {
     try {
         const hashedPassword = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
-        const existing = await prisma.user.findUnique({ where: { email } });
-
-        const user = await prisma.user.upsert({
-            where: { email },
-            update: {
-                password: hashedPassword,
-                globalRole: 'SUPER_ADMIN',
-                isActive: true,
-                emailVerified: true,
-                deletedAt: null,
+        const { user, existing, provisioned } = await prisma.$transaction(
+            async (tx) => {
+                const existing = await tx.user.findUnique({ where: { email } });
+                const user = await tx.user.upsert({
+                    where: { email },
+                    update: {
+                        password: hashedPassword,
+                        globalRole: 'SUPER_ADMIN',
+                        isActive: true,
+                        emailVerified: true,
+                        deletedAt: null,
+                    },
+                    create: {
+                        email,
+                        password: hashedPassword,
+                        name,
+                        globalRole: 'SUPER_ADMIN',
+                        isActive: true,
+                        emailVerified: true,
+                    },
+                });
+                const provisioned = await provisionOrganizationForUser(
+                    tx,
+                    user,
+                    console,
+                );
+                return { user, existing, provisioned };
             },
-            create: {
-                email,
-                password: hashedPassword,
-                name,
-                globalRole: 'SUPER_ADMIN',
-                isActive: true,
-                emailVerified: true,
-            },
-        });
+        );
 
         const action = existing ? 'updated' : 'created';
         console.log(
             `SUPER_ADMIN ${action}: ${user.email} (id=${user.id}, globalRole=${user.globalRole}, emailVerified=${user.emailVerified})`,
         );
+        if (provisioned) {
+            console.log(
+                `Starter workspace created: organizationId=${provisioned.organizationId}, projectId=${provisioned.projectId}`,
+            );
+        } else {
+            console.log(
+                'User already belongs to an organization; starter workspace creation skipped.',
+            );
+        }
         console.log('You can now log in at POST /api/auth/login.');
     } finally {
         await prisma.$disconnect();
