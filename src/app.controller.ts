@@ -6,7 +6,6 @@ import {
     HttpCode,
     HttpStatus,
     Param,
-    Render,
     Res,
 } from '@nestjs/common';
 import {
@@ -22,7 +21,6 @@ import {
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { Public } from './common/decorators';
-import { toIsoString } from './common/utils/date.util';
 import { StatusPagesService } from './modules/status-pages/status-pages.service';
 
 class StatusTestResponseDto {
@@ -91,61 +89,6 @@ export class AppController {
         }
         response.status(statusCode);
         return { statusCode };
-    }
-
-    @Get('monitor-test')
-    @Public()
-    @Render('monitor-test')
-    monitorTestPage() {
-        return {
-            title: 'Beacon Monitor Test',
-            apiBase: '/api',
-            renderedAt: toIsoString(Date.now()),
-        };
-    }
-
-    @Get('monitoring-test')
-    @Public()
-    @Render('monitoring-test')
-    monitoringTestPage() {
-        return {
-            title: 'Beacon Monitoring Test',
-            apiBase: '/api',
-            renderedAt: toIsoString(Date.now()),
-        };
-    }
-
-    @Get('billing-test')
-    @Public()
-    @Render('billing-test')
-    billingTestPage() {
-        return {
-            title: 'Beacon Billing Test',
-            apiBase: '/api',
-            renderedAt: toIsoString(Date.now()),
-        };
-    }
-
-    @Get('upload-test')
-    @Public()
-    @Render('upload-test')
-    uploadTestPage() {
-        return {
-            title: 'Beacon Upload Test',
-            apiBase: '/api',
-            renderedAt: toIsoString(Date.now()),
-        };
-    }
-
-    @Get('rules-test')
-    @Public()
-    @Render('rules-test')
-    rulesTestPage() {
-        return {
-            title: 'Beacon Rule Engine Test',
-            apiBase: '/api',
-            renderedAt: toIsoString(Date.now()),
-        };
     }
 
     @Head()

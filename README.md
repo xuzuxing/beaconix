@@ -529,11 +529,6 @@ beaconix/
 │       │       └── monitor-data-cleanup.service.ts
 │       ├── email/                       # Resend email service + templates
 │       └── users/                       # User lookup service
-├── views/                               # Local HBS smoke-test pages
-│   ├── monitor-test.hbs
-│   ├── monitoring-test.hbs
-│   ├── billing-test.hbs
-│   └── upload-test.hbs
 ├── test/
 │   └── jest-e2e.json                    # E2E test configuration
 ├── docker-compose.yml                   # Local PostgreSQL service

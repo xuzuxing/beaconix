@@ -10,7 +10,6 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import helmet from 'helmet';
-import { join } from 'node:path';
 import { AppModule } from './app.module';
 import { AppConfig } from './config';
 import { GlobalExceptionFilter } from './common/filters';
@@ -35,10 +34,6 @@ async function bootstrap() {
         credentials: true,
         exposedHeaders: ['ETag'],
     });
-
-    // Views
-    app.setBaseViewsDir(join(__dirname, '..', 'views'));
-    app.setViewEngine('hbs');
 
     // Validation
     app.useGlobalPipes(

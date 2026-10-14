@@ -123,7 +123,7 @@ import { HealthController } from './health.controller';
         }),
         // Serve static files from the views directory
         ServeStaticModule.forRoot({
-            rootPath: join(__dirname, '..', 'web'),
+            rootPath: join(__dirname, '..', 'views'),
             exclude: [
                 '/api/*path', // 让 API 请求走控制器，不返回 index.html
                 '/metrics', // 交给 MetricsMiddleware，不返回 index.html
