@@ -19,6 +19,7 @@
 - [Overview](#overview)
 - [Key Features](#key-features)
 - [Live API Documentation](#live-api-documentation)
+- [Project Documentation](#project-documentation)
 - [Tech Stack](#tech-stack)
 - [Architecture](#architecture)
   - [High-Level Architecture](#high-level-architecture)
@@ -139,6 +140,12 @@ The full interactive API documentation is available at:
 **[https://getbeacon.dev/api/docs/api/docs](https://getbeacon.dev/api/docs/api/docs)**
 
 > **Note:** This deployment uses a Render free-tier instance. The server spins down after inactivity, so the first request may take **50 seconds or more** to respond while the instance cold-starts.
+
+---
+
+## Project Documentation
+
+See the [documentation index](docs/README.md) for API references, operational guides, design records, product prototypes, proposals, and historical archives.
 
 ---
 

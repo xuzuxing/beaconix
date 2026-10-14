@@ -1,0 +1,79 @@
+20:09:44 [vite] (client) Re-optimizing dependencies because vite config has changed
+
+  VITE v8.3.4  ready in 2564 ms
+
+  ➜  Local:   http://127.0.0.1:5174/
+  ➜  Vue DevTools: Open http://127.0.0.1:5174/__devtools__/ as a separate window
+  ➜  Vue DevTools: Press Alt(⌥)+Shift(⇧)+D in App to toggle the Vue DevTools
+  ➜  press h + enter to show help
+20:09:46 [vite] (client) [optimizer] bundling dependencies...
+20:13:25 [vite] (client) page reload src/api/modules/notification-center.ts
+20:13:25 [vite] (client) page reload src/api/types/notification-center.ts
+20:13:25 [vite] (client) page reload src/stores/modules/notification.ts
+20:15:03 [vite] (client) page reload src/locales/zh-CN.ts
+20:15:04 [vite] (client) page reload src/locales/zh-CN.ts
+20:15:05 [vite] (client) page reload src/locales/en-US.ts
+20:15:06 [vite] (client) page reload src/locales/en-US.ts
+20:33:30 [vite] (client) hmr update /src/layouts/index.vue, /src/layouts/index.vue?vue&type=style&index=0&scoped=dd9bf3bf&lang.less
+20:34:49 [vite] (client) hmr update /src/layouts/index.vue?vue&type=style&index=0&scoped=dd9bf3bf&lang.less
+20:34:49 [vite] (client) hmr update /src/components/notifications/InvitationActions.vue?vue&type=style&index=0&scoped=1178d15e&lang.less
+20:36:30 [vite] (client) page reload src/router/routes.ts
+20:36:30 [vite] (client) hmr update /src/assets/styles/index.less, /src/views/auth/LoginView.vue?vue&type=style&index=0&scoped=409777eb&lang.less, /src/components/AppIcon.vue?vue&type=style&index=0&scoped=54b59b04&lang.less, /src/components/LanguageSwitcher.vue?vue&type=style&index=0&scoped=1568d5fa&lang.less, /src/views/notifications/NotificationListView.vue?vue&type=style&index=0&scoped=7e61df71&lang.less, /src/layouts/index.vue?vue&type=style&index=0&scoped=dd9bf3bf&lang.less and 11 more
+20:36:30 [vite] (client) page reload src/locales/zh-CN.ts
+20:36:30 [vite] (client) page reload src/locales/en-US.ts
+20:36:50 [vite] (client) hmr update /src/layouts/components/AppHeader.vue
+20:36:50 [vite] (client) hmr update /src/layouts/components/AppHeader.vue, /src/layouts/components/AppHeader.vue?vue&type=style&index=1&scoped=32ae513c&lang.less
+20:41:33 [vite] (client) page reload __search-preview.html
+20:42:03 [vite] (client) page reload __search-preview.html
+20:43:18 [vite] (client) page reload __search-preview.html
+20:43:29 [vite] (client) page reload __search-preview.html
+20:51:25 [vite] (client) hmr update /src/components/search/GlobalSearch.vue
+20:51:43 [vite] (client) hmr update /src/components/search/GlobalSearchPanel.vue, /src/components/search/GlobalSearchPanel.vue?vue&type=style&index=0&lang.less
+20:51:43 [vite] (client) hmr update /src/components/search/GlobalSearch.vue
+20:51:43 [vite] (client) page reload src/locales/zh-CN.ts
+20:51:43 [vite] (client) page reload src/locales/en-US.ts
+20:52:21 [vite] (client) page reload __search-preview.html
+20:53:58 [vite] (client) page reload __search-preview.html
+21:02:51 [vite] (client) page reload __search-preview.html
+21:03:32 [vite] (client) hmr update /src/components/search/GlobalSearchPanel.vue, /src/components/search/GlobalSearchPanel.vue?vue&type=style&index=0&lang.less
+21:03:32 [vite] (client) page reload src/locales/zh-CN.ts
+21:03:32 [vite] (client) page reload src/locales/en-US.ts
+21:03:38 [vite] (client) hmr update /src/components/search/GlobalSearch.vue
+21:03:38 [vite] (client) hmr update /src/components/search/GlobalSearch.vue
+21:03:38 [vite] (client) hmr update /src/components/search/GlobalSearch.vue
+21:03:39 [vite] (client) hmr update /src/components/search/GlobalSearch.vue
+21:03:39 [vite] (client) hmr update /src/components/search/GlobalSearch.vue?vue&type=style&index=0&scoped=4e14282b&lang.less
+21:05:24 [vite] (client) page reload __search-preview.html
+21:06:39 [vite] (client) page reload src/api/types.ts
+21:06:44 [vite] (client) page reload src/api/modules/auth.ts
+21:07:07 [vite] (client) page reload src/locales/zh-CN.ts
+21:07:07 [vite] (client) page reload src/locales/en-US.ts
+21:08:06 [vite] (client) page reload src/locales/zh-CN.ts
+21:08:06 [vite] (client) page reload src/locales/en-US.ts
+21:09:42 [vite] (client) page reload src/locales/zh-CN.ts
+21:09:42 [vite] (client) page reload src/locales/en-US.ts
+21:10:13 [vite] (client) page reload __search-preview.html
+21:10:46 [vite] (client) page reload __search-preview-dist/__search-preview.html
+21:11:13 [vite] (client) page reload __search-preview-dist/__search-preview.html
+21:11:14 [vite] (client) page reload __search-preview-dist/__search-preview.html
+21:11:26 [vite] (client) page reload __search-preview.html
+21:11:26 [vite] (client) page reload __search-preview-dist/__search-preview.html
+21:11:47 [vite] (client) page reload __search-preview.html
+21:11:58 [vite] (client) page reload __search-preview-dist/__search-preview.html
+21:11:59 [vite] (client) page reload __search-preview.html
+21:12:23 [vite] (client) page reload __search-preview.html
+21:12:23 [vite] (client) page reload __search-preview-dist/__search-preview.html
+21:15:53 [vite] (client) page reload src/api/index.ts
+21:16:22 [vite] (client) page reload src/locales/zh-CN.ts
+21:16:22 [vite] (client) page reload src/locales/en-US.ts
+21:19:13 [vite] (client) page reload src/locales/zh-CN.ts
+21:19:13 [vite] (client) page reload src/locales/en-US.ts
+21:23:35 [vite] (client) page reload src/router/routes.ts
+21:23:36 [vite] (client) page reload src/locales/zh-CN.ts
+21:23:36 [vite] (client) page reload src/locales/en-US.ts
+00:06:31 [vite] (client) page reload src/api/index.ts
+00:08:05 [vite] (client) page reload src/locales/en-US.ts
+00:08:05 [vite] (client) page reload src/locales/zh-CN.ts
+00:11:26 [vite] (client) page reload src/router/routes.ts
+00:11:30 [vite] (client) page reload src/locales/zh-CN.ts
+00:11:30 [vite] (client) page reload src/locales/en-US.ts

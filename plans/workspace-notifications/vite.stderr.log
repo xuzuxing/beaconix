@@ -1,0 +1,2 @@
+[WARN] The following settings in the global config file ("C:\Users\Administrator\AppData\Local\pnpm\config\config.yaml") are not recognized by this version of pnpm and were ignored: "globalShims" (a pnpm v12 setting).
+$ vite --mode development "--host" "127.0.0.1" "--port" "5174" "--strictPort"

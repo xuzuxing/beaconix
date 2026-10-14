@@ -1,0 +1,92 @@
+{
+  "date": "2026-10-10T13:42:55.447Z",
+  "seededRows": 60000,
+  "totalRows": 60022,
+  "coldMs": 314.4021999999968,
+  "hotMs": 37.871399999999994,
+  "bytes": 12624,
+  "cache": "test in-memory cache; real authorization/SQL/HTTP",
+  "points": 31,
+  "plan": [
+    {
+      "QUERY PLAN": [
+        {
+          "Plan": {
+            "Node Type": "Aggregate",
+            "Strategy": "Plain",
+            "Partial Mode": "Simple",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 3730.24,
+            "Total Cost": 3730.25,
+            "Plan Rows": 1,
+            "Plan Width": 48,
+            "Actual Startup Time": 20.038,
+            "Actual Total Time": 20.041,
+            "Actual Rows": 1,
+            "Actual Loops": 1,
+            "Shared Hit Blocks": 1463,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Index Scan",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Scan Direction": "Forward",
+                "Index Name": "check_logs_checkedAt_idx",
+                "Relation Name": "check_logs",
+                "Alias": "check_logs",
+                "Startup Cost": 0.29,
+                "Total Cost": 3404.66,
+                "Plan Rows": 32558,
+                "Plan Width": 4,
+                "Actual Startup Time": 0.025,
+                "Actual Total Time": 13.606,
+                "Actual Rows": 32416,
+                "Actual Loops": 1,
+                "Index Cond": "((\"checkedAt\" >= '2026-09-10 13:42:40.065'::timestamp without time zone) AND (\"checkedAt\" < '2026-10-10 13:42:55.066'::timestamp without time zone))",
+                "Rows Removed by Index Recheck": 0,
+                "Filter": "((\"projectId\" = 'cmv2g1zcj0003aouz9q3c1k1j'::text) AND (source = 'LOCAL'::\"CheckSource\"))",
+                "Rows Removed by Filter": 8,
+                "Shared Hit Blocks": 1463,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 67,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 0.761,
+          "Triggers": [],
+          "Execution Time": 20.189
+        }
+      ]
+    }
+  ]
+}

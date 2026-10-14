@@ -46,7 +46,7 @@ probes/agent/
 从仓库根目录运行 `docker compose -f probes/docker-compose.probe-test.yml up --build -d`。
 
 > 云函数与常驻模型有本质差异（无本地调度、凭据靠环境变量、心跳周期必须等于触发器周期），
-> 部署前请阅读 [云函数（SCF）部署指南](../docs/probe-scf-deploy.md)。
+> 部署前请阅读 [云函数（SCF）部署指南](../docs/guides/probe-scf-deployment.md)。
 
 ## 命令
 
@@ -121,5 +121,5 @@ node probes/agent/functions/scf.js
 
 ## 相关文档
 
-- [探针 CLI 与 OAuth2 注册方案](../docs/probe-cli-enrollment-plan.md)
-- [云函数（SCF）部署指南](../docs/probe-scf-deploy.md)
+- [探针 CLI 与 OAuth2 注册方案](../docs/design/probe-agent.md)
+- [云函数（SCF）部署指南](../docs/guides/probe-scf-deployment.md)
