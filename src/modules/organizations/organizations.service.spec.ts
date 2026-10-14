@@ -75,6 +75,38 @@ describe('OrganizationsService', () => {
 
             expect(result).toBeNull();
             expect(prisma.organization.create).not.toHaveBeenCalled();
+            expect(prisma.plan.findUnique).not.toHaveBeenCalled();
+            expect(prisma.subscription.create).not.toHaveBeenCalled();
+        });
+
+        it('creates the FREE subscription when the plan exists', async () => {
+            const { service, prisma } = createService();
+            prisma.plan.findUnique.mockResolvedValue({ id: 'plan-free' });
+
+            await service.provisionForUser(user);
+
+            expect(prisma.plan.findUnique).toHaveBeenCalledWith({
+                where: { code: 'FREE' },
+            });
+            expect(prisma.subscription.create).toHaveBeenCalledWith({
+                data: {
+                    organizationId: 'org-1',
+                    planId: 'plan-free',
+                    status: 'ACTIVE',
+                    startsAt: expect.any(Date),
+                    expiresAt: new Date('2099-12-31T23:59:59.000Z'),
+                },
+            });
+        });
+
+        it('still provisions the workspace when the FREE plan is missing', async () => {
+            const { service, prisma } = createService();
+
+            await expect(service.provisionForUser(user)).resolves.toEqual({
+                organizationId: 'org-1',
+                projectId: 'project-1',
+            });
+            expect(prisma.subscription.create).not.toHaveBeenCalled();
         });
 
         it('uses the supplied transaction client instead of the root client', async () => {
