@@ -123,6 +123,7 @@ async function setup(overrides: Partial<typeof invitationRow> = {}) {
             findUnique: jest.fn().mockResolvedValue(invitation),
             findMany: jest.fn().mockResolvedValue([]),
         },
+        project: { count: jest.fn().mockResolvedValue(4) },
         user: { findFirst: jest.fn().mockResolvedValue(invitee) },
         $transaction: jest.fn().mockImplementation(async (callback) => {
             inTransaction = true;
@@ -200,11 +201,45 @@ describe('InvitationsService collaboration notifications', () => {
         const result = await service.getByToken(invitationRow.token);
         expect(result).toEqual({
             organizationName: 'Beacon',
+            organizationSlug: 'beaconix',
+            organizationLogoUrl: null,
+            inviterName: 'Sender',
+            role: 'MEMBER',
+            accessMode: 'SELECTED_PROJECTS',
+            projectCount: 1,
+            expiresAt: invitationRow.expiresAt,
             status: 'PENDING',
             requiresLogin: true,
         });
-        expect(JSON.stringify(result)).not.toContain('project');
-        expect(JSON.stringify(result)).not.toContain('@');
+        const serialized = JSON.stringify(result);
+        expect(serialized).not.toContain('Project');
+        expect(serialized).not.toContain('projectId');
+        expect(serialized).not.toContain('@');
+        expect(serialized).not.toContain('sender@example.com');
+    });
+
+    it('reports organization-wide reach for admin invitations', async () => {
+        const { service, prisma } = await setup({
+            role: MembershipRole.ADMIN,
+            projectGrants: [],
+        });
+        const result = await service.getByToken(invitationRow.token);
+        expect(result).toMatchObject({
+            role: 'ADMIN',
+            accessMode: 'ALL_PROJECTS',
+            projectCount: 4,
+        });
+        expect(prisma.project.count).toHaveBeenCalledWith({
+            where: { organizationId: 'org', deletedAt: null },
+        });
+    });
+
+    it('marks an expired pending invitation as EXPIRED in the preview', async () => {
+        const { service } = await setup({
+            expiresAt: new Date('2026-10-10T08:00:00.000Z'),
+        });
+        const result = await service.getByToken(invitationRow.token);
+        expect(result.status).toBe('EXPIRED');
     });
 
     it('whitelists authenticated invitation details', async () => {
@@ -385,12 +420,18 @@ describe('InvitationsService collaboration notifications', () => {
                     issuerMembershipId: 'sender-membership',
                     issuerAuthorityVersion: null,
                     projectGrants: {
-                        create: [{ ...projects[0], organizationId: 'org' }],
+                        // No `organizationId` here: it is a shared relation
+                        // scalar, so Prisma derives it from the invitation and
+                        // rejects an explicit value at runtime.
+                        create: [{ projectId: 'project', role: 'VIEWER' }],
                     },
                     expiresAt: invitationRow.expiresAt,
                 },
             }),
         );
+        expect(
+            tx.invitation.create.mock.calls[0][0].data.projectGrants.create[0],
+        ).not.toHaveProperty('organizationId');
         expect(tx.user.findFirst).toHaveBeenCalledWith({
             where: {
                 email: { equals: 'invitee@example.com', mode: 'insensitive' },

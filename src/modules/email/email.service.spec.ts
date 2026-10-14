@@ -108,6 +108,50 @@ describe('EmailService', () => {
             );
         });
 
+        it('links the invitation email to the web client with its token', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            const { service, emails } = createService();
+
+            await service.send(EmailTemplate.INVITATION, {
+                to: 'invitee@example.com',
+                orgName: 'Beacon',
+                token: 'cmv81drjl000200uztk9bnw6n',
+                inviterName: 'Jane',
+            });
+
+            const { html } = emails.send.mock.calls[0][0] as { html: string };
+            expect(html).toContain(
+                'href="http://localhost:3000/invitations/cmv81drjl000200uztk9bnw6n"',
+            );
+            expect(html).toContain(
+                'http://localhost:3000/invitations/cmv81drjl000200uztk9bnw6n',
+            );
+        });
+
+        it('does not double the slash when the web URL ends with one', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            const { service, emails } = createService({
+                appConfig: { webUrl: 'https://beaconix.example.com/' },
+            });
+
+            await service.send(EmailTemplate.INVITATION, {
+                to: 'invitee@example.com',
+                orgName: 'Beacon',
+                token: 'token-1',
+                inviterName: 'Jane',
+            });
+
+            const { html } = emails.send.mock.calls[0][0] as { html: string };
+            expect(html).toContain(
+                'https://beaconix.example.com/invitations/token-1',
+            );
+            expect(html).not.toContain('example.com//invitations');
+        });
+
         it('throws when Resend returns an error', async () => {
             jest.spyOn(Logger.prototype, 'log').mockImplementation(
                 () => undefined,

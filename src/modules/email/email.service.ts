@@ -11,6 +11,8 @@ export class EmailService {
     private readonly logger = new Logger(EmailService.name);
     private readonly from: string;
     private readonly isDevelopment: boolean;
+    /** Web client base URL, without a trailing slash. */
+    private readonly webUrl: string;
 
     constructor(
         @Inject('RESEND_CLIENT') private readonly resend: Resend,
@@ -20,6 +22,7 @@ export class EmailService {
         const resendCfg = this.configService.get<ResendConfig>('resend')!;
         this.from = `${resendCfg.fromName} <${resendCfg.fromEmail}>`;
         this.isDevelopment = appCfg.isDevelopment;
+        this.webUrl = appCfg.webUrl.replace(/\/+$/, '');
 
         if (this.isDevelopment) {
             this.logger.log(
@@ -214,12 +217,17 @@ export class EmailService {
         const orgName = escapeHtml(payload.orgName);
         const inviterName = escapeHtml(payload.inviterName);
         const token = escapeHtml(payload.token);
+        const inviteUrl = escapeHtml(
+            `${this.webUrl}/invitations/${payload.token}`,
+        );
         return {
             subject: `You've been invited to join ${payload.orgName}`,
             html: `
                 <h2>You're invited!</h2>
                 <p><strong>${inviterName}</strong> has invited you to join <strong>${orgName}</strong> on Beacon.</p>
-                <p>Use the following token to accept your invitation:</p>
+                <p><a href="${inviteUrl}" style="background:#4F46E5; color:#fff; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block;">Accept Invitation</a></p>
+                <p>Or open this link in your browser:<br/><span style="word-break:break-all;">${inviteUrl}</span></p>
+                <p>You can also use the following token to accept your invitation:</p>
                 <p style="font-size:18px; font-weight:bold; background:#f4f4f4; padding:12px; border-radius:6px; display:inline-block;">${token}</p>
                 <br/><p>If you didn't expect this invitation, you can safely ignore this email.</p>
             `,

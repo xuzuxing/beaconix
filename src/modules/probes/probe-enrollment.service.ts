@@ -386,7 +386,8 @@ export class ProbeEnrollmentService {
 
     private activationUrl(): string {
         return (
-            process.env.BEACON_ACTIVATE_URL || 'https://app.beaconix.app/activate'
+            process.env.BEACON_ACTIVATE_URL ||
+            'https://app.beaconix.app/activate'
         );
     }
 

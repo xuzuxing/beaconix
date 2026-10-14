@@ -72,7 +72,7 @@ describe('OfficialAccountClient', () => {
             ).toBe(true);
             expect(url).toContain('appid=wx-oa');
             expect(url).toContain(
-                'redirect_uri=https%3A%2F%2Fbeacon.example.com%2Foauth%2Fcb',
+                'redirect_uri=https%3A%2F%2Fbeaconix.example.com%2Foauth%2Fcb',
             );
             expect(url).toContain('response_type=code');
             expect(url).toContain('scope=snsapi_base');
@@ -114,7 +114,7 @@ describe('OfficialAccountClient', () => {
             ).toBe(true);
             expect(url).toContain('appid=wx-web');
             expect(url).toContain(
-                'redirect_uri=https%3A%2F%2Fbeacon.example.com%2Fwechat%2Fcb',
+                'redirect_uri=https%3A%2F%2Fbeaconix.example.com%2Fwechat%2Fcb',
             );
             expect(url).toContain('response_type=code');
             expect(url).toContain('scope=snsapi_login');

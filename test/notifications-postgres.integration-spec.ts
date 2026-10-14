@@ -54,7 +54,9 @@ void test('workspace notifications with real PostgreSQL transactions', async (t)
         const invitations = new InvitationsService(
             db,
             notifications,
-            { assertCanCreate: () => Promise.resolve() } as never,
+            // Acceptance asks for the member quota; the invitation quota is
+            // never consulted on this path.
+            { assertCanAddMember: () => Promise.resolve() } as never,
             access,
         );
         for (const id of [

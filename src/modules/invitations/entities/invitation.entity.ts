@@ -1,15 +1,73 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import type { ProjectRole } from '../../../generated/prisma/enums';
+import type {
+    InvitationStatus,
+    MembershipRole,
+    ProjectRole,
+} from '../../../generated/prisma/enums';
 
+export type InvitationAccessMode = 'ALL_PROJECTS' | 'SELECTED_PROJECTS';
+
+/**
+ * Public (token-only) view of an invitation. It intentionally exposes no
+ * invitee email, invitee-facing project names or issuer identity beyond the
+ * inviter's display name.
+ */
 export class InvitationPreviewEntity {
-    @ApiProperty()
+    @ApiProperty({ example: 'Beacon' })
     organizationName: string;
 
-    @ApiProperty()
-    status: string;
+    @ApiProperty({ example: 'beaconix' })
+    organizationSlug: string;
+
+    @ApiPropertyOptional({
+        example: 'https://cdn.example.com/logos/beaconix.png',
+        nullable: true,
+    })
+    organizationLogoUrl: string | null;
+
+    @ApiProperty({ example: 'Jane Doe' })
+    inviterName: string;
+
+    @ApiProperty({ enum: ['ADMIN', 'MEMBER', 'VIEWER'], example: 'MEMBER' })
+    role: MembershipRole;
+
+    @ApiProperty({
+        enum: ['ALL_PROJECTS', 'SELECTED_PROJECTS'],
+        example: 'SELECTED_PROJECTS',
+    })
+    accessMode: InvitationAccessMode;
+
+    @ApiProperty({
+        example: 3,
+        description:
+            'Projects the invitee would join: the organization project count for ALL_PROJECTS, otherwise the number of granted projects',
+    })
+    projectCount: number;
+
+    @ApiProperty({ example: '2026-03-12T12:00:00.000Z' })
+    expiresAt: Date;
+
+    @ApiProperty({
+        enum: ['PENDING', 'ACCEPTED', 'DECLINED', 'EXPIRED', 'REVOKED'],
+        example: 'PENDING',
+    })
+    status: InvitationStatus;
 
     @ApiProperty({ example: true })
     requiresLogin: boolean;
+
+    constructor(partial: InvitationPreviewEntity) {
+        this.organizationName = partial.organizationName;
+        this.organizationSlug = partial.organizationSlug;
+        this.organizationLogoUrl = partial.organizationLogoUrl ?? null;
+        this.inviterName = partial.inviterName;
+        this.role = partial.role;
+        this.accessMode = partial.accessMode;
+        this.projectCount = partial.projectCount;
+        this.expiresAt = partial.expiresAt;
+        this.status = partial.status;
+        this.requiresLogin = partial.requiresLogin;
+    }
 }
 
 export class InvitationEntity {

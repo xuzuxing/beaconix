@@ -189,7 +189,8 @@ export class InvitationsController {
     @ApiParam({ name: 'token', description: 'Invitation token (CUID)' })
     @ApiOkResponse({
         type: InvitationPreviewEntity,
-        description: 'Organization name, status and login requirement only',
+        description:
+            'Organization identity, inviter name, invited role, project reach, expiry and status — never project names or emails',
     })
     @ApiNotFoundResponse({ description: 'Invitation not found' })
     async getByToken(@Param('token') token: string) {

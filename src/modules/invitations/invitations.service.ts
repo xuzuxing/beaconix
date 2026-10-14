@@ -12,6 +12,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { InvitationStatus } from '../../generated/prisma/enums';
 import { CreateInvitationDto } from './dto';
 import { InvitationEntity } from './entities';
+import { InvitationPreviewEntity } from './entities/invitation.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
     ADMIN_ROLES,
@@ -164,10 +165,11 @@ export class InvitationsService {
                                 ? sender.platformAuthorityVersion
                                 : null,
                         projectGrants: {
-                            create: grants.map((grant) => ({
-                                ...grant,
-                                organizationId: orgId,
-                            })),
+                            // `organizationId` is a relation scalar shared by
+                            // both the invitation and the project composite
+                            // relations: Prisma derives it from the parent
+                            // invitation and rejects an explicit value here.
+                            create: grants,
                         },
                         expiresAt: new Date(Date.now() + 7 * 86400_000),
                     },
@@ -301,20 +303,53 @@ export class InvitationsService {
             select: {
                 status: true,
                 expiresAt: true,
-                organization: { select: { name: true, deletedAt: true } },
+                role: true,
+                organization: {
+                    select: {
+                        id: true,
+                        name: true,
+                        slug: true,
+                        logoUrl: true,
+                        deletedAt: true,
+                    },
+                },
+                sentBy: { select: { name: true } },
+                projectGrants: { select: { projectId: true } },
             },
         });
         if (!invitation || invitation.organization.deletedAt)
             throw new NotFoundException('Invitation not found');
-        return {
+        const status: InvitationStatus =
+            invitation.status === 'PENDING' &&
+            invitation.expiresAt <= new Date()
+                ? 'EXPIRED'
+                : invitation.status;
+        const accessMode =
+            invitation.role === 'ADMIN' || invitation.role === 'OWNER'
+                ? ('ALL_PROJECTS' as const)
+                : ('SELECTED_PROJECTS' as const);
+        // The preview lists the reach of the invitation, never project names.
+        const projectCount =
+            accessMode === 'ALL_PROJECTS'
+                ? await this.prisma.project.count({
+                      where: {
+                          organizationId: invitation.organization.id,
+                          deletedAt: null,
+                      },
+                  })
+                : invitation.projectGrants.length;
+        return new InvitationPreviewEntity({
             organizationName: invitation.organization.name,
-            status:
-                invitation.status === 'PENDING' &&
-                invitation.expiresAt <= new Date()
-                    ? 'EXPIRED'
-                    : invitation.status,
+            organizationSlug: invitation.organization.slug,
+            organizationLogoUrl: invitation.organization.logoUrl,
+            inviterName: invitation.sentBy.name,
+            role: invitation.role,
+            accessMode,
+            projectCount,
+            expiresAt: invitation.expiresAt,
+            status,
             requiresLogin: true,
-        };
+        });
     }
 
     async revoke(orgId: string, invitationId: string, actorId: string) {

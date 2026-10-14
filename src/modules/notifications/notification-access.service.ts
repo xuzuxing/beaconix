@@ -168,8 +168,13 @@ export class NotificationAccessService {
                               {
                                   memberships: {
                                       some: {
+                                          // ProjectMembership has no
+                                          // `organization` relation (its
+                                          // organizationId is bound to the
+                                          // project by a composite FK), so the
+                                          // deleted-organization guard lives on
+                                          // `organization` above.
                                           membership: { userId },
-                                          organization: { deletedAt: null },
                                       },
                                   },
                               },

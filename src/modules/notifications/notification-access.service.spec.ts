@@ -77,8 +77,9 @@ describe('Notification current access policy', () => {
         expect(query.OR).toContainEqual({
             memberships: {
                 some: {
+                    // ProjectMembership exposes no `organization` relation, so
+                    // only the parent notification's organization guard applies.
                     membership: { userId: 'user' },
-                    organization: { deletedAt: null },
                 },
             },
         });

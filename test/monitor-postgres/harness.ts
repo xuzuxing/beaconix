@@ -59,7 +59,9 @@ export async function assertEmptyDatabase(client: Client): Promise<void> {
 
 export async function stageMigrations(): Promise<string> {
     const source = join(root, 'prisma/migrations');
-    const target = await mkdtemp(join(tmpdir(), 'beaconix-monitor-migrations-'));
+    const target = await mkdtemp(
+        join(tmpdir(), 'beaconix-monitor-migrations-'),
+    );
     try {
         for (const entry of await readdir(source, { withFileTypes: true })) {
             if (
