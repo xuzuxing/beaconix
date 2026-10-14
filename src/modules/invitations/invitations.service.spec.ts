@@ -20,7 +20,7 @@ import { InvitationsService } from './invitations.service';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 
 const now = new Date('2026-10-11T08:00:00.000Z');
-const org = { id: 'org', name: 'Beacon', slug: 'beacon', deletedAt: null };
+const org = { id: 'org', name: 'Beacon', slug: 'beaconix', deletedAt: null };
 const invitee = {
     id: 'invitee',
     email: 'invitee@example.com',

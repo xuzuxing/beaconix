@@ -12,7 +12,7 @@ const baseConfig: ResendConfig = {
 };
 
 const baseAppConfig: AppConfig = {
-    name: 'beacon',
+    name: 'beaconix',
     port: 3000,
     env: 'production',
     isProduction: true,

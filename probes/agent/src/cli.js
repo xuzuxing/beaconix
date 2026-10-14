@@ -19,7 +19,7 @@ const { runSelfUpdate } = require('./commands/self-update');
 const HELP = `Beacon probe agent ${VERSION}
 
 Usage:
-  beacon-probe <command> [options]
+  beaconix-probe <command> [options]
 
 Enrollment:
   login                      Enroll this host through an OAuth2 device-code flow
@@ -40,7 +40,7 @@ Probe:
   heartbeat                  Send a single heartbeat and print the response
 
 Options:
-  --config <path>            JSON config file (default: /etc/beacon/probe.json)
+  --config <path>            JSON config file (default: /etc/beaconix/probe.json)
   --api-url <url>            Beacon API base URL
   --key <probeId>            Probe id returned by the backend (the "key")
   --token <secret>           Probe secret returned by the backend (the "token")

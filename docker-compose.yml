@@ -3,25 +3,25 @@ version: "3.9"
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: beacon-db
+    container_name: beaconix-db
     restart: unless-stopped
     ports:
       - "5433:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: beacon
+      POSTGRES_DB: beaconix
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d beacon"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d beaconix"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: beacon-redis
+    container_name: beaconix-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:

@@ -11,7 +11,7 @@ Usage: node probes/test-fleet/index.js [run|provision] [options]
   --password <password>       BEACON_ADMIN_PASSWORD (prefer environment input)
   --count <1..1000>           PROBE_FLEET_COUNT (default 100)
   --prefix <name>             PROBE_FLEET_PREFIX (default docker-system-test)
-  --state-dir <path>          PROBE_FLEET_STATE_DIR (default .beacon/test-fleet)
+  --state-dir <path>          PROBE_FLEET_STATE_DIR (default .beaconix/test-fleet)
   --allow-insecure            PROBE_ALLOW_INSECURE=true (local HTTP only)
   -h, --help                 Show this help
 
@@ -111,7 +111,7 @@ function loadConfig(argv = process.argv.slice(2), env = process.env) {
         allowInsecure,
         apiUrl: url.toString().replace(/\/+$/, ''),
         stateDir: path.resolve(
-            args.stateDir ?? env.PROBE_FLEET_STATE_DIR ?? '.beacon/test-fleet',
+            args.stateDir ?? env.PROBE_FLEET_STATE_DIR ?? '.beaconix/test-fleet',
         ),
         count: integer(
             args.count ?? env.PROBE_FLEET_COUNT,

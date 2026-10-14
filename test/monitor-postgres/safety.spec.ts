@@ -16,7 +16,7 @@ for (const value of [
     'https://localhost/beacon_monitor_test',
     'postgresql://test:secret@db.example.com/beacon_monitor_test',
     'postgresql://test:secret@127.0.0.2/beacon_monitor_test',
-    'postgresql://test:secret@localhost/beacon',
+    'postgresql://test:secret@localhost/beaconix',
     'postgresql://test:secret@localhost/postgres',
     'postgresql://test:secret@localhost/beacon_monitor_test_backup/extra',
     'postgresql://test:secret@localhost/beacon_monitor_test?schema=public',

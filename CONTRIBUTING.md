@@ -16,8 +16,8 @@ By participating you agree to follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 ## Local Setup
 
 ```bash
-git clone https://github.com/xuzuxing/beacon.git
-cd beacon
+git clone https://github.com/xuzuxing/beaconix.git
+cd beaconix
 pnpm install
 cp .env.example .env        # then fill in the required values
 pnpm prisma:generate        # regenerate the committed Prisma client

@@ -73,7 +73,7 @@ them because the backend stores hashes. `probe_fleet_data` therefore persists
 volume; do not use `down -v` while expecting to reuse its probes.
 
 The test Dockerfile and Compose file live directly under `probes/`. Build context
-remains the repository root, and the Compose project name remains `nest-beacon`,
+remains the repository root, and the Compose project name remains `beaconix`,
 so moving these files does not change the existing `nest-beacon_probe_fleet_data`
 volume. From inside `probes/`, use `-f docker-compose.probe-test.yml` instead.
 
@@ -107,7 +107,7 @@ manually or use a new prefix/volume; never delete unrelated probes to work aroun
 | `BEACON_ADMIN_PASSWORD` | required | Login password; prefer environment over CLI |
 | `PROBE_FLEET_COUNT` | `100` | Number of distinct agents, `1..1000` |
 | `PROBE_FLEET_PREFIX` | `docker-system-test` | Dedicated test namespace |
-| `PROBE_FLEET_STATE_DIR` | `.beacon/test-fleet` (`/data` in Docker) | Persistent secret directory |
+| `PROBE_FLEET_STATE_DIR` | `.beaconix/test-fleet` (`/data` in Docker) | Persistent secret directory |
 | `PROBE_ALLOW_INSECURE` | `false` (`true` in test Compose) | Permit local plain HTTP |
 | `PROBE_INTERVAL_SECONDS` | `60` | Per-agent heartbeat interval, `5..3600` |
 | `PROBE_TIMEOUT_MS` | `5000` | Agent API/check timeout |
@@ -132,7 +132,7 @@ node probes/test-fleet/index.js run --count 5
 
 The CLI also accepts `--email`, `--password`, `--api-url`, `--prefix`,
 `--state-dir`, `--allow-insecure`, and `provision`; use `--help` for details.
-Local state under `.beacon/` is excluded from Git and Docker build context.
+Local state under `.beaconix/` is excluded from Git and Docker build context.
 
 ## What this tests
 

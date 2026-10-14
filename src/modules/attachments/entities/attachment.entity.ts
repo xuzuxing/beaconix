@@ -29,7 +29,7 @@ export class AttachmentEntity {
     })
     storageProvider: string;
 
-    @ApiPropertyOptional({ example: 'beacon-attachments' })
+    @ApiPropertyOptional({ example: 'beaconix-attachments' })
     bucket: string | null;
 
     @ApiPropertyOptional({ example: 'sha256 hex digest' })

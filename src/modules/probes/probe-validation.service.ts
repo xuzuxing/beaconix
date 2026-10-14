@@ -22,7 +22,7 @@ import {
     ProbeStatus,
 } from '../../generated/prisma/enums';
 
-const VALIDATION_INFO = Buffer.from('beacon-probe-validation-v1', 'utf8');
+const VALIDATION_INFO = Buffer.from('beaconix-probe-validation-v1', 'utf8');
 const VALIDATION_TTL_SECONDS = 120;
 const VALIDATION_KEY_PREFIX = 'probe:validation:';
 

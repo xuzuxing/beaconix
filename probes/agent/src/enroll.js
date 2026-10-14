@@ -11,7 +11,7 @@ const { sleep } = require('./util');
 const logger = require('./logger');
 
 /** Identifies this client to the enrollment endpoints. */
-const DEVICE_FLOW_CLIENT = 'beacon-probe-cli';
+const DEVICE_FLOW_CLIENT = 'beaconix-probe-cli';
 
 /**
  * Client info sent with enrollment requests so the confirmation page can show

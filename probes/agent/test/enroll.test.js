@@ -14,7 +14,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-const CLI = path.join(REPO_ROOT, 'probes', 'agent', 'bin', 'beacon-probe.js');
+const CLI = path.join(REPO_ROOT, 'probes', 'agent', 'bin', 'beaconix-probe.js');
 
 function runCli(args, home) {
     return new Promise((resolve, reject) => {
@@ -64,7 +64,7 @@ function readJson(file) {
 }
 
 test('login (device flow) stores credentials once approved, logout removes them', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beacon-enroll-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-enroll-'));
     let polls = 0;
 
     const server = await startMock((req, res) => {
@@ -142,7 +142,7 @@ test('login (device flow) stores credentials once approved, logout removes them'
 });
 
 test('enroll --enroll-token redeems a one-time token', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beacon-enroll-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-enroll-'));
     let redeemBody = null;
 
     const server = await startMock((req, res) => {
@@ -190,7 +190,7 @@ test('enroll --enroll-token redeems a one-time token', async () => {
 });
 
 test('enroll without a token fails fast', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beacon-enroll-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-enroll-'));
     try {
         const result = await runCli(
             [

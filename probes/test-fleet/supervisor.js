@@ -5,7 +5,7 @@ const { spawn } = require('node:child_process');
 const readline = require('node:readline');
 const { setTimeout: sleep } = require('node:timers/promises');
 
-const AGENT = path.resolve(__dirname, '../agent/bin/beacon-probe.js');
+const AGENT = path.resolve(__dirname, '../agent/bin/beaconix-probe.js');
 
 function agentEnvironment(config, credential, inherited = process.env) {
     const env = Object.fromEntries(

@@ -8,5 +8,5 @@ export interface RedisConfig {
 
 export const redisConfig = registerAs('redis', (): RedisConfig => ({
     url: optionalEnv('REDIS_URL', 'redis://localhost:6379'),
-    keyPrefix: optionalEnv('REDIS_KEY_PREFIX', 'beacon:'),
+    keyPrefix: optionalEnv('REDIS_KEY_PREFIX', 'beaconix:'),
 }));

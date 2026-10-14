@@ -33,7 +33,7 @@ export class UpdateProbeDto {
     @MaxLength(100)
     region?: string;
 
-    @ApiPropertyOptional({ example: 'https://probe.example.com/beacon/cb' })
+    @ApiPropertyOptional({ example: 'https://probe.example.com/beaconix/cb' })
     @IsOptional()
     @IsUrl({ require_tld: false })
     @MaxLength(2048)

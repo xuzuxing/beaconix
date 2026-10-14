@@ -45,7 +45,7 @@ export class ProbeEntity {
     @ApiProperty({ example: 'ap-northeast-1' })
     region: string;
 
-    @ApiProperty({ example: 'https://probe.example.com/beacon/callback' })
+    @ApiProperty({ example: 'https://probe.example.com/beaconix/callback' })
     callbackUrl: string;
 
     @ApiPropertyOptional({

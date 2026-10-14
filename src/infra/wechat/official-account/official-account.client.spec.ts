@@ -61,7 +61,7 @@ describe('OfficialAccountClient', () => {
             const { client } = createClient();
 
             const url = client.buildOAuthUrl({
-                redirectUri: 'https://beacon.example.com/oauth/cb',
+                redirectUri: 'https://beaconix.example.com/oauth/cb',
                 state: 's1',
             });
 
@@ -84,7 +84,7 @@ describe('OfficialAccountClient', () => {
             const { client } = createClient();
 
             const url = client.buildOAuthUrl({
-                redirectUri: 'https://beacon.example.com/oauth/cb',
+                redirectUri: 'https://beaconix.example.com/oauth/cb',
                 scope: 'snsapi_userinfo',
             });
 
@@ -105,7 +105,7 @@ describe('OfficialAccountClient', () => {
             const { client } = createClient();
 
             const url = client.buildQrConnectUrl({
-                redirectUri: 'https://beacon.example.com/wechat/cb',
+                redirectUri: 'https://beaconix.example.com/wechat/cb',
                 state: 's2',
             });
 
@@ -261,7 +261,7 @@ describe('OfficialAccountClient', () => {
             const result = await client.sendTemplateMessage({
                 openId: 'o-1',
                 templateId: 'tpl-1',
-                url: 'https://beacon.example.com/monitors/1',
+                url: 'https://beaconix.example.com/monitors/1',
                 data: { first: { value: '订单API 异常' } },
             });
 
@@ -274,7 +274,7 @@ describe('OfficialAccountClient', () => {
             expect(body).toMatchObject({
                 touser: 'o-1',
                 template_id: 'tpl-1',
-                url: 'https://beacon.example.com/monitors/1',
+                url: 'https://beaconix.example.com/monitors/1',
                 data: { first: { value: '订单API 异常' } },
             });
             expect(options).toEqual({

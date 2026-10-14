@@ -19,7 +19,7 @@ export class PublicUploadEntity {
     @ApiProperty({ example: 'openchoreo' })
     directory: string;
 
-    @ApiPropertyOptional({ example: 'beacon-attachments' })
+    @ApiPropertyOptional({ example: 'beaconix-attachments' })
     bucket?: string;
 
     @ApiProperty({

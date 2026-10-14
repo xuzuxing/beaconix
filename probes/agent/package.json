@@ -1,12 +1,12 @@
 {
-    "name": "@beacon/probe-agent",
+    "name": "@beaconix/probe-agent",
     "version": "2.0.0",
     "description": "Beacon probe agent CLI (zero runtime dependencies)",
     "private": true,
     "license": "MIT",
     "type": "commonjs",
     "bin": {
-        "beacon-probe": "bin/beacon-probe.js"
+        "beaconix-probe": "bin/beaconix-probe.js"
     },
     "engines": {
         "node": ">=18"

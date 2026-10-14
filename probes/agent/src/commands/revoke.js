@@ -7,7 +7,7 @@ const { assertCredentials, assertEncryptedTransport } = require('../preflight');
 const logger = require('../logger');
 
 /**
- * `beacon-probe revoke` — revoke this probe's credential on the backend but
+ * `beaconix-probe revoke` — revoke this probe's credential on the backend but
  * keep the local copy, so an operator can confirm the host is cut off before
  * deciding what to do with the file. Use `logout --revoke` to revoke *and*
  * remove the local credential in one step.

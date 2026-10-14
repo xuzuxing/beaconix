@@ -154,7 +154,7 @@ async function backend(t, options = {}) {
 }
 
 function configuration(t, apiUrl, overrides = {}) {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beacon-fleet-'));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-fleet-'));
     t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
     return {
         ...loadConfig([], {

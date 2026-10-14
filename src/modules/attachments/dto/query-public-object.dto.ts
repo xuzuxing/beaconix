@@ -14,7 +14,7 @@ export class QueryPublicObjectDto {
     @IsEnum(['LOCAL', 'OSS'])
     provider?: 'LOCAL' | 'OSS';
 
-    @ApiPropertyOptional({ example: 'beacon-attachments' })
+    @ApiPropertyOptional({ example: 'beaconix-attachments' })
     @IsOptional()
     @IsString()
     @MaxLength(512)

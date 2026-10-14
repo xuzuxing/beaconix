@@ -17,7 +17,7 @@ export const appConfig = registerAs('app', (): AppConfig => {
     const env = optionalEnv('NODE_ENV', 'development');
     const rawOrigins = optionalEnv('CORS_ORIGINS', '');
     return {
-        name: optionalEnv('APP_NAME', 'beacon'),
+        name: optionalEnv('APP_NAME', 'beaconix'),
         port: parseInt(optionalEnv('PORT', '3000'), 10),
         env,
         isProduction: env === 'production',

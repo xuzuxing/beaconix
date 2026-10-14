@@ -12,7 +12,7 @@
 
 ```
 probes/agent/
-├── bin/beacon-probe.js      # CLI 入口
+├── bin/beaconix-probe.js      # CLI 入口
 ├── src/
 │   ├── cli.js               # 命令分发
 │   ├── config.js            # 参数 / 环境变量 / 配置文件解析
@@ -35,7 +35,7 @@ probes/agent/
 
 | 形态 | 入口 | 说明 |
 | --- | --- | --- |
-| systemd 常驻 | `install/install.sh` → `beacon-probe run` | 生产推荐；system unit，以 `beacon` 用户运行 |
+| systemd 常驻 | `install/install.sh` → `beaconix-probe run` | 生产推荐；system unit，以 `beaconix` 用户运行 |
 | 容器 | `Dockerfile.probe` | `docker run` 即常驻 `run` |
 | 云函数 | `functions/scf.js` | 每次触发执行**一轮**；无本地调度，见下方文档 |
 
@@ -99,7 +99,7 @@ probes/agent/
 - secret 形如 `tnt_<64hex>`，**只在创建 / 轮换的响应里返回一次**。
 - 服务端只存其 **sha256 哈希**（`probe_secrets` 表），不落明文。
 - 支持**吊销**（`revokedAt`）与**平滑轮换**：轮换后旧 secret 保留 24h 宽限，探针不掉线。
-- 常驻部署凭据落在 `/etc/beacon/probe.json`（`0640`，属主 `beacon`）；
+- 常驻部署凭据落在 `/etc/beaconix/probe.json`（`0640`，属主 `beaconix`）；
   容器 / 云函数改为环境变量注入，不写盘。
 - 强制 HTTPS；仅 `localhost` 或显式 `PROBE_ALLOW_INSECURE=true` 时才允许明文。
 
@@ -107,8 +107,8 @@ probes/agent/
 
 ```bash
 # 从仓库根直接运行 CLI
-node probes/agent/bin/beacon-probe.js --help
-node probes/agent/bin/beacon-probe.js run --once
+node probes/agent/bin/beaconix-probe.js --help
+node probes/agent/bin/beaconix-probe.js run --once
 
 # 单元测试（注册、服务生命周期、self-update、SCF 单次执行）
 cd probes/agent && node --test

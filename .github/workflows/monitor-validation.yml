@@ -54,11 +54,11 @@ jobs:
               env:
                   DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/unused
             - name: Start isolated Redis with two databases
-              run: docker run --detach --name beacon-monitor-redis --publish 127.0.0.1:6379:6379 redis:7-alpine redis-server --databases 2 --requirepass monitor_test_password
+              run: docker run --detach --name beaconix-monitor-redis --publish 127.0.0.1:6379:6379 redis:7-alpine redis-server --databases 2 --requirepass monitor_test_password
             - name: Wait for Redis
               run: |
                   for attempt in $(seq 1 20); do
-                    if docker exec beacon-monitor-redis redis-cli --no-auth-warning -a monitor_test_password ping | grep -q PONG; then exit 0; fi
+                    if docker exec beaconix-monitor-redis redis-cli --no-auth-warning -a monitor_test_password ping | grep -q PONG; then exit 0; fi
                     sleep 1
                   done
                   exit 1
@@ -70,7 +70,7 @@ jobs:
               run: pnpm test -- --runInBand src/modules/checker/checkers/application-protocols.integration.spec.ts src/modules/checker/checkers/mongodb-worker.spec.ts
             - name: Stop isolated Redis
               if: always()
-              run: docker rm --force beacon-monitor-redis
+              run: docker rm --force beaconix-monitor-redis
     postgres-and-runtime:
         name: PostgreSQL Migration & Runner Smoke
         runs-on: ubuntu-latest
@@ -107,10 +107,10 @@ jobs:
               env:
                   MONITOR_TEST_DATABASE_URL: postgresql://monitor_test:monitor_test@127.0.0.1:5432/beacon_monitor_test_ci
             - name: Build production runner
-              run: docker build --tag beacon-monitor-validation .
+              run: docker build --tag beaconix-monitor-validation .
             - name: Check runner ICMP without external networking or privileged mode
               run: |
-                  docker run --rm --network none --entrypoint node beacon-monitor-validation -e '
+                  docker run --rm --network none --entrypoint node beaconix-monitor-validation -e '
                     const assert = require("node:assert/strict");
                     const { PingRunner } = require("./dist/src/modules/checker/checkers/ping.checker.js");
                     new PingRunner().run("127.0.0.1", 3000).then(result => {

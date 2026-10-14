@@ -21,7 +21,7 @@ function createService() {
     const configService = {
         get: jest.fn().mockReturnValue({
             url: 'redis://localhost:6379',
-            keyPrefix: 'beacon:',
+            keyPrefix: 'beaconix:',
         }),
     };
     const service = new RedisService(configService as unknown as ConfigService);
@@ -39,7 +39,7 @@ describe('RedisService', () => {
         createService();
 
         expect(Redis).toHaveBeenCalledWith('redis://localhost:6379', {
-            keyPrefix: 'beacon:',
+            keyPrefix: 'beaconix:',
             lazyConnect: true,
             maxRetriesPerRequest: 3,
         });

@@ -10,7 +10,7 @@ function assertCredentials(config) {
     if (missing.length > 0) {
         throw new Error(
             `Missing probe credential(s): ${missing.join(', ')}. ` +
-                'Run `beacon-probe login` (or `enroll`), or set ' +
+                'Run `beaconix-probe login` (or `enroll`), or set ' +
                 '--key/--token, environment variables, or --config.',
         );
     }

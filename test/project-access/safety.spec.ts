@@ -49,7 +49,7 @@ for (const kind of kinds) {
         safe.replace('localhost', '127.0.0.2'),
         safe.replace('localhost', 'localhost.example.test'),
         safe.replace('localhost', 'localhost.'),
-        safe.replace(PROJECT_ACCESS_DATABASES[kind].prefix, 'beacon'),
+        safe.replace(PROJECT_ACCESS_DATABASES[kind].prefix, 'beaconix'),
         safe.replace(PROJECT_ACCESS_DATABASES[kind].prefix, 'postgres'),
         `${safe}/extra`,
         `${safe}_UPPERCASE`,
@@ -173,7 +173,7 @@ void test('refuses a miswired runtime database before checking objects', async (
     const client: DatabaseSafetyClient = {
         query: () => {
             queries++;
-            return Promise.resolve({ rows: [{ database: 'beacon' }] });
+            return Promise.resolve({ rows: [{ database: 'beaconix' }] });
         },
     };
     await assert.rejects(
@@ -317,7 +317,7 @@ void test('preflight revalidates URLs and refuses inconsistent metadata before q
     };
     await assert.rejects(
         preflightProjectAccessDatabases(
-            [{ ...database, database: 'beacon' }],
+            [{ ...database, database: 'beaconix' }],
             [client],
         ),
         /metadata/,

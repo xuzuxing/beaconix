@@ -30,7 +30,7 @@ export class CreateSystemProbeDto {
     @MaxLength(100)
     region: string;
 
-    @ApiProperty({ example: 'https://probe.example.com/beacon/callback' })
+    @ApiProperty({ example: 'https://probe.example.com/beaconix/callback' })
     @IsUrl({ require_tld: false })
     @MaxLength(2048)
     callbackUrl: string;

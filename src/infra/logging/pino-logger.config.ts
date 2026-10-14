@@ -361,8 +361,8 @@ export function createPinoConfig(
             base: {
                 pid: process.pid,
                 hostname: os.hostname(),
-                application: 'beacon',
-                service: options.serviceName || 'beacon',
+                application: 'beaconix',
+                service: options.serviceName || 'beaconix',
                 env,
             },
             redact: {

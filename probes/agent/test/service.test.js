@@ -13,7 +13,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-const CLI = path.join(REPO_ROOT, 'probes', 'agent', 'bin', 'beacon-probe.js');
+const CLI = path.join(REPO_ROOT, 'probes', 'agent', 'bin', 'beaconix-probe.js');
 
 const CONN = [
     '--api-url',
@@ -71,7 +71,7 @@ function readPid(pidPath) {
 }
 
 test('start/status/restart/stop drive the pidfile backend', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beacon-service-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-service-'));
     const pidPath = path.join(home, 'run', 'probe.pid');
 
     try {
@@ -104,7 +104,7 @@ test('start/status/restart/stop drive the pidfile backend', async () => {
 });
 
 test('start refuses to run without credentials', async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beacon-service-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-service-'));
     try {
         const result = await runCli(
             ['start', '--api-url', 'https://api.example.com/api'],

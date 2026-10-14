@@ -174,8 +174,8 @@ describe('Real local read-only Docker API transport', () => {
     beforeEach(async () => {
         path =
             process.platform === 'win32'
-                ? `\\\\.\\pipe\\beacon-docker-${randomUUID()}`
-                : join(tmpdir(), `beacon-docker-${randomUUID()}.sock`);
+                ? `\\\\.\\pipe\\beaconix-docker-${randomUUID()}`
+                : join(tmpdir(), `beaconix-docker-${randomUUID()}.sock`);
         requests = [];
         statusCode = 200;
         response = {
@@ -208,7 +208,7 @@ describe('Real local read-only Docker API transport', () => {
     it('only inspects the configured container and persists bounded State metadata', async () => {
         const result = await checker.run(
             monitor('DOCKER', 'unix:///var/run/docker.sock', {
-                containerId: 'beacon-api',
+                containerId: 'beaconix-api',
             }),
         );
         expect(result).toMatchObject({
@@ -220,14 +220,14 @@ describe('Real local read-only Docker API transport', () => {
             },
         });
         expect(requests).toEqual([
-            'GET /containers/beacon-api/json?size=false',
+            'GET /containers/beaconix-api/json?size=false',
         ]);
         expect(JSON.stringify(result)).not.toContain('PASSWORD');
     });
     it('does not allow unapproved organizations to access the host socket', async () => {
         const result = await checker.run({
             ...monitor('DOCKER', 'unix:///var/run/docker.sock', {
-                containerId: 'beacon-api',
+                containerId: 'beaconix-api',
             }),
             organizationId: 'other-org',
         });
