@@ -1,3 +1,4 @@
+<img src="./docs/images/banner.png" alt="Beaconix Banner" width="100%" />
 <p align="center">
   A production-ready, multi-tenant Agile Workspace backend for managing organizations, projects, sprints, and tasks. built with NestJS, Prisma, and PostgreSQL.
 </p>
@@ -320,11 +321,11 @@ graph TD
 ### Entity Relationship Diagram
 
 <p align="center">
-  <img src="assets/images/beaconix-erd.png" alt="Beacon Entity Relationship Diagram" />
+  <img src="./docs/images/beaconix-erd.png" alt="Beacon Entity Relationship Diagram" />
 </p>
 
 <p align="center">
-  <a href="https://dbdiagram.io/d/beaconix-69a76b60a3f0aa31e1b72609">View interactive ERD on dbdiagram.io</a>
+  <a href="https://dbdiagram.io/d/beaconix-6ad0f967aebfe7a21fffaf4b">View interactive ERD on dbdiagram.io</a>
 </p>
 
 ### Authentication Flow
@@ -1140,18 +1141,64 @@ cp .env.example .env
 
 ¹ Not required when `NODE_ENV=development`, because application emails are printed to stdout instead of sent.
 
-Runtime-tunable attachment settings live in the `settings` table and can be managed by SUPER_ADMIN users through `/api/admin/settings`. Built-in defaults are used when a row is absent:
+Runtime-tunable platform settings live in the `settings` table and can be managed by SUPER_ADMIN users through `/api/admin/settings`. Built-in defaults are used when a row is absent, and `isDefault` stays `false` once a key has been overridden — including when it is set back to its default value:
 
-| Setting key | Default | Description |
-|---|---:|---|
-| `storage.driver` | `local` | Active attachment storage driver: `local` or `oss` |
-| `storage.publicBaseUrl` | empty | Optional public base URL for local/static serving |
-| `storage.oss.publicBaseUrl` | empty | Optional public/CDN base URL for OSS objects |
-| `storage.oss.signedUrlTtlSeconds` | `300` | Signed OSS download URL TTL |
-| `attachments.maxImageSizeMb` | `8` | Image upload limit |
-| `attachments.maxPdfSizeMb` | `16` | PDF upload limit |
-| `attachments.maxBlobSizeMb` | `32` | Other allowed file upload limit |
-| `attachments.maxFilesPerRequest` | `5` | Reserved batch upload limit |
+| Group | Setting key | Default | Description |
+|---|---|---:|---|
+| system | `system.siteName` | `Beacon` | Product name in browser titles, emails and status pages |
+| system | `system.siteDescription` | 云监控与状态页平台 | Blurb shown on the login and status pages |
+| system | `system.logoUrl` | empty | Header/login logo URL; empty falls back to the built-in icon |
+| system | `system.faviconUrl` | empty | Browser tab icon URL; empty falls back to the built-in icon |
+| system | `system.footerCopyright` | `© 2026 Beacon` | Footer copyright line |
+| system | `system.icpLicense` | empty | ICP filing number for deployments in mainland China |
+| system | `system.supportEmail` | `support@beacon.example.com` | Contact address shown in the footer and emails |
+| system | `system.defaultLocale` | `zh-CN` | Default UI language: `zh-CN` or `en-US` |
+| system | `system.maintenanceMode` | `false` | Blocks everyone but platform SUPER_ADMINs |
+| smtp | `smtp.host` | empty | SMTP host for system mail; empty means no SMTP is configured |
+| smtp | `smtp.port` | `587` | SMTP port: 587 STARTTLS, 465 implicit TLS |
+| smtp | `smtp.secure` | `false` | Use implicit TLS; leave off on 587 so STARTTLS is negotiated |
+| smtp | `smtp.account` | empty | SMTP login account, usually the full mailbox address |
+| smtp | `smtp.password` | empty (secret) | SMTP password or app token; never read back |
+| smtp | `smtp.fromAddress` | empty | Envelope sender; falls back to the account, then `RESEND_FROM_EMAIL` |
+| develop | `develop.debugMode` | `false` | Adds error details to 5xx responses |
+| develop | `develop.apiDocsUrl` | `/reference` | Target of the "API docs" header entry |
+| develop | `develop.rateLimitPerMinute` | `120` | Per-account API calls per minute |
+| develop | `develop.seedDemoData` | `true` | Seed demo monitors/status pages for new tenants |
+| develop | `develop.configGroup` | `["system","develop","storage","attachments"]` | Tab list and order of the platform settings page |
+| storage | `storage.driver` | `local` | Active attachment storage driver: `local` or `oss` |
+| storage | `storage.publicBaseUrl` | empty | Optional public base URL for local/static serving |
+| storage | `storage.oss.publicBaseUrl` | empty | Optional public/CDN base URL for OSS objects |
+| storage | `storage.oss.signedUrlTtlSeconds` | `300` | Signed OSS download URL TTL |
+| attachments | `attachments.maxImageSizeMb` | `8` | Image upload limit |
+| attachments | `attachments.maxPdfSizeMb` | `16` | PDF upload limit |
+| attachments | `attachments.maxBlobSizeMb` | `32` | Other allowed file upload limit |
+| attachments | `attachments.maxFilesPerRequest` | `5` | Reserved batch upload limit |
+
+`name`, `group`, `valueType`, `description` and `isSecret` all come from the built-in definitions in `src/modules/settings/settings.defaults.ts`, whose array order is also the display order inside each tab. `group` — which decides the tab a setting lands in — is never stored in the database, and the default tab list (`develop.configGroup`) is derived from those groups, so adding a setting or a whole tab is a code change with no migration. `PATCH /api/admin/settings/{key}` only accepts `{ value }`; metadata cannot be edited through the API. Values declared as string arrays (`develop.configGroup`) are validated strictly on write (non-empty, no blanks, no duplicates) and normalized on read. This table holds platform runtime parameters only — per-plan limits such as member or project quotas belong to `billing`.
+
+### Which settings actually change behaviour
+
+Consumed at runtime today:
+
+| Setting | Consumed by |
+|---|---|
+| `system.siteName` | Email sender display name, and the header/footer of every email template |
+| `system.supportEmail` | "Contact" line in the email footer (omitted when empty) |
+| `develop.debugMode` | `GlobalExceptionFilter`, which adds `detail` to 5xx responses |
+| `smtp.*` | With `smtp.host` set, system mail is delivered over SMTP instead of Resend |
+| `storage.*`, `attachments.max*` | Attachment upload/download path |
+
+The remaining keys are stored, validated and editable, but nothing reads them yet: `system.siteDescription` / `logoUrl` / `faviconUrl` / `footerCopyright` / `icpLicense` / `defaultLocale` and `system.maintenanceMode` are front-end concerns; `develop.apiDocsUrl` / `rateLimitPerMinute` / `seedDemoData` are not wired up.
+
+### When a change takes effect
+
+- Every key is picked up on the next read: `SettingsService` caches each value in-process for 30 seconds and drops the entry when it is written, so the instance that served the `PATCH` sees the new value immediately.
+- On a multi-instance deployment the other instances keep serving the cached value for at most 30 seconds.
+- `system.siteName` / `system.supportEmail` are resolved per email send, so the next outgoing message picks them up.
+- System mail goes through Resend by default. Setting `smtp.host` switches the *next* send to SMTP — `smtp.port` / `smtp.secure` / `smtp.account` / `smtp.password` are read per send and the sender resolves as `smtp.fromAddress` → `smtp.account` → `RESEND_FROM_EMAIL`. Clearing `smtp.host` switches back to Resend. If reading the `smtp.*` values fails, the send falls back to Resend and logs a warning.
+- `storage.driver` selects the active upload provider per upload (`StorageService` resolves it on every call) — no restart needed. The OSS endpoint, region, buckets and credentials are **not** managed here: they come from the `STORAGE_OSS_*` environment variables, so OSS has to be configured in the environment before switching the driver.
+- `storage.oss.signedUrlTtlSeconds` is clamped to 300 seconds when a signed download URL is generated.
+- `attachments.maxFilesPerRequest` is reserved; the upload path does not consume it yet.
 
 ### Running the Application
 
