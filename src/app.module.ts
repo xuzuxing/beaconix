@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { join } from 'node:path';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { GlobalExceptionFilter } from './common/filters';
 import {
     appConfig,
     databaseConfig,
@@ -178,6 +179,7 @@ import { HealthController } from './health.controller';
     controllers: [AppController, HealthController],
     providers: [
         AppService,
+        { provide: APP_FILTER, useClass: GlobalExceptionFilter },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
         { provide: APP_GUARD, useClass: ThrottlerGuard },
     ],

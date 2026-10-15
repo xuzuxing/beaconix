@@ -12,7 +12,6 @@ import { apiReference } from '@scalar/nestjs-api-reference';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { AppConfig } from './config';
-import { GlobalExceptionFilter } from './common/filters';
 import { TransformInterceptor } from './common/interceptors';
 
 async function bootstrap() {
@@ -53,9 +52,8 @@ async function bootstrap() {
         new ClassSerializerInterceptor(app.get(Reflector)),
     );
 
-    // Global exception filter
-    app.useGlobalFilters(new GlobalExceptionFilter());
-    // 启用安全头并自定义 CSP
+    // 全局异常过滤器改为 APP_FILTER 注册（见 app.module.ts），
+    // 以便注入 SettingsService 读取 develop.debugMode。
     app.use(
         helmet({
             contentSecurityPolicy: {

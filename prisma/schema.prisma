@@ -724,6 +724,8 @@ model Setting {
   valueType   SettingValueType
   description String?
   isSecret    Boolean          @default(false)
+  /// 是否被平台覆盖过。seed 写入的内置行是 false，管理端改过即为 true —— `isDefault` 由此判定
+  overridden  Boolean          @default(false)
   updatedById String?
 
   createdAt DateTime @default(now())

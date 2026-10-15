@@ -1,9 +1,15 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createTransport } from 'nodemailer';
 import type { Resend } from 'resend';
 import { EmailService } from './email.service';
 import { EmailTemplate } from './email.types';
 import type { AppConfig, ResendConfig } from '../../config';
+import type { SettingsService } from '../settings';
+
+jest.mock('nodemailer', () => ({
+    createTransport: jest.fn(),
+}));
 
 const baseConfig: ResendConfig = {
     apiKey: 're_test_key',
@@ -25,9 +31,11 @@ const baseAppConfig: AppConfig = {
 function createService({
     resendConfig = {},
     appConfig = {},
+    settings = {},
 }: {
     resendConfig?: Partial<ResendConfig>;
     appConfig?: Partial<AppConfig>;
+    settings?: Record<string, string | boolean | number>;
 } = {}) {
     const configService = {
         get: jest.fn((key: string) => {
@@ -37,12 +45,34 @@ function createService({
         }),
     } as unknown as ConfigService;
 
+    // 未显式给出的 key 一律回退到调用方传入的 fallback，模拟内置默认
+    const settingsService = {
+        getString: jest.fn((key: string, fallback: string) =>
+            Promise.resolve(
+                typeof settings[key] === 'string' ? settings[key] : fallback,
+            ),
+        ),
+        getBoolean: jest.fn((key: string, fallback: boolean) =>
+            Promise.resolve(
+                typeof settings[key] === 'boolean' ? settings[key] : fallback,
+            ),
+        ),
+        getNumber: jest.fn((key: string, fallback: number) =>
+            Promise.resolve(
+                typeof settings[key] === 'number' ? settings[key] : fallback,
+            ),
+        ),
+    } as unknown as SettingsService;
+
     const emails = {
         send: jest.fn().mockResolvedValue({ data: { id: 'id' } }),
     };
     const resend = { emails } as unknown as Resend;
 
-    return { service: new EmailService(resend, configService), emails };
+    return {
+        service: new EmailService(resend, configService, settingsService),
+        emails,
+    };
 }
 
 const payload = {
@@ -53,6 +83,10 @@ const payload = {
 };
 
 describe('EmailService', () => {
+    beforeEach(() => {
+        (createTransport as jest.Mock).mockReset();
+    });
+
     afterEach(() => {
         jest.restoreAllMocks();
     });
@@ -106,6 +140,28 @@ describe('EmailService', () => {
                     subject: 'Verify your email address',
                 }),
             );
+        });
+
+        it('uses the configured site branding for the sender and footer', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            const { service, emails } = createService({
+                settings: {
+                    'system.siteName': 'Acme Monitor',
+                    'system.supportEmail': 'ops@acme.test',
+                },
+            });
+
+            await service.send(EmailTemplate.EMAIL_VERIFICATION, payload);
+
+            const message = emails.send.mock.calls[0][0] as {
+                from: string;
+                html: string;
+            };
+            expect(message.from).toBe('Acme Monitor <noreply@test.dev>');
+            expect(message.html).toContain('Acme Monitor');
+            expect(message.html).toContain('mailto:ops@acme.test');
         });
 
         it('links the invitation email to the web client with its token', async () => {
@@ -168,6 +224,108 @@ describe('EmailService', () => {
             await expect(
                 service.send(EmailTemplate.EMAIL_VERIFICATION, payload),
             ).rejects.toThrow('Email send failed: boom');
+        });
+
+        it('uses SMTP once smtp.host is configured', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            const sendMail = jest
+                .fn()
+                .mockResolvedValue({ messageId: 'smtp-1' });
+            const close = jest.fn();
+            (createTransport as jest.Mock).mockReturnValue({ sendMail, close });
+
+            const { service, emails } = createService({
+                settings: {
+                    'smtp.host': 'smtp.example.com',
+                    'smtp.port': 465,
+                    'smtp.secure': true,
+                    'smtp.account': 'bot@example.com',
+                    'smtp.password': 'secret',
+                },
+            });
+
+            await service.send(EmailTemplate.EMAIL_VERIFICATION, payload);
+
+            expect(emails.send).not.toHaveBeenCalled();
+            expect(createTransport).toHaveBeenCalledWith({
+                host: 'smtp.example.com',
+                port: 465,
+                secure: true,
+                auth: { user: 'bot@example.com', pass: 'secret' },
+            });
+            expect(sendMail).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    from: 'Beacon <bot@example.com>',
+                    to: payload.to,
+                    subject: 'Verify your email address',
+                }),
+            );
+            expect(close).toHaveBeenCalled();
+        });
+
+        it('resolves the SMTP sender from fromAddress, then account, then Resend', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            const sendMail = jest
+                .fn()
+                .mockResolvedValue({ messageId: 'smtp-1' });
+            (createTransport as jest.Mock).mockReturnValue({
+                sendMail,
+                close: jest.fn(),
+            });
+
+            const cases: [Record<string, string | boolean>, string][] = [
+                [
+                    { 'smtp.fromAddress': 'noreply@acme.test' },
+                    'Beacon <noreply@acme.test>',
+                ],
+                [{}, 'Beacon <bot@example.com>'],
+                [{ 'smtp.account': '' }, 'Beacon <noreply@test.dev>'],
+            ];
+
+            for (const [extra, expected] of cases) {
+                const { service } = createService({
+                    settings: {
+                        'smtp.host': 'smtp.example.com',
+                        'smtp.account': 'bot@example.com',
+                        ...extra,
+                    },
+                });
+
+                await service.send(EmailTemplate.EMAIL_VERIFICATION, payload);
+
+                const last = sendMail.mock.calls.at(-1)?.[0] as {
+                    from: string;
+                };
+                expect(last.from).toBe(expected);
+            }
+        });
+
+        it('reports the failing transport when SMTP rejects the message', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            const errorSpy = jest
+                .spyOn(Logger.prototype, 'error')
+                .mockImplementation(() => undefined);
+            (createTransport as jest.Mock).mockReturnValue({
+                sendMail: jest.fn().mockRejectedValue(new Error('auth failed')),
+                close: jest.fn(),
+            });
+
+            const { service } = createService({
+                settings: { 'smtp.host': 'smtp.example.com' },
+            });
+
+            await expect(
+                service.send(EmailTemplate.EMAIL_VERIFICATION, payload),
+            ).rejects.toThrow('Email send failed: auth failed');
+            expect(errorSpy).toHaveBeenCalledWith(
+                expect.stringContaining('via smtp'),
+            );
         });
     });
 });

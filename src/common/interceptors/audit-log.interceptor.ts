@@ -176,7 +176,10 @@ export class AuditLogInterceptor implements NestInterceptor {
         'password',
         'token',
         'refreshToken',
-        'key',
+        // `key` is intentionally absent: the only columns using that name are
+        // the Project short code and the `settings` primary key, both
+        // non-sensitive, and redacting them made audit snapshots hard to read.
+        // Secret API credentials live in `keyHash`, which stays redacted.
         'keyHash',
         'secret',
         // 2FA material that must never reach the audit log

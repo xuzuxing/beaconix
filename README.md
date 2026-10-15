@@ -1176,6 +1176,8 @@ Runtime-tunable platform settings live in the `settings` table and can be manage
 
 `name`, `group`, `valueType`, `description` and `isSecret` all come from the built-in definitions in `src/modules/settings/settings.defaults.ts`, whose array order is also the display order inside each tab. `group` — which decides the tab a setting lands in — is never stored in the database, and the default tab list (`develop.configGroup`) is derived from those groups, so adding a setting or a whole tab is a code change with no migration. `PATCH /api/admin/settings/{key}` only accepts `{ value }`; metadata cannot be edited through the API. Values declared as string arrays (`develop.configGroup`) are validated strictly on write (non-empty, no blanks, no duplicates) and normalized on read. This table holds platform runtime parameters only — per-plan limits such as member or project quotas belong to `billing`.
 
+Built-in rows are inserted by `pnpm prisma:db:seed`. That step is **idempotent and only fills in keys the table does not have yet** — anything already in the table (including values changed from the admin UI) is left untouched, so it is safe to run on every deploy. Run it after a deploy, also on existing databases, otherwise newly added settings simply show up as the code default without a row. `isDefault` means "never overridden" (`settings.overridden = false`, set to `true` by `PATCH`), so a value edited from the UI stops being a default even if it is set back to the built-in value.
+
 ### Which settings actually change behaviour
 
 Consumed at runtime today:

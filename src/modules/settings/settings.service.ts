@@ -1,18 +1,21 @@
 import {
     BadRequestException,
     Injectable,
+    Logger,
     NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { SettingValueType } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { UpdateSettingDto } from './dto';
-import { SettingEntity } from './entities';
+import { SettingEntity, SettingOptionEntity } from './entities';
 import {
+    CUSTOM_SETTING_GROUP,
     SETTING_DEFINITION_MAP,
     SETTING_DEFINITIONS,
     SettingDefinition,
 } from './settings.defaults';
+import { isValidStringArray, normalizeStringArray } from './settings.util';
 
 export interface AttachmentRuntimeSettings {
     maxImageSizeMb: number;
@@ -26,11 +29,26 @@ interface CacheEntry {
     expiresAt: number;
 }
 
+/** `settings` 行的形状 */
+interface SettingRow {
+    key: string;
+    name: string;
+    value: unknown;
+    valueType: SettingValueType;
+    description: string | null;
+    isSecret: boolean;
+    /** 是否被平台覆盖过；seed 写入的内置行是 false */
+    overridden: boolean;
+    updatedById: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+}
+
 const CACHE_TTL_MS = 30_000;
-const SECRET_MASK = '********';
 
 @Injectable()
 export class SettingsService {
+    private readonly logger = new Logger(SettingsService.name);
     private readonly valueCache = new Map<string, CacheEntry>();
 
     constructor(private readonly prisma: PrismaService) {}
@@ -44,27 +62,27 @@ export class SettingsService {
             const row = rowMap.get(definition.key);
             if (row) {
                 rowMap.delete(definition.key);
-                return this.entityFromRow(row, false);
+                return this.entityFromRow(row, definition);
             }
 
             return this.entityFromDefinition(definition);
         });
         const custom = [...rowMap.values()].map((row) =>
-            this.entityFromRow(row, false),
+            this.entityFromRow(row, undefined),
         );
 
-        return [...defaults, ...custom].sort((a, b) =>
-            a.key.localeCompare(b.key),
-        );
+        // 内置项按 SETTING_DEFINITIONS 的定义顺序返回（管理页据此展示同一 tab
+        // 内的顺序），DB 里多出来的非内置行按 key 追加在末尾。
+        return [...defaults, ...custom];
     }
 
     async findOne(key: string): Promise<SettingEntity> {
+        const definition = SETTING_DEFINITION_MAP.get(key);
         const row = await this.prisma.setting.findUnique({ where: { key } });
         if (row) {
-            return this.entityFromRow(row, false);
+            return this.entityFromRow(row, definition);
         }
 
-        const definition = SETTING_DEFINITION_MAP.get(key);
         if (!definition) {
             throw new NotFoundException('Setting not found');
         }
@@ -72,6 +90,11 @@ export class SettingsService {
         return this.entityFromDefinition(definition);
     }
 
+    /**
+     * 只覆盖值。元数据（name / group / valueType / isSecret / description）
+     * 由内置定义维护，接口改不动，避免把元数据写坏（例如 valueType 被改成
+     * STRING 后存量 JSON 值再也解析不出来）。
+     */
     async update(
         key: string,
         dto: UpdateSettingDto,
@@ -81,44 +104,30 @@ export class SettingsService {
         if (!definition) {
             throw new NotFoundException('Setting not found');
         }
-        const existing = await this.prisma.setting.findUnique({
-            where: { key },
-        });
-        const valueType =
-            dto.valueType ?? existing?.valueType ?? definition.valueType;
-        const value = this.normalizeValue(dto.value, valueType);
-        this.validateSetting(definition, value, valueType);
+        const value = this.normalizeValue(dto.value, definition.valueType);
+        this.validateSetting(definition, value);
 
         const row = await this.prisma.setting.upsert({
             where: { key },
             create: {
                 key,
-                name: dto.name ?? definition.name,
+                name: definition.name,
                 value,
-                valueType,
-                description: dto.description ?? definition.description,
-                isSecret: dto.isSecret ?? definition.isSecret ?? false,
+                valueType: definition.valueType,
+                description: definition.description,
+                isSecret: definition.isSecret ?? false,
+                overridden: true,
                 updatedById,
             },
             update: {
-                name: dto.name ?? existing?.name ?? definition.name,
                 value,
-                valueType,
-                description:
-                    dto.description ??
-                    existing?.description ??
-                    definition.description,
-                isSecret:
-                    dto.isSecret ??
-                    existing?.isSecret ??
-                    definition.isSecret ??
-                    false,
+                overridden: true,
                 updatedById,
             },
         });
 
         this.valueCache.delete(key);
-        return this.entityFromRow(row, false);
+        return this.entityFromRow(row, definition);
     }
 
     async getString(key: string, fallback: string): Promise<string> {
@@ -200,23 +209,22 @@ export class SettingsService {
     }
 
     private entityFromRow(
-        row: {
-            key: string;
-            name: string;
-            value: unknown;
-            valueType: SettingValueType;
-            description: string | null;
-            isSecret: boolean;
-            updatedById: string | null;
-            createdAt: Date;
-            updatedAt: Date;
-        },
-        isDefault: boolean,
+        row: SettingRow,
+        definition: SettingDefinition | undefined,
     ): SettingEntity {
+        // overridden 只是表上的记账列，不进 API 响应
+        const { overridden, ...rest } = row;
+        const isSecret = row.isSecret;
         return new SettingEntity({
-            ...row,
-            value: row.isSecret ? SECRET_MASK : row.value,
-            isDefault,
+            ...rest,
+            group: definition?.group ?? CUSTOM_SETTING_GROUP,
+            value: isSecret
+                ? null
+                : this.presentValue(row.key, row.value, definition),
+            isDefault: !overridden,
+            options: this.optionsOf(definition),
+            min: definition?.min,
+            max: definition?.max,
         });
     }
 
@@ -224,7 +232,12 @@ export class SettingsService {
         return new SettingEntity({
             key: definition.key,
             name: definition.name,
-            value: definition.value,
+            group: definition.group,
+            value: this.presentValue(
+                definition.key,
+                definition.value,
+                definition,
+            ),
             valueType: definition.valueType,
             description: definition.description,
             isSecret: definition.isSecret ?? false,
@@ -232,14 +245,58 @@ export class SettingsService {
             isDefault: true,
             createdAt: null,
             updatedAt: null,
+            options: this.optionsOf(definition),
+            min: definition.min,
+            max: definition.max,
         });
+    }
+
+    private optionsOf(
+        definition?: SettingDefinition,
+    ): SettingOptionEntity[] | undefined {
+        if (!definition?.allowedValues?.length) return undefined;
+
+        return definition.allowedValues.map(
+            (value) =>
+                new SettingOptionEntity({
+                    label: definition.optionLabels?.[value] ?? value,
+                    value,
+                }),
+        );
+    }
+
+    /**
+     * 读取时的兜底：声明了 `stringArray` 的项，存量值不合法时规范化后再返回
+     * （非数组 / 没有合法项时回退内置默认），绝不把非法值原样交给前端。
+     */
+    private presentValue(
+        key: string,
+        value: unknown,
+        definition?: SettingDefinition,
+    ): unknown {
+        if (!definition?.stringArray) return value;
+
+        const normalized = normalizeStringArray(value);
+        if (!normalized) {
+            this.logger.warn(
+                `${key} holds an invalid string array; serving the built-in default`,
+            );
+            return definition.value;
+        }
+        if (!isValidStringArray(value)) {
+            this.logger.warn(
+                `${key} holds an invalid string array; serving a normalized value`,
+            );
+        }
+
+        return normalized;
     }
 
     private normalizeValue(
         value: unknown,
         valueType: SettingValueType,
     ): Prisma.InputJsonValue {
-        if (value === undefined) {
+        if (value === undefined || value === null) {
             throw new BadRequestException('value is required');
         }
 
@@ -275,7 +332,13 @@ export class SettingsService {
             throw new BadRequestException('value must be a boolean');
         }
 
-        return value as Prisma.InputJsonValue;
+        if (typeof value !== 'object') {
+            throw new BadRequestException(
+                'value must be a JSON object or array',
+            );
+        }
+
+        return value;
     }
 
     private parseStrictNumber(value: string): number {
@@ -289,14 +352,7 @@ export class SettingsService {
     private validateSetting(
         definition: SettingDefinition,
         value: Prisma.InputJsonValue,
-        valueType: SettingValueType,
     ): void {
-        if (definition.valueType !== valueType) {
-            throw new BadRequestException(
-                `${definition.key} must use ${definition.valueType} value type`,
-            );
-        }
-
         if (
             definition.allowedValues &&
             (typeof value !== 'string' ||
@@ -304,6 +360,12 @@ export class SettingsService {
         ) {
             throw new BadRequestException(
                 `${definition.key} must be one of: ${definition.allowedValues.join(', ')}`,
+            );
+        }
+
+        if (definition.stringArray && !isValidStringArray(value)) {
+            throw new BadRequestException(
+                `${definition.key} must be a non-empty array of unique strings`,
             );
         }
 
@@ -316,6 +378,14 @@ export class SettingsService {
             } catch {
                 throw new BadRequestException(
                     `${definition.key} must be a valid HTTP(S) URL`,
+                );
+            }
+        }
+
+        if (definition.email && typeof value === 'string' && value) {
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+                throw new BadRequestException(
+                    `${definition.key} must be a valid email address`,
                 );
             }
         }

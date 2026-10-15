@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { SettingValueType } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infra/database/prisma.service';
@@ -6,6 +6,7 @@ import { SettingsService } from './settings.service';
 
 describe('SettingsService', () => {
     let service: SettingsService;
+    let warnSpy: jest.SpyInstance;
 
     const prisma = {
         setting: {
@@ -15,8 +16,25 @@ describe('SettingsService', () => {
         },
     };
 
+    const row = (overrides: Record<string, unknown> = {}) => ({
+        key: 'attachments.maxImageSizeMb',
+        name: '图片上传上限（MB）',
+        value: 8,
+        valueType: SettingValueType.NUMBER,
+        description: '单个图片附件的最大体积（MB）。',
+        isSecret: false,
+        overridden: false,
+        updatedById: null,
+        createdAt: new Date('2026-10-07T00:00:00.000Z'),
+        updatedAt: new Date('2026-10-07T00:00:00.000Z'),
+        ...overrides,
+    });
+
     beforeEach(async () => {
         jest.clearAllMocks();
+        warnSpy = jest
+            .spyOn(Logger.prototype, 'warn')
+            .mockImplementation(() => undefined);
 
         const moduleRef = await Test.createTestingModule({
             providers: [
@@ -26,6 +44,10 @@ describe('SettingsService', () => {
         }).compile();
 
         service = moduleRef.get(SettingsService);
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
     });
 
     it('returns built-in defaults when setting rows are absent', async () => {
@@ -39,20 +61,126 @@ describe('SettingsService', () => {
         );
     });
 
-    it('upserts known settings with their default value type', async () => {
-        prisma.setting.findUnique.mockResolvedValue(null);
-        prisma.setting.upsert.mockResolvedValue({
-            key: 'storage.oss.signedUrlTtlSeconds',
-            name: 'OSS Signed URL TTL',
-            value: 600,
-            valueType: SettingValueType.NUMBER,
-            description:
-                'TTL in seconds for generated OSS signed download URLs.',
-            isSecret: false,
-            updatedById: 'user_1',
-            createdAt: new Date('2026-10-07T00:00:00.000Z'),
-            updatedAt: new Date('2026-10-07T00:00:00.000Z'),
+    it('assigns every built-in setting to a tab group', async () => {
+        prisma.setting.findMany.mockResolvedValue([]);
+
+        const settings = await service.findAll();
+        const byKey = new Map(settings.map((item) => [item.key, item]));
+
+        expect(byKey.get('storage.driver')?.group).toBe('storage');
+        expect(byKey.get('storage.oss.signedUrlTtlSeconds')?.group).toBe(
+            'storage',
+        );
+        expect(byKey.get('attachments.maxPdfSizeMb')?.group).toBe(
+            'attachments',
+        );
+        expect(byKey.get('develop.configGroup')?.group).toBe('develop');
+        expect(settings.every((item) => Boolean(item.group))).toBe(true);
+    });
+
+    it('publishes enum candidates and numeric bounds as options', async () => {
+        prisma.setting.findMany.mockResolvedValue([]);
+
+        const settings = await service.findAll();
+        const byKey = new Map(settings.map((item) => [item.key, item]));
+
+        expect(byKey.get('storage.driver')?.options).toEqual([
+            { label: '本地存储', value: 'local' },
+            { label: 'OSS 对象存储', value: 'oss' },
+        ]);
+        expect(byKey.get('storage.publicBaseUrl')?.options).toBeUndefined();
+        expect(byKey.get('attachments.maxImageSizeMb')).toMatchObject({
+            min: 1,
+            max: 500,
         });
+    });
+
+    it('serves settings in definition order and derives the tab list', async () => {
+        prisma.setting.findMany.mockResolvedValue([]);
+
+        const settings = await service.findAll();
+        const keys = settings.map((item) => item.key);
+        const byKey = new Map(settings.map((item) => [item.key, item]));
+
+        // 顺序来自 SETTING_DEFINITIONS 的定义顺序，而不是 key 的字母序
+        expect(keys[0]).toBe('system.siteName');
+        expect(keys.indexOf('system.siteName')).toBeLessThan(
+            keys.indexOf('develop.apiDocsUrl'),
+        );
+        expect(keys.indexOf('develop.apiDocsUrl')).toBeLessThan(
+            keys.indexOf('storage.driver'),
+        );
+
+        expect(byKey.get('system.siteName')?.group).toBe('system');
+        expect(byKey.get('smtp.port')).toMatchObject({
+            group: 'smtp',
+            value: 587,
+            min: 1,
+            max: 65535,
+        });
+        expect(byKey.get('smtp.secure')).toMatchObject({
+            group: 'smtp',
+            value: false,
+            valueType: SettingValueType.BOOLEAN,
+        });
+        expect(byKey.get('smtp.fromAddress')).toMatchObject({
+            group: 'smtp',
+            value: '',
+            valueType: SettingValueType.STRING,
+        });
+        expect(byKey.get('develop.debugMode')?.group).toBe('develop');
+        expect(byKey.get('system.defaultLocale')?.options).toEqual([
+            { label: '简体中文', value: 'zh-CN' },
+            { label: 'English', value: 'en-US' },
+        ]);
+        // tab 清单的默认值由各定义的 group 派生，新增分组不必再手改
+        expect(byKey.get('develop.configGroup')?.value).toEqual([
+            'system',
+            'smtp',
+            'develop',
+            'storage',
+            'attachments',
+        ]);
+    });
+
+    it('validates email settings', async () => {
+        await expect(
+            service.update('system.supportEmail', { value: 'not-an-email' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+
+        await expect(
+            service.update('smtp.fromAddress', { value: 'not-an-email' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+
+        prisma.setting.upsert.mockResolvedValue(
+            row({
+                key: 'system.supportEmail',
+                name: '客服邮箱',
+                value: 'ops@example.com',
+                valueType: SettingValueType.STRING,
+                description: '页脚与系统邮件里对外提供的联系邮箱。',
+            }),
+        );
+
+        await expect(
+            service.update('system.supportEmail', {
+                value: 'ops@example.com',
+            }),
+        ).resolves.toMatchObject({ group: 'system' });
+    });
+
+    it('upserts known settings with their built-in metadata', async () => {
+        prisma.setting.upsert.mockResolvedValue(
+            row({
+                key: 'storage.oss.signedUrlTtlSeconds',
+                name: 'OSS 签名地址有效期（秒）',
+                value: 600,
+                description:
+                    '生成的 OSS 签名下载地址有效期（秒）。实际签发时上限为 300 秒。',
+                overridden: true,
+                updatedById: 'user_1',
+            }),
+        );
 
         const result = await service.update(
             'storage.oss.signedUrlTtlSeconds',
@@ -64,59 +192,44 @@ describe('SettingsService', () => {
             expect.objectContaining({
                 where: { key: 'storage.oss.signedUrlTtlSeconds' },
                 create: expect.objectContaining({
-                    name: 'OSS Signed URL TTL',
+                    name: 'OSS 签名地址有效期（秒）',
                     value: 600,
                     valueType: SettingValueType.NUMBER,
                     updatedById: 'user_1',
                 }),
+                update: {
+                    value: 600,
+                    overridden: true,
+                    updatedById: 'user_1',
+                },
             }),
         );
         expect(result.value).toBe(600);
         expect(result.isDefault).toBe(false);
+        expect(result.group).toBe('storage');
     });
 
-    it('rejects values that cannot be normalized to the requested type', async () => {
-        prisma.setting.findUnique.mockResolvedValue(null);
-        await expect(
-            service.update('attachments.maxImageSizeMb', {
-                value: 'not-a-number',
-                valueType: SettingValueType.NUMBER,
+    it('treats a seeded row as not overridden', async () => {
+        prisma.setting.findUnique.mockResolvedValue(
+            row({
+                key: 'storage.driver',
+                name: '存储驱动',
+                value: 'oss',
+                valueType: SettingValueType.STRING,
+                description: '启用中的附件存储驱动：local 或 oss。',
             }),
-        ).rejects.toBeInstanceOf(BadRequestException);
+        );
+
+        const entity = await service.findOne('storage.driver');
+
+        expect(entity.isDefault).toBe(true);
+        expect(entity).not.toHaveProperty('overridden');
     });
 
-    it('rejects unknown setting keys', async () => {
-        await expect(
-            service.update('custom.limit', {
-                value: 10,
-                valueType: SettingValueType.NUMBER,
-            }),
-        ).rejects.toBeInstanceOf(NotFoundException);
-    });
-
-    it('preserves existing metadata when only value is updated', async () => {
-        prisma.setting.findUnique.mockResolvedValue({
-            key: 'attachments.maxImageSizeMb',
-            name: 'Image Limit',
-            value: 8,
-            valueType: SettingValueType.NUMBER,
-            description: 'Custom description',
-            isSecret: false,
-            updatedById: 'user_1',
-            createdAt: new Date('2026-10-07T00:00:00.000Z'),
-            updatedAt: new Date('2026-10-07T00:00:00.000Z'),
-        });
-        prisma.setting.upsert.mockResolvedValue({
-            key: 'attachments.maxImageSizeMb',
-            name: 'Image Limit',
-            value: 12,
-            valueType: SettingValueType.NUMBER,
-            description: 'Custom description',
-            isSecret: false,
-            updatedById: 'user_2',
-            createdAt: new Date('2026-10-07T00:00:00.000Z'),
-            updatedAt: new Date('2026-10-08T00:00:00.000Z'),
-        });
+    it('never overwrites built-in metadata when only the value is updated', async () => {
+        prisma.setting.upsert.mockResolvedValue(
+            row({ value: 12, updatedById: 'user_2' }),
+        );
 
         await service.update(
             'attachments.maxImageSizeMb',
@@ -124,41 +237,118 @@ describe('SettingsService', () => {
             'user_2',
         );
 
-        expect(prisma.setting.upsert).toHaveBeenCalledWith(
-            expect.objectContaining({
-                update: expect.objectContaining({
-                    name: 'Image Limit',
-                    description: 'Custom description',
-                    isSecret: false,
-                }),
-            }),
-        );
+        const call = prisma.setting.upsert.mock.calls[0][0];
+        expect(call.update).toEqual({
+            value: 12,
+            overridden: true,
+            updatedById: 'user_2',
+        });
+        expect(call.update).not.toHaveProperty('name');
+        expect(call.update).not.toHaveProperty('description');
+        expect(call.update).not.toHaveProperty('valueType');
+        expect(call.update).not.toHaveProperty('isSecret');
     });
 
-    it('masks secret values in API entities', async () => {
-        prisma.setting.findUnique.mockResolvedValue({
-            key: 'storage.publicBaseUrl',
-            name: 'Secret URL',
-            value: 'https://example.com/private',
-            valueType: SettingValueType.STRING,
-            description: 'Secret setting',
-            isSecret: true,
-            updatedById: 'user_1',
-            createdAt: new Date('2026-10-07T00:00:00.000Z'),
-            updatedAt: new Date('2026-10-07T00:00:00.000Z'),
+    it('rejects values that cannot be normalized to the requested type', async () => {
+        await expect(
+            service.update('attachments.maxImageSizeMb', {
+                value: 'not-a-number',
+            }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+
+        await expect(
+            service.update('attachments.maxImageSizeMb', { value: null }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+
+        await expect(
+            service.update('develop.configGroup', { value: 'storage' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects malformed group lists', async () => {
+        await expect(
+            service.update('develop.configGroup', {
+                value: ['storage', 'storage'],
+            }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+
+        await expect(
+            service.update('develop.configGroup', { value: ['storage', '  '] }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+
+        await expect(
+            service.update('develop.configGroup', { value: [] }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('normalizes the stored group list on read', async () => {
+        prisma.setting.findUnique.mockResolvedValue(
+            row({
+                key: 'develop.configGroup',
+                name: '平台配置分组',
+                value: [' storage ', 'attachments', 'storage', 42],
+                valueType: SettingValueType.JSON,
+                description:
+                    '平台配置页的 tab 清单与顺序，填字符串数组，可任意增删分组。',
+            }),
+        );
+
+        await expect(
+            service.findOne('develop.configGroup'),
+        ).resolves.toMatchObject({
+            value: ['storage', 'attachments'],
+            group: 'develop',
         });
+        expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it('falls back to the built-in default when the stored group list is unusable', async () => {
+        prisma.setting.findUnique.mockResolvedValue(
+            row({
+                key: 'develop.configGroup',
+                name: '平台配置分组',
+                value: 'storage,attachments',
+                valueType: SettingValueType.JSON,
+                description:
+                    '平台配置页的 tab 清单与顺序，填字符串数组，可任意增删分组。',
+            }),
+        );
+
+        await expect(
+            service.findOne('develop.configGroup'),
+        ).resolves.toMatchObject({
+            value: ['system', 'smtp', 'develop', 'storage', 'attachments'],
+        });
+        expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it('rejects unknown setting keys', async () => {
+        await expect(
+            service.update('custom.limit', { value: 10 }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('never exposes secret values', async () => {
+        prisma.setting.findUnique.mockResolvedValue(
+            row({
+                key: 'storage.publicBaseUrl',
+                name: 'Secret URL',
+                value: 'https://example.com/private',
+                valueType: SettingValueType.STRING,
+                description: 'Secret setting',
+                isSecret: true,
+            }),
+        );
 
         await expect(
             service.findOne('storage.publicBaseUrl'),
         ).resolves.toMatchObject({
-            value: '********',
+            value: null,
             isSecret: true,
         });
     });
 
     it('validates known setting ranges and enums', async () => {
-        prisma.setting.findUnique.mockResolvedValue(null);
-
         await expect(
             service.update('storage.driver', { value: 'ftp' }),
         ).rejects.toBeInstanceOf(BadRequestException);
@@ -173,22 +363,8 @@ describe('SettingsService', () => {
     });
 
     it('caches runtime values and invalidates them after update', async () => {
-        prisma.setting.findUnique
-            .mockResolvedValueOnce({
-                value: 8,
-            })
-            .mockResolvedValueOnce(null);
-        prisma.setting.upsert.mockResolvedValue({
-            key: 'attachments.maxImageSizeMb',
-            name: 'Max Image Upload Size',
-            value: 16,
-            valueType: SettingValueType.NUMBER,
-            description: 'Maximum image upload size in MB.',
-            isSecret: false,
-            updatedById: 'user_1',
-            createdAt: new Date('2026-10-07T00:00:00.000Z'),
-            updatedAt: new Date('2026-10-07T00:00:00.000Z'),
-        });
+        prisma.setting.findUnique.mockResolvedValueOnce({ value: 8 });
+        prisma.setting.upsert.mockResolvedValue(row({ value: 16 }));
 
         await expect(
             service.getNumber('attachments.maxImageSizeMb', 1),

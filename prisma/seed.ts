@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
-import { PrismaClient } from '../src/generated/prisma/client';
+import { Prisma, PrismaClient } from '../src/generated/prisma/client';
 import { MonitorType } from '../src/generated/prisma/enums';
+import { missingSettingSeedRows } from '../src/modules/settings/settings.seed';
 
 const FREE_SUBSCRIPTION_EXPIRY = new Date('2099-12-31T23:59:59.000Z');
 
@@ -140,6 +141,28 @@ async function main() {
             allowStatusPage: true,
         },
     ];
+
+    // 平台基础配置（settings）：真源是 src/modules/settings/settings.defaults.ts，
+    // 这里只补库里还没有的行 —— 幂等，且绝不覆盖管理端改过的值。
+    const existingSettingKeys = await prisma.setting.findMany({
+        select: { key: true },
+    });
+    const missingSettings = missingSettingSeedRows(
+        existingSettingKeys.map((row) => row.key),
+    );
+
+    if (missingSettings.length > 0) {
+        await prisma.setting.createMany({
+            data: missingSettings.map((row) => ({
+                ...row,
+                value: row.value as Prisma.InputJsonValue,
+            })),
+            skipDuplicates: true,
+        });
+        console.log(`settings: added ${missingSettings.length} rows`);
+    } else {
+        console.log('settings: nothing to add');
+    }
 
     for (const plan of plans) {
         await prisma.plan.upsert({

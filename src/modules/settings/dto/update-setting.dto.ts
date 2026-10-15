@@ -1,21 +1,11 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-    IsBoolean,
-    IsDefined,
-    IsEnum,
-    IsOptional,
-    IsString,
-    MaxLength,
-} from 'class-validator';
-import { SettingValueType } from '../../../generated/prisma/enums';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsDefined } from 'class-validator';
 
+/**
+ * 只覆盖值：`name` / `description` / `group` / `valueType` / `isSecret`
+ * 全部由代码里的内置定义维护，不开放给接口修改。
+ */
 export class UpdateSettingDto {
-    @ApiPropertyOptional({ example: 'Storage Driver' })
-    @IsOptional()
-    @IsString()
-    @MaxLength(100)
-    name?: string;
-
     @ApiProperty({
         oneOf: [
             { type: 'string' },
@@ -25,25 +15,8 @@ export class UpdateSettingDto {
             { type: 'array', items: {} },
         ],
         examples: ['oss', 300, true, { enabled: true }],
+        description: '整值覆盖；不接受 null，清空字符串请传空串',
     })
     @IsDefined()
     value: unknown;
-
-    @ApiPropertyOptional({ enum: SettingValueType })
-    @IsOptional()
-    @IsEnum(SettingValueType)
-    valueType?: SettingValueType;
-
-    @ApiPropertyOptional({
-        example: 'Active attachment storage driver: local or oss.',
-    })
-    @IsOptional()
-    @IsString()
-    @MaxLength(500)
-    description?: string;
-
-    @ApiPropertyOptional({ example: false })
-    @IsOptional()
-    @IsBoolean()
-    isSecret?: boolean;
 }
