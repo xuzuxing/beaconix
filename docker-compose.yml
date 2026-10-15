@@ -8,13 +8,17 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: beaconix
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-beaconix}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d beaconix"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-beaconix}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -34,6 +38,41 @@ services:
       start_period: 10s
     volumes:
       - redis_data:/data
+
+  # Beacon API. Reuses the production image from ./Dockerfile, whose entrypoint
+  # runs `prisma migrate deploy` before booting the compiled server.
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Set NPM_REGISTRY in .env (e.g. https://registry.npmjs.org) when
+        # the default registry is unreachable from the build environment.
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    image: beaconix-app
+    container_name: beaconix-app
+    restart: unless-stopped
+    # Everything (JWT secrets, Resend, WeChat, OSS, ...) comes from .env; the
+    # values below are the ones that must point at the compose network instead
+    # of the host, so they are overridden here.
+    env_file:
+      - .env
+    environment:
+      PORT: 3000
+      APP_WEB_URL: ${APP_WEB_URL:-http://localhost:5173}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-beaconix}?schema=public&sslmode=disable
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Uploaded attachments and private files must survive container rebuilds.
+      - ./storage:/app/storage
+      - ./logs:/app/logs
 
 volumes:
   postgres_data:

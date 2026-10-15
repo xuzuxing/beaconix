@@ -1,12 +1,29 @@
 
+# Registry used to fetch the package manager and install dependencies.
+# Override for restricted networks, e.g.
+#   docker build --build-arg NPM_REGISTRY=https://registry.npmjs.org .
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
+
 # Stage 1: Install dependencies
 FROM node:22-alpine AS deps
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+ARG NPM_REGISTRY
+ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
+    npm_config_registry=$NPM_REGISTRY
+
+# `corepack enable` installs the pnpm version pinned by package.json's
+# `packageManager` field, which is the one pnpm-lock.yaml was resolved with.
+# Do not use `corepack prepare pnpm@latest`: it fetches the registry dist-tags
+# on every build and can activate a pnpm other than the pinned one.
+RUN corepack enable
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml ./
+# pnpm-workspace.yaml carries the overrides and allowBuilds allowlist the
+# lockfile was resolved with — without it --frozen-lockfile fails and native
+# postinstall steps (prisma, bcrypt, esbuild) are skipped.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
 RUN pnpm install --frozen-lockfile
 
@@ -14,7 +31,11 @@ RUN pnpm install --frozen-lockfile
 # Stage 2: Build
 FROM node:22-alpine AS builder
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+ARG NPM_REGISTRY
+ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
+    npm_config_registry=$NPM_REGISTRY
+
+RUN corepack enable
 
 WORKDIR /app
 
@@ -39,7 +60,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable
 
 # Compiled app
 COPY --from=builder /app/dist ./dist
@@ -59,8 +80,8 @@ COPY package.json ./
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD wget -qO- http://localhost:3000/api || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD wget -qO- http://localhost:3000/api/health/live || exit 1
 
 # Run migrations first, then start the server
 # DATABASE_URL is injected by Render at container startup — not available at build time
