@@ -1,7 +1,7 @@
 import { Transform } from 'class-transformer';
-import { IsIn, IsInt, IsString, Max, Min } from 'class-validator';
+import { IsIn, IsInt, Max, Min } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { BadRequestException } from '@nestjs/common';
+import { QueryTimezoneDto } from '../../../common/dto/query-timezone.dto';
 import type { MonitoringRange } from '../monitoring-window.util';
 
 const integer = ({
@@ -15,28 +15,7 @@ const integer = ({
         ? Number(obj[key])
         : NaN;
 
-export class MonitoringTimezoneDto {
-    @ApiPropertyOptional({
-        default: 'Asia/Shanghai',
-        description: 'IANA time zone',
-    })
-    @IsString()
-    @Transform(({ value }: { value: unknown }) => {
-        if (typeof value !== 'string' || !value || /^[+-]/.test(value)) {
-            throw new BadRequestException('tz must be an IANA time zone');
-        }
-        try {
-            return new Intl.DateTimeFormat('en', {
-                timeZone: value,
-            }).resolvedOptions().timeZone;
-        } catch {
-            throw new BadRequestException('Invalid IANA time zone');
-        }
-    })
-    tz = 'Asia/Shanghai';
-}
-
-export class QueryMonitoringDashboardDto extends MonitoringTimezoneDto {
+export class QueryMonitoringDashboardDto extends QueryTimezoneDto {
     @ApiPropertyOptional({ enum: ['1h', 'today', '7d', '30d'], default: '1h' })
     @IsIn(['1h', 'today', '7d', '30d'])
     range: MonitoringRange = '1h';
@@ -54,7 +33,7 @@ export class QueryMonitoringDashboardDto extends MonitoringTimezoneDto {
     alertLimit = 10;
 }
 
-export class QueryMonitoringAvailabilityDto extends MonitoringTimezoneDto {
+export class QueryMonitoringAvailabilityDto extends QueryTimezoneDto {
     @ApiPropertyOptional({ default: 30, minimum: 1, maximum: 30 })
     @Transform(integer)
     @IsInt()
@@ -63,7 +42,7 @@ export class QueryMonitoringAvailabilityDto extends MonitoringTimezoneDto {
     days = 30;
 }
 
-export class QueryMonitoringStatusCodesDto extends MonitoringTimezoneDto {
+export class QueryMonitoringStatusCodesDto extends QueryTimezoneDto {
     @ApiPropertyOptional({ default: 12, minimum: 1, maximum: 48 })
     @Transform(integer)
     @IsInt()

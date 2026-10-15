@@ -40,6 +40,98 @@ export class StatusPageEntity {
     }
 }
 
+export class PublicMonitorAvailabilityHistoryEntity {
+    @ApiProperty({ example: 90 })
+    retentionDays: number;
+
+    @ApiProperty({ example: '2026-07-12T18:32:00.000+08:00' })
+    availableFrom: string;
+
+    @ApiProperty({ enum: ['AVAILABLE', 'TRUNCATED'], example: 'AVAILABLE' })
+    status: string;
+
+    constructor(partial: Partial<PublicMonitorAvailabilityHistoryEntity>) {
+        Object.assign(this, partial);
+    }
+}
+
+export class PublicMonitorAvailabilityWorstEntity {
+    @ApiProperty({ example: '2026-10-10' })
+    day: string;
+
+    @ApiProperty({ example: 18 })
+    hour: number;
+
+    @ApiProperty({ example: 50 })
+    value: number;
+}
+
+export class PublicMonitorAvailabilityEntity {
+    @ApiProperty({ example: 'Asia/Shanghai' })
+    tz: string;
+
+    @ApiProperty({
+        example: '2026-10-10T18:32:00.000+08:00',
+        description: 'Aggregation snapshot, expressed in the requested zone',
+    })
+    asOf: string;
+
+    @ApiProperty({ example: '2026-10-08' })
+    from: string;
+
+    @ApiProperty({ example: '2026-10-10' })
+    to: string;
+
+    @ApiProperty({ type: PublicMonitorAvailabilityHistoryEntity })
+    history: PublicMonitorAvailabilityHistoryEntity;
+
+    @ApiProperty({
+        type: [Number],
+        example: [0, 1, 2, 3],
+        description: 'Local hours 0-23',
+    })
+    hours: number[];
+
+    @ApiProperty({
+        type: [String],
+        example: ['2026-10-08', '2026-10-09', '2026-10-10'],
+        description: 'Local dates, oldest first',
+    })
+    days: string[];
+
+    @ApiProperty({
+        type: 'array',
+        items: { type: 'array', items: { type: 'number' } },
+        example: [
+            [0, 0, 100],
+            [18, 2, 50],
+        ],
+        description:
+            '[hourIndex, dayIndex, uptimePercent]; hours without samples are absent',
+    })
+    cells: number[][];
+
+    @ApiProperty({
+        type: 'array',
+        items: { type: 'array', items: { type: 'number' } },
+        example: [[3, 0]],
+        description:
+            '[hourIndex, dayIndex] cells whose interval reaches before the reliable history start',
+    })
+    unavailableCells: number[][];
+
+    @ApiPropertyOptional({
+        type: PublicMonitorAvailabilityWorstEntity,
+        nullable: true,
+        description: 'Lowest cell of the grid; null when the grid has no cells',
+    })
+    worst: PublicMonitorAvailabilityWorstEntity | null;
+
+    constructor(partial: Partial<PublicMonitorAvailabilityEntity>) {
+        Object.assign(this, partial);
+    }
+}
+
 export class PublicStatusPageMonitorEntity {
     @ApiProperty({ example: 'uuid-monitor' })
     id: string;
@@ -73,6 +165,13 @@ export class PublicStatusPageMonitorEntity {
         description: 'Present when the page has showUptime enabled',
     })
     uptimePercent?: number | null;
+
+    @ApiPropertyOptional({
+        type: PublicMonitorAvailabilityEntity,
+        description:
+            'Hourly LOCAL availability of the last 3 local days. Present when the page has showUptime enabled.',
+    })
+    availability?: PublicMonitorAvailabilityEntity;
 
     constructor(partial: Partial<PublicStatusPageMonitorEntity>) {
         Object.assign(this, partial);

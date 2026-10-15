@@ -1,5 +1,4 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Temporal } from '@js-temporal/polyfill';
 import { Prisma } from '../../generated/prisma/client';
 import { MonitorType } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infra/database/prisma.service';
@@ -15,11 +14,20 @@ import {
     DAY_MS,
     HOUR_MS,
     iso,
-    localHourIntervals,
     monitoringWindow,
     roundPercent,
-    zoned,
 } from './monitoring-window.util';
+import {
+    availabilityDays,
+    availabilityHistory,
+    availabilityWindowStart,
+    availabilityBucketKey,
+    AVAILABILITY_HOURS,
+    buildAvailabilityGrid,
+    indexHourlyRows,
+    projectHourlyRowsSql,
+} from './availability.util';
+import type { HourlyAvailabilityRow } from './availability.util';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { monitoringProjection } from '../../common/authorization/monitoring-projection';
@@ -685,76 +693,45 @@ export class MonitoringDashboardService {
             300,
             async (tx, asOf) => {
                 const { tz, days: count } = query;
-                const today = zoned(asOf, tz).toPlainDate();
-                const days = Array.from({ length: count }, (_, i) =>
-                    today.subtract({ days: count - i - 1 }).toString(),
-                );
-                const earliest = Temporal.PlainDate.from(
-                    days[0],
-                ).toZonedDateTime(tz);
-                const from = new Date(earliest.epochMilliseconds);
+                const days = availabilityDays(tz, asOf, count);
+                const from = availabilityWindowStart(days, tz);
                 const water = await this.coverage(tx, projectId, asOf);
-                const rows = await tx.$queryRaw<
-                    {
-                        day: string;
-                        hour: number;
-                        checks: number;
-                        successes: number;
-                    }[]
-                >`
-                SELECT to_char("checkedAt" AT TIME ZONE 'UTC' AT TIME ZONE ${tz},'YYYY-MM-DD') AS day,
-                extract(hour FROM "checkedAt" AT TIME ZONE 'UTC' AT TIME ZONE ${tz})::integer AS hour,
-                COUNT(*)::integer AS checks, COUNT(*) FILTER (WHERE success)::integer AS successes
-                FROM check_logs WHERE "projectId" = ${projectId} AND source = 'LOCAL' AND evaluated = true
-                AND "checkedAt" >= ${maximumDate(from, water.checks)} AND "checkedAt" < ${asOf} GROUP BY day,hour`;
-                const unavailableCells: number[][] = [];
-                const cells: number[][] = [];
-                days.forEach((day, index) => {
-                    const intervals = localHourIntervals(day, tz, asOf);
-                    for (let hour = 0; hour < 24; hour++) {
-                        const selected = intervals.filter(
-                            (i) => i.hour === hour,
-                        );
-                        if (!selected.length) continue;
-                        if (selected.some((i) => i.from < water.checks)) {
-                            unavailableCells.push([hour, index]);
-                            continue;
-                        }
-                        const row = rows.find(
-                            (r) => r.day === day && r.hour === hour,
-                        );
-                        if (row)
-                            cells.push([
-                                hour,
-                                index,
-                                roundPercent(
-                                    (100 * row.successes) / row.checks,
-                                ),
-                            ]);
-                    }
+                const rows = await tx.$queryRaw<HourlyAvailabilityRow[]>(
+                    projectHourlyRowsSql({
+                        projectId,
+                        tz,
+                        from: maximumDate(from, water.checks),
+                        asOf,
+                    }),
+                );
+                const buckets = indexHourlyRows(rows);
+                const grid = buildAvailabilityGrid({
+                    days,
+                    tz,
+                    asOf,
+                    availableFrom: water.checks,
+                    lookup: (day, hour) =>
+                        buckets.get(availabilityBucketKey(day, hour)),
                 });
-                const worst = [...cells].sort(
-                    (a, b) => a[2] - b[2] || a[1] - b[1] || a[0] - b[0],
-                )[0];
                 return {
                     tz,
                     asOf: iso(asOf, tz),
                     from: days[0],
                     to: days[days.length - 1],
-                    history: {
-                        retentionDays: 90,
-                        availableFrom: iso(water.checks, tz),
-                        status: from < water.checks ? 'TRUNCATED' : 'AVAILABLE',
-                    },
-                    hours: Array.from({ length: 24 }, (_, i) => i),
+                    history: availabilityHistory({
+                        tz,
+                        from,
+                        availableFrom: water.checks,
+                    }),
+                    hours: AVAILABILITY_HOURS,
                     days,
-                    cells,
-                    unavailableCells,
-                    worst: worst
+                    cells: grid.cells,
+                    unavailableCells: grid.unavailableCells,
+                    worst: grid.worst
                         ? {
-                              day: days[worst[1]],
-                              hour: worst[0],
-                              value: worst[2],
+                              day: days[grid.worst[1]],
+                              hour: grid.worst[0],
+                              value: grid.worst[2],
                           }
                         : null,
                 };

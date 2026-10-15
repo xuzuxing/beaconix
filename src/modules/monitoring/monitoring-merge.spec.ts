@@ -29,8 +29,14 @@ function fixture() {
     const tx = {
         $executeRaw: jest.fn(),
         $queryRaw: jest.fn(
-            (strings: TemplateStringsArray, ...values: unknown[]) => {
-                const sql = Prisma.sql(strings, ...values).sql;
+            (
+                first: TemplateStringsArray | Prisma.Sql,
+                ...values: unknown[]
+            ) => {
+                // Prisma accepts both the tag form and a prebuilt Prisma.Sql.
+                const sql = Array.isArray(first)
+                    ? Prisma.sql(first, ...values).sql
+                    : (first as Prisma.Sql).sql;
                 queries.push(sql);
                 if (sql.includes('clock_timestamp')) return [{ at: asOf }];
                 if (sql.includes('FROM check_logs')) {

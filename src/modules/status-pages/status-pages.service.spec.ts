@@ -3,11 +3,14 @@ import {
     ConflictException,
     NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import {
     StatusPagesService,
     deriveOverallStatus,
 } from './status-pages.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
+
+const AS_OF = new Date('2026-03-05T12:00:00.000Z');
 
 const statusPageRow = {
     id: 'page-1',
@@ -57,7 +60,61 @@ const monitorRow = {
     },
 };
 
-function createService() {
+const monitor = (overrides: Record<string, unknown> = {}) => ({
+    ...monitorRow,
+    ...overrides,
+});
+
+interface Fixture {
+    asOf?: Date;
+    uptimeRows?: { monitorId: string; checks: number; successes: number }[];
+    availabilityRows?: {
+        monitorId: string;
+        day: string;
+        hour: number;
+        checks: number;
+        successes: number;
+    }[];
+    coverage?: { projectId: string; checksStartedAt: Date }[];
+}
+
+/** Raw SQL text of a `$queryRaw` call, whichever calling form was used. */
+function sqlOf(call: unknown[]): string {
+    const [first, ...values] = call;
+    return Array.isArray(first)
+        ? Prisma.sql(first, ...values).sql
+        : (first as Prisma.Sql).sql;
+}
+
+function createService(fixture: Fixture = {}) {
+    const asOf = fixture.asOf ?? AS_OF;
+    const tx = {
+        $executeRaw: jest.fn().mockResolvedValue(1),
+        $queryRaw: jest.fn(
+            (
+                first: TemplateStringsArray | Prisma.Sql,
+                ...values: unknown[]
+            ) => {
+                const sql = sqlOf([first, ...values]);
+                if (sql.includes('clock_timestamp')) {
+                    return Promise.resolve([{ at: asOf }]);
+                }
+                if (sql.includes('FROM check_logs')) {
+                    return Promise.resolve(
+                        sql.includes('to_char(')
+                            ? (fixture.availabilityRows ?? [])
+                            : (fixture.uptimeRows ?? []),
+                    );
+                }
+                return Promise.resolve([]);
+            },
+        ),
+        monitor: { findMany: jest.fn() },
+        monitoringCoverage: {
+            findMany: jest.fn().mockResolvedValue(fixture.coverage ?? []),
+        },
+    };
+
     const prisma = {
         statusPage: {
             create: jest.fn(),
@@ -68,18 +125,25 @@ function createService() {
             delete: jest.fn(),
         },
         monitor: { findMany: jest.fn() },
-        checkLog: { count: jest.fn() },
+        $transaction: jest.fn((callback: (value: typeof tx) => unknown) =>
+            callback(tx),
+        ),
     };
-    const billingService = {
+
+    const quotaService = {
         assertFeatureAllowed: jest.fn().mockResolvedValue(undefined),
+    };
+    const cache = {
+        getOrSet: (_key: string, factory: () => unknown) => factory(),
     };
 
     const service = new StatusPagesService(
         prisma as unknown as PrismaService,
-        billingService as never,
+        quotaService as never,
+        cache as never,
     );
 
-    return { service, prisma, billingService };
+    return { service, prisma, tx, quotaService, cache };
 }
 
 describe('deriveOverallStatus', () => {
@@ -173,36 +237,58 @@ describe('StatusPagesService', () => {
                 }),
             ).rejects.toThrow(ConflictException);
         });
+
+        it('rejects more visible monitors than a page may expose', async () => {
+            const { service, prisma } = createService();
+
+            await expect(
+                service.create('org-1', {
+                    title: 'Acme status',
+                    visibleMonitorIds: Array.from(
+                        { length: 101 },
+                        (_, index) => `monitor-${index}`,
+                    ),
+                }),
+            ).rejects.toThrow(BadRequestException);
+            expect(prisma.monitor.findMany).not.toHaveBeenCalled();
+        });
     });
 
     describe('getPublicBySlug', () => {
-        it('excludes execution blocks from public uptime', async () => {
-            const { service, prisma } = createService();
+        it('derives the 24h uptime per monitor from one aggregate', async () => {
+            const { service, prisma, tx } = createService({
+                uptimeRows: [
+                    { monitorId: 'monitor-1', checks: 10, successes: 9 },
+                ],
+            });
             prisma.statusPage.findUnique.mockResolvedValue({
                 ...statusPageRow,
                 showUptime: true,
             });
-            prisma.monitor.findMany.mockResolvedValue([monitorRow]);
-            prisma.checkLog.count.mockImplementation(({ where }) =>
-                Promise.resolve(
-                    where.evaluated ? (where.success ? 9 : 10) : 20,
-                ),
-            );
+            tx.monitor.findMany.mockResolvedValue([monitorRow]);
+
             const result = await service.getPublicBySlug('acme-status');
+
             expect(result.monitors[0].uptimePercent).toBe(90);
-            expect(prisma.checkLog.count).toHaveBeenCalledWith({
-                where: expect.objectContaining({ evaluated: true }),
-            });
+            const sqls = tx.$queryRaw.mock.calls.map(sqlOf);
+            const aggregates = sqls.filter((sql) =>
+                sql.includes('FROM check_logs'),
+            );
+            expect(aggregates).toHaveLength(2);
+            const uptime = aggregates.find((sql) => !sql.includes('to_char('));
+            // Same sample rule as before: LOCAL and probe rows alike.
+            expect(uptime).toContain('evaluated = true');
+            expect(uptime).not.toContain('source =');
         });
-        it('returns the public page with only visible monitors', async () => {
-            const { service, prisma } = createService();
+
+        it('skips uptime and availability entirely when showUptime is off', async () => {
+            const { service, prisma, tx } = createService();
             prisma.statusPage.findUnique.mockResolvedValue(statusPageRow);
-            prisma.monitor.findMany.mockResolvedValue([monitorRow]);
-            prisma.checkLog.count.mockResolvedValue(0);
+            tx.monitor.findMany.mockResolvedValue([monitorRow]);
 
             const result = await service.getPublicBySlug('acme-status');
 
-            expect(prisma.monitor.findMany).toHaveBeenCalledWith({
+            expect(tx.monitor.findMany).toHaveBeenCalledWith({
                 where: {
                     id: { in: ['monitor-1'] },
                     organizationId: 'org-1',
@@ -220,6 +306,10 @@ describe('StatusPagesService', () => {
             expect(result.monitors).toHaveLength(1);
             expect(result.monitors[0].latency).toBe(30);
             expect(result.monitors[0].uptimePercent).toBeUndefined();
+            expect(result.monitors[0].availability).toBeUndefined();
+            // Only the snapshot clock, no aggregate at all.
+            expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+            expect(tx.monitoringCoverage.findMany).not.toHaveBeenCalled();
         });
 
         it('hides disabled pages with a not-found error', async () => {
@@ -235,9 +325,9 @@ describe('StatusPagesService', () => {
         });
 
         it('filters deleted organizations and projects while stripping target credentials', async () => {
-            const { service, prisma } = createService();
+            const { service, prisma, tx } = createService();
             prisma.statusPage.findUnique.mockResolvedValue(statusPageRow);
-            prisma.monitor.findMany.mockResolvedValue([
+            tx.monitor.findMany.mockResolvedValue([
                 {
                     ...monitorRow,
                     target: 'https://user:password@api.test/health?token=private-secret',
@@ -250,15 +340,170 @@ describe('StatusPagesService', () => {
                     organization: { deletedAt: null },
                 },
             });
-            expect(
-                prisma.monitor.findMany.mock.calls[0][0].where.project,
-            ).toEqual({
+            expect(tx.monitor.findMany.mock.calls[0][0].where.project).toEqual({
                 organizationId: 'org-1',
                 deletedAt: null,
                 organization: { deletedAt: null },
             });
             expect(JSON.stringify(result)).not.toContain('private-secret');
             expect(JSON.stringify(result)).not.toContain('password');
+        });
+
+        it('builds the hourly availability grid of the last 3 local days', async () => {
+            const { service, prisma, tx } = createService({
+                coverage: [
+                    {
+                        projectId: 'project-1',
+                        checksStartedAt: new Date('2026-01-01T00:00:00.000Z'),
+                    },
+                ],
+                availabilityRows: [
+                    {
+                        monitorId: 'monitor-1',
+                        day: '2026-03-03',
+                        hour: 0,
+                        checks: 4,
+                        successes: 3,
+                    },
+                    {
+                        monitorId: 'monitor-1',
+                        day: '2026-03-05',
+                        hour: 1,
+                        checks: 2,
+                        successes: 2,
+                    },
+                ],
+            });
+            prisma.statusPage.findUnique.mockResolvedValue({
+                ...statusPageRow,
+                showUptime: true,
+            });
+            tx.monitor.findMany.mockResolvedValue([monitorRow]);
+
+            const result = await service.getPublicBySlug('acme-status', 'UTC');
+            const availability = result.monitors[0].availability!;
+
+            expect(availability.tz).toBe('UTC');
+            expect(availability.days).toEqual([
+                '2026-03-03',
+                '2026-03-04',
+                '2026-03-05',
+            ]);
+            expect(availability.hours).toHaveLength(24);
+            expect(availability.cells).toEqual([
+                [0, 0, 75],
+                [1, 2, 100],
+            ]);
+            expect(availability.unavailableCells).toEqual([]);
+            expect(availability.worst).toEqual({
+                day: '2026-03-03',
+                hour: 0,
+                value: 75,
+            });
+            expect(availability.history).toEqual(
+                expect.objectContaining({
+                    retentionDays: 90,
+                    status: 'AVAILABLE',
+                }),
+            );
+        });
+
+        it('reports hours that reach before the project watermark as unavailable', async () => {
+            const { service, prisma, tx } = createService({
+                coverage: [
+                    {
+                        projectId: 'project-1',
+                        checksStartedAt: new Date('2026-03-04T10:30:00.000Z'),
+                    },
+                ],
+            });
+            prisma.statusPage.findUnique.mockResolvedValue({
+                ...statusPageRow,
+                showUptime: true,
+            });
+            tx.monitor.findMany.mockResolvedValue([monitorRow]);
+
+            const result = await service.getPublicBySlug('acme-status', 'UTC');
+            const availability = result.monitors[0].availability!;
+
+            // 03-04 10:00-11:00 still reaches before 10:30, 11:00-12:00 does not.
+            expect(availability.unavailableCells).toContainEqual([10, 1]);
+            expect(availability.unavailableCells).not.toContainEqual([11, 1]);
+            expect(availability.unavailableCells).toContainEqual([23, 0]);
+            expect(availability.cells).toEqual([]);
+            expect(availability.history.status).toBe('TRUNCATED');
+        });
+
+        it('truncates every monitor against the watermark of its own project', async () => {
+            const { service, prisma, tx } = createService({
+                coverage: [
+                    {
+                        projectId: 'project-1',
+                        checksStartedAt: new Date('2026-03-04T10:30:00.000Z'),
+                    },
+                    {
+                        projectId: 'project-2',
+                        checksStartedAt: new Date('2026-01-01T00:00:00.000Z'),
+                    },
+                ],
+                availabilityRows: [
+                    {
+                        monitorId: 'monitor-1',
+                        day: '2026-03-04',
+                        hour: 12,
+                        checks: 2,
+                        successes: 1,
+                    },
+                    {
+                        monitorId: 'monitor-2',
+                        day: '2026-03-04',
+                        hour: 12,
+                        checks: 2,
+                        successes: 2,
+                    },
+                ],
+            });
+            prisma.statusPage.findUnique.mockResolvedValue({
+                ...statusPageRow,
+                visibleMonitorIds: ['monitor-1', 'monitor-2'],
+                showUptime: true,
+            });
+            tx.monitor.findMany.mockResolvedValue([
+                monitorRow,
+                monitor({ id: 'monitor-2', projectId: 'project-2' }),
+            ]);
+
+            const result = await service.getPublicBySlug('acme-status', 'UTC');
+
+            expect(result.monitors[0].availability!.history.status).toBe(
+                'TRUNCATED',
+            );
+            expect(result.monitors[1].availability!.history.status).toBe(
+                'AVAILABLE',
+            );
+            expect(result.monitors[0].availability!.cells).toEqual([
+                [12, 1, 50],
+            ]);
+            expect(result.monitors[1].availability!.cells).toEqual([
+                [12, 1, 100],
+            ]);
+        });
+
+        it('credits no history to a monitor whose project has no coverage row', async () => {
+            const { service, prisma, tx } = createService();
+            prisma.statusPage.findUnique.mockResolvedValue({
+                ...statusPageRow,
+                showUptime: true,
+            });
+            tx.monitor.findMany.mockResolvedValue([monitorRow]);
+
+            const result = await service.getPublicBySlug('acme-status', 'UTC');
+            const availability = result.monitors[0].availability!;
+
+            // Every hour that already started is unreachable: 24 + 24 + 12.
+            expect(availability.unavailableCells).toHaveLength(60);
+            expect(availability.cells).toEqual([]);
+            expect(availability.history.status).toBe('TRUNCATED');
         });
     });
 });
