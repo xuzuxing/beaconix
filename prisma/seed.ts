@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 import { Prisma, PrismaClient } from '../src/generated/prisma/client';
 import { MonitorType } from '../src/generated/prisma/enums';
 import { missingSettingSeedRows } from '../src/modules/settings/settings.seed';
+import { missingTicketCategorySeeds } from '../src/modules/tickets/ticket-categories.seed';
 
 const FREE_SUBSCRIPTION_EXPIRY = new Date('2099-12-31T23:59:59.000Z');
 
@@ -170,6 +171,27 @@ async function main() {
             update: plan,
             create: plan,
         });
+    }
+
+    // 工单分类（平台级字典）：只补库里还没有的分类名 —— 幂等，且绝不覆盖
+    // 管理端改过的名字、描述、排序与启停状态。
+    const existingTicketCategoryNames = await prisma.ticketCategory.findMany({
+        select: { name: true },
+    });
+    const missingTicketCategories = missingTicketCategorySeeds(
+        existingTicketCategoryNames.map((row) => row.name),
+    );
+
+    if (missingTicketCategories.length > 0) {
+        await prisma.ticketCategory.createMany({
+            data: missingTicketCategories,
+            skipDuplicates: true,
+        });
+        console.log(
+            `ticket categories: added ${missingTicketCategories.length} rows`,
+        );
+    } else {
+        console.log('ticket categories: nothing to add');
     }
 
     // Ensure every organization has the FREE fallback subscription.
