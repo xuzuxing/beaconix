@@ -45,6 +45,7 @@ enum AttachmentVisibility {
   UNKNOWN
   PRIVATE
   EXTERNAL
+  PUBLIC
 }
 
 enum ProjectStatus {
@@ -717,15 +718,26 @@ model Attachment {
   checksum     String?
   source       AttachmentSource @default(UPLOAD)
   visibility AttachmentVisibility @default(UNKNOWN)
-  taskId       String
-  uploadedById String?
+
+  // At most one host may claim an attachment — a task, a ticket or a ticket
+  // reply. General uploads land with all three empty until a business flow
+  // claims them by fileKey.
+  taskId        String?
+  ticketId      String?
+  ticketReplyId String?
+  uploadedById  String?
 
   createdAt DateTime @default(now())
 
-  task       Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  uploadedBy User? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  task        Task?        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  ticket      Ticket?      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticketReply TicketReply? @relation(fields: [ticketReplyId], references: [id], onDelete: Cascade)
+  uploadedBy  User?        @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
 
   @@index([taskId])
+  @@index([ticketId])
+  @@index([ticketReplyId])
+  @@index([fileKey])
   @@map("attachments")
 }
 
@@ -1644,6 +1656,7 @@ model Ticket {
   category     TicketCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   replies      TicketReply[]
   activities   TicketActivity[]
+  attachments  Attachment[]
 
   @@index([authorId, createdAt])
   @@index([status, createdAt])
@@ -1667,6 +1680,8 @@ model TicketReply {
 
   ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   author User   @relation("TicketReplyAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  attachments Attachment[]
 
   @@index([ticketId, createdAt])
   @@index([authorId])

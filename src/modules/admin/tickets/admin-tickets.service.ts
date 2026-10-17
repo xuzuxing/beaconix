@@ -11,6 +11,7 @@ import type {
 } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import type { AppConfig } from '../../../config';
+import { AttachmentsService } from '../../attachments/attachments.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import {
     AdminTicketReplyDto,
@@ -46,6 +47,7 @@ const ticketInclude = {
     category: true,
     author: { select: { ...userSelect, email: true } },
     assignee: { select: userSelect },
+    attachments: true,
 } as const;
 
 export interface AdminTicketStats {
@@ -62,6 +64,7 @@ export class AdminTicketsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notifications: NotificationsService,
+        private readonly attachments: AttachmentsService,
         configService: ConfigService,
     ) {
         this.webUrl = configService.get<AppConfig>('app')!.webUrl;
@@ -84,7 +87,18 @@ export class AdminTicketsService {
             this.prisma.ticket.count({ where }),
         ]);
         return {
-            items: items.map((ticket) => new TicketEntity(ticket)),
+            items: await Promise.all(
+                items.map(
+                    async (ticket) =>
+                        new TicketEntity({
+                            ...ticket,
+                            attachments:
+                                await this.attachments.toTicketAttachmentRefs(
+                                    ticket.attachments,
+                                ),
+                        }),
+                ),
+            ),
             total,
             page,
             limit,
@@ -145,7 +159,7 @@ export class AdminTicketsService {
                 where: { ticketId },
                 orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
                 take: TICKET_TIMELINE_LIMIT,
-                include: { author: { select: userSelect } },
+                include: { author: { select: userSelect }, attachments: true },
             }),
             this.prisma.ticketActivity.findMany({
                 where: { ticketId },
@@ -155,9 +169,24 @@ export class AdminTicketsService {
             }),
         ]);
 
+        // The staff view keeps internal notes and their attachments.
+        const timelineReplies = await Promise.all(
+            replies.map(async (reply) => ({
+                ...reply,
+                attachments: await this.attachments.toTicketAttachmentRefs(
+                    reply.attachments,
+                ),
+            })),
+        );
+
         return {
-            ...new TicketEntity(ticket),
-            timeline: mergeTimeline(replies, activities),
+            ...new TicketEntity({
+                ...ticket,
+                attachments: await this.attachments.toTicketAttachmentRefs(
+                    ticket.attachments,
+                ),
+            }),
+            timeline: mergeTimeline(timelineReplies, activities),
             timelineTruncated:
                 replies.length >= TICKET_TIMELINE_LIMIT ||
                 activities.length >= TICKET_TIMELINE_LIMIT,
@@ -176,7 +205,7 @@ export class AdminTicketsService {
             throw new BadRequestException('At least one field is required');
         }
 
-        return this.prisma.$transaction(async (tx) => {
+        const result = await this.prisma.$transaction(async (tx) => {
             const ticket = await this.requireTicket(ticketId, tx);
             const data: Prisma.TicketUncheckedUpdateInput = {};
             const activities: TicketActivityInput[] = [];
@@ -281,7 +310,7 @@ export class AdminTicketsService {
             }
 
             // Same-value PATCH is idempotent: no write, no timeline, no notice.
-            if (!Object.keys(data).length) return new TicketEntity(ticket);
+            if (!Object.keys(data).length) return ticket;
 
             const updated = await tx.ticket.update({
                 where: { id: ticketId },
@@ -309,12 +338,19 @@ export class AdminTicketsService {
                 });
             }
 
-            return new TicketEntity(updated);
+            return updated;
+        });
+
+        return new TicketEntity({
+            ...result,
+            attachments: await this.attachments.toTicketAttachmentRefs(
+                result.attachments,
+            ),
         });
     }
 
     async reply(ticketId: string, actorId: string, dto: AdminTicketReplyDto) {
-        return this.prisma.$transaction(async (tx) => {
+        const created = await this.prisma.$transaction(async (tx) => {
             const ticket = await this.requireTicket(ticketId, tx);
             const isInternalNote = dto.isInternalNote === true;
 
@@ -328,6 +364,12 @@ export class AdminTicketsService {
                 },
                 include: { author: { select: userSelect } },
             });
+            const attachments = await this.attachments.claimForTicket(
+                tx,
+                dto.attachments,
+                { ticketReplyId: reply.id },
+                actorId,
+            );
 
             // The first public reply picks the ticket up. The transition is not
             // written to the timeline — the reply itself is the evidence.
@@ -354,11 +396,23 @@ export class AdminTicketsService {
                 isInternalNote,
             });
 
-            return {
-                ticket: new TicketEntity(current),
-                reply: new TicketReplyEntity(reply),
-            };
+            return { ticket: current, reply, attachments };
         });
+
+        return {
+            ticket: new TicketEntity({
+                ...created.ticket,
+                attachments: await this.attachments.toTicketAttachmentRefs(
+                    created.ticket.attachments,
+                ),
+            }),
+            reply: new TicketReplyEntity({
+                ...created.reply,
+                attachments: await this.attachments.toTicketAttachmentRefs(
+                    created.attachments,
+                ),
+            }),
+        };
     }
 
     /** Soft-deletes a spam/test ticket. No timeline entry, no notification. */

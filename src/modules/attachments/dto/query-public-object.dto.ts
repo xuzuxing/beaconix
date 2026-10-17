@@ -1,5 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+    IsEnum,
+    IsInt,
+    IsOptional,
+    IsString,
+    MaxLength,
+} from 'class-validator';
 
 export class QueryPublicObjectDto {
     @ApiProperty({
@@ -19,4 +26,21 @@ export class QueryPublicObjectDto {
     @IsString()
     @MaxLength(512)
     bucket?: string;
+
+    @ApiPropertyOptional({
+        description: 'Signed link expiry (unix seconds); set together with sig',
+        example: 1760000000,
+    })
+    @IsOptional()
+    @Type(() => Number)
+    @IsInt()
+    exp?: number;
+
+    @ApiPropertyOptional({
+        description: 'Signed link signature issued by the API',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(128)
+    sig?: string;
 }

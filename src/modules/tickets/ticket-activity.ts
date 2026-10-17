@@ -3,6 +3,7 @@ import type {
     TicketActivityType,
     TicketAuthorType,
 } from '../../generated/prisma/enums';
+import type { TicketAttachmentRef } from '../attachments/attachment-limits';
 
 /**
  * Minimal database surface this module needs. Keeping it structural (instead of
@@ -35,6 +36,7 @@ export interface TicketReplyTimelineItem {
     author: TicketTimelineActor | null;
     body: string;
     isInternalNote: boolean;
+    attachments: TicketAttachmentRef[];
     createdAt: Date;
 }
 
@@ -59,6 +61,7 @@ export interface TicketReplyRow {
     authorType: TicketAuthorType;
     body: string;
     isInternalNote: boolean;
+    attachments?: TicketAttachmentRef[];
     createdAt: Date;
     author: TicketTimelineActor | null;
 }
@@ -217,6 +220,7 @@ export function mergeTimeline(
             author: reply.author,
             body: reply.body,
             isInternalNote: reply.isInternalNote,
+            attachments: reply.attachments ?? [],
             createdAt: reply.createdAt,
         })),
         ...activities.map((activity): TicketActivityTimelineItem => ({

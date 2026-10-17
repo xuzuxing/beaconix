@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { AttachmentsService } from '../attachments/attachments.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { AppConfig } from '../../config';
 import { CreateTicketDto, CreateTicketReplyDto, QueryTicketsDto } from './dto';
@@ -38,6 +39,7 @@ const ticketInclude = {
     category: true,
     author: { select: userSelect },
     assignee: { select: userSelect },
+    attachments: true,
 } as const;
 
 @Injectable()
@@ -47,6 +49,7 @@ export class TicketsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notifications: NotificationsService,
+        private readonly attachments: AttachmentsService,
         configService: ConfigService,
     ) {
         this.webUrl = configService.get<AppConfig>('app')!.webUrl;
@@ -79,6 +82,12 @@ export class TicketsService {
                         },
                         include: ticketInclude,
                     });
+                    const attachments = await this.attachments.claimForTicket(
+                        tx,
+                        dto.attachments,
+                        { ticketId: created.id },
+                        userId,
+                    );
                     await recordActivity(
                         tx,
                         createdActivity(created.id, userId),
@@ -87,9 +96,14 @@ export class TicketsService {
                         ticket: created,
                         actorId: userId,
                     });
-                    return created;
+                    return { ...created, attachments };
                 });
-                return new TicketEntity(ticket);
+                return new TicketEntity({
+                    ...ticket,
+                    attachments: await this.attachments.toTicketAttachmentRefs(
+                        ticket.attachments,
+                    ),
+                });
             } catch (error) {
                 if (attempt === 0 && this.isUniqueViolation(error)) continue;
                 throw error;
@@ -117,7 +131,18 @@ export class TicketsService {
             this.prisma.ticket.count({ where }),
         ]);
         return {
-            items: items.map((ticket) => new TicketEntity(ticket)),
+            items: await Promise.all(
+                items.map(
+                    async (ticket) =>
+                        new TicketEntity({
+                            ...ticket,
+                            attachments:
+                                await this.attachments.toTicketAttachmentRefs(
+                                    ticket.attachments,
+                                ),
+                        }),
+                ),
+            ),
             total,
             page,
             limit,
@@ -138,7 +163,7 @@ export class TicketsService {
                 where: { ticketId, isInternalNote: false },
                 orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
                 take: TICKET_TIMELINE_LIMIT,
-                include: { author: { select: userSelect } },
+                include: { author: { select: userSelect }, attachments: true },
             }),
             this.prisma.ticketActivity.findMany({
                 where: { ticketId },
@@ -148,9 +173,23 @@ export class TicketsService {
             }),
         ]);
 
+        const timelineReplies = await Promise.all(
+            replies.map(async (reply) => ({
+                ...reply,
+                attachments: await this.attachments.toTicketAttachmentRefs(
+                    reply.attachments,
+                ),
+            })),
+        );
+
         return {
-            ...new TicketEntity(ticket),
-            timeline: mergeTimeline(replies, activities),
+            ...new TicketEntity({
+                ...ticket,
+                attachments: await this.attachments.toTicketAttachmentRefs(
+                    ticket.attachments,
+                ),
+            }),
+            timeline: mergeTimeline(timelineReplies, activities),
             timelineTruncated:
                 replies.length >= TICKET_TIMELINE_LIMIT ||
                 activities.length >= TICKET_TIMELINE_LIMIT,
@@ -158,7 +197,7 @@ export class TicketsService {
     }
 
     async reply(userId: string, ticketId: string, dto: CreateTicketReplyDto) {
-        return this.prisma.$transaction(async (tx) => {
+        const created = await this.prisma.$transaction(async (tx) => {
             const ticket = await this.findOwnedTicket(ticketId, userId, tx);
 
             const reply = await tx.ticketReply.create({
@@ -170,6 +209,12 @@ export class TicketsService {
                 },
                 include: { author: { select: userSelect } },
             });
+            const attachments = await this.attachments.claimForTicket(
+                tx,
+                dto.attachments,
+                { ticketReplyId: reply.id },
+                userId,
+            );
 
             // Replying to a resolved/closed ticket reopens it.
             const reopens =
@@ -200,15 +245,27 @@ export class TicketsService {
                 body: dto.body,
             });
 
-            return {
-                ticket: new TicketEntity(current),
-                reply: new TicketReplyEntity(reply),
-            };
+            return { ticket: current, reply, attachments };
         });
+
+        return {
+            ticket: new TicketEntity({
+                ...created.ticket,
+                attachments: await this.attachments.toTicketAttachmentRefs(
+                    created.ticket.attachments,
+                ),
+            }),
+            reply: new TicketReplyEntity({
+                ...created.reply,
+                attachments: await this.attachments.toTicketAttachmentRefs(
+                    created.attachments,
+                ),
+            }),
+        };
     }
 
     async close(userId: string, ticketId: string): Promise<TicketEntity> {
-        return this.prisma.$transaction(async (tx) => {
+        const closed = await this.prisma.$transaction(async (tx) => {
             const ticket = await this.findOwnedTicket(ticketId, userId, tx);
             if (ticket.status === 'CLOSED') {
                 throw new ConflictException({
@@ -238,7 +295,14 @@ export class TicketsService {
                 to: 'CLOSED',
             });
 
-            return new TicketEntity(updated);
+            return updated;
+        });
+
+        return new TicketEntity({
+            ...closed,
+            attachments: await this.attachments.toTicketAttachmentRefs(
+                closed.attachments,
+            ),
         });
     }
 

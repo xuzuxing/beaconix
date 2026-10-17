@@ -39,7 +39,7 @@ probes/agent/
 | 形态 | 入口 | 说明 |
 | --- | --- | --- |
 | systemd 常驻 | `install/install.sh` → `beaconix-probe run` | 生产推荐；安装只装程序，首次启动自动打印设备码授权链接（`journalctl -u beaconix-probe -f`） |
-| 容器 | [`Dockerfile`](Dockerfile) / [`agent/docker-compose.yml`](agent/docker-compose.yml) | 首次启动自动下载安装并打印设备码登录地址，登录后常驻 `run`；`/data` 卷保存安装与凭据 |
+| 容器 | [`Dockerfile`](Dockerfile) / [`agent/docker-compose.yml`](agent/docker-compose.yml) | 每次启动通过 `latest.json` 解析版本并下载版本化 tar（失败沿用卷内安装），首次启动打印设备码登录地址，登录后常驻 `run` |
 | 云函数 | `functions/scf.js` | 每次触发执行**一轮**；无本地调度，见下方文档 |
 
 `install.sh` 默认只安装并启动服务，授权在首次启动时由 `run` 自动发起：

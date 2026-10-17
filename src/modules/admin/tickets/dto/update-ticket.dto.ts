@@ -12,6 +12,7 @@ import {
     TicketPriority,
     TicketStatus,
 } from '../../../../generated/prisma/enums';
+import { TicketAttachmentsDto } from '../../../tickets/dto/attachment-ref.dto';
 
 export class UpdateTicketDto {
     @ApiPropertyOptional({ enum: TicketPriority, example: 'HIGH' })
@@ -47,7 +48,7 @@ export class UpdateTicketDto {
     assigneeId?: string | null;
 }
 
-export class AdminTicketReplyDto {
+export class AdminTicketReplyDto extends TicketAttachmentsDto {
     @ApiProperty({ example: 'We shipped a fix in today release.' })
     @IsString()
     @MinLength(1)

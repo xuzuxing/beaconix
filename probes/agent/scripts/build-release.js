@@ -553,17 +553,18 @@ function verifyTarball(tarPath, expectedVersion) {
     }
 }
 
-function verifyInstaller(installerPath, version) {
+function verifyInstaller(installerPath) {
     const script = fs.readFileSync(installerPath, 'utf8');
-    if (!/beaconix-probe-\$VERSION\.tar\.gz/.test(script)) {
+    if (!/beaconix-probe-\$[A-Za-z_][A-Za-z0-9_]*\.tar\.gz/.test(script)) {
         throw new Error(
-            'install/install.sh no longer downloads `beaconix-probe-$VERSION.tar.gz`; ' +
+            'install/install.sh no longer downloads `beaconix-probe-<version>.tar.gz`; ' +
                 'update this script and the release docs before publishing',
         );
     }
-    if (!/beaconix-probe-latest\.tar\.gz/.test(script) && !/VERSION="latest"/.test(script)) {
+    if (!/latest\.json/.test(script)) {
         console.warn(
-            `warning: install.sh does not reference a ${version} archive name`,
+            'warning: install/install.sh does not resolve latest.json; a cached ' +
+                '`latest` alias can pin new installs to an old build',
         );
     }
 }
@@ -578,6 +579,20 @@ function formatBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function resetOutDir(dir) {
+    fs.mkdirSync(dir, { recursive: true });
+    // Clear the contents instead of removing the directory itself: on Windows a
+    // lingering handle on the directory makes rmSync(dir) fail with EPERM.
+    for (const name of fs.readdirSync(dir)) {
+        fs.rmSync(path.join(dir, name), {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 100,
+        });
+    }
 }
 
 function build(opts) {
@@ -599,8 +614,7 @@ function build(opts) {
     const zipName = `beaconix-probe-scf-${version}.zip`;
     const publishLatestAlias = publishLatest(opts);
 
-    fs.rmSync(opts.outDir, { recursive: true, force: true });
-    fs.mkdirSync(opts.outDir, { recursive: true });
+    resetOutDir(opts.outDir);
 
     const tarball = zlib.gzipSync(buildTar(entries, source.epochSeconds), {
         level: 9,
@@ -635,7 +649,7 @@ function build(opts) {
     }
 
     const installerSource = path.join(AGENT_DIR, 'install', 'install.sh');
-    verifyInstaller(installerSource, version);
+    verifyInstaller(installerSource);
     fs.copyFileSync(installerSource, path.join(opts.outDir, 'install.sh'));
     artifacts.push({
         name: 'install.sh',

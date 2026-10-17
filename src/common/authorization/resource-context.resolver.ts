@@ -103,10 +103,10 @@ export class ResourceContextResolver {
                         },
                     },
                 });
-                projectId = attachment?.task.projectId ?? null;
+                projectId = attachment?.task?.projectId ?? null;
                 taskId = attachment?.taskId ?? null;
                 resourceOrganizationId =
-                    attachment?.task.organizationId ?? null;
+                    attachment?.task?.organizationId ?? null;
                 break;
             }
         }

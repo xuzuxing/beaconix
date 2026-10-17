@@ -8,8 +8,9 @@ import {
 } from 'class-validator';
 import { IsCuid } from '../../../common/decorators/is-cuid.decorator';
 import { TicketPriority } from '../../../generated/prisma/enums';
+import { TicketAttachmentsDto } from './attachment-ref.dto';
 
-export class CreateTicketDto {
+export class CreateTicketDto extends TicketAttachmentsDto {
     @ApiProperty({ example: 'Export fails on large workspaces' })
     @IsString()
     @MinLength(4)

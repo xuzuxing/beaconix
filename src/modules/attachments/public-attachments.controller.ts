@@ -4,6 +4,7 @@ import {
     Get,
     Post,
     Query,
+    Req,
     Res,
     StreamableFile,
     UploadedFile,
@@ -22,8 +23,8 @@ import {
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import 'multer';
-import type { Response } from 'express';
-import { CurrentUser, SkipTransform } from '../../common/decorators';
+import type { Request, Response } from 'express';
+import { CurrentUser, Public, SkipTransform } from '../../common/decorators';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { QueryPublicObjectDto, UploadAttachmentDto } from './dto';
 import { PublicUploadEntity } from './entities';
@@ -36,20 +37,29 @@ export class PublicAttachmentsController {
     constructor(private readonly attachmentsService: AttachmentsService) {}
 
     @Get('object')
+    @Public()
     @SkipTransform()
-    @ApiOperation({ summary: 'Preview or download a general uploaded object' })
+    @ApiOperation({
+        summary: 'Preview or download an uploaded object',
+        description:
+            'Accepts either a signed link (exp + sig, issued by the API for ' +
+            'attachments the caller may read) or a Bearer token. Images and ' +
+            'downloads rendered by a browser rely on the signed form.',
+    })
     @ApiOkResponse({ description: 'Object stream or redirect' })
-    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiUnauthorizedResponse({
+        description: 'Missing access token or invalid signature',
+    })
     @ApiForbiddenResponse({ description: 'Object key is not accessible' })
     async object(
         @Query() query: QueryPublicObjectDto,
+        @Req() request: Request,
         @Res({ passthrough: true }) res: Response,
     ): Promise<StreamableFile | void> {
         const { filename, mimeType, download } =
             await this.attachmentsService.getPublicObjectDownload(
-                query.key,
-                query.provider,
-                query.bucket,
+                query,
+                readBearerToken(request),
             );
 
         if (download.type === 'redirect') {
@@ -95,4 +105,15 @@ export class PublicAttachmentsController {
             dto.directory,
         );
     }
+}
+
+/**
+ * The object endpoint is `@Public()` so signed links work inside `<img>` and
+ * `<a>`; a plain API client may still authenticate with a Bearer token.
+ */
+function readBearerToken(request: Request): string | undefined {
+    const header = request.headers.authorization;
+    if (!header) return undefined;
+    const [type, token] = header.split(' ');
+    return type === 'Bearer' && token ? token : undefined;
 }

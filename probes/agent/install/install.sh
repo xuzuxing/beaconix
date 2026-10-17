@@ -7,6 +7,11 @@
 # Installs the CLI under /opt/beaconix-probe as the dedicated `beaconix` system
 # user and registers a systemd **system** unit.
 #
+# The payload is resolved through `<download-base>/latest.json` (version +
+# sha256) and fetched from the immutable `beaconix-probe-<version>.tar.gz` URL.
+# The `latest` alias is only a fallback when the manifest is unreachable, so a
+# stale CDN cache of that alias cannot pin this install to an old build.
+#
 # Enrollment is optional at install time:
 #   --token <t>   redeem a one-time token issued in the web UI (no interaction)
 #   --login       run the interactive device-code login right now
@@ -46,7 +51,7 @@ Options:
   --token <t>       One-time enrollment token issued in the web UI
   --login           Start the interactive device-code login after installing
   --api-url <url>   Beacon API base URL
-  --version <v>     Install a specific CLI version (default: latest)
+  --version <v>     Install a specific CLI version (default: latest, resolved via latest.json)
   --no-service      Install/update the payload only; do not touch the unit
   --uninstall       Remove the agent and its systemd unit
   -h, --help        Show this help
@@ -140,16 +145,61 @@ prepare_dirs() {
     chmod 750 "$CONF_DIR" "$LOG_DIR" "$RUN_DIR"
 }
 
-download_payload() {
-    tmp="$(mktemp -d)"
-    url="$DOWNLOAD_BASE/beaconix-probe-$VERSION.tar.gz"
-    log "downloading $url"
+# Resolve the published payload through latest.json. The versioned tarball URL
+# is immutable, so a CDN that still serves a stale `latest` alias cannot pin an
+# installation to the previous build.
+fetch_manifest() {
+    manifest_url="${DOWNLOAD_BASE}/latest.json?ts=$(date +%s)"
     if have curl; then
-        curl -fsSL "$url" -o "$tmp/agent.tgz"
+        MANIFEST="$(curl -fsSL -H 'cache-control: no-cache' "$manifest_url" 2>/dev/null || true)"
+    elif have wget; then
+        MANIFEST="$(wget -qO- "$manifest_url" 2>/dev/null || true)"
+    else
+        MANIFEST=""
+    fi
+    [ -n "$MANIFEST" ]
+}
+
+manifest_field() {
+    printf '%s' "$MANIFEST" | \
+        node -p "JSON.parse(require('fs').readFileSync(0, 'utf8'))['$1'] || ''" \
+            2>/dev/null || true
+}
+
+download_payload() {
+    resolved_version="$VERSION"
+    expected_sha=""
+
+    if [ "$VERSION" = "latest" ]; then
+        resolved_version=""
+        if fetch_manifest; then
+            resolved_version="$(manifest_field version)"
+            expected_sha="$(manifest_field sha256)"
+        fi
+        if [ -z "$resolved_version" ]; then
+            log "warning: ${DOWNLOAD_BASE}/latest.json unavailable; falling back to the latest alias"
+            resolved_version="latest"
+        fi
+    fi
+
+    url="$DOWNLOAD_BASE/beaconix-probe-$resolved_version.tar.gz"
+    log "downloading $url"
+    tmp="$(mktemp -d)"
+    if have curl; then
+        curl -fsSL -H 'cache-control: no-cache' "$url" -o "$tmp/agent.tgz"
     elif have wget; then
         wget -qO "$tmp/agent.tgz" "$url"
     else
         die "curl or wget is required"
+    fi
+
+    if [ -n "$expected_sha" ] && have sha256sum; then
+        printf '%s  agent.tgz\n' "$expected_sha" > "$tmp/agent.sha256"
+        if ! ( cd "$tmp" && sha256sum -c agent.sha256 >/dev/null 2>&1 ); then
+            rm -rf "$tmp"
+            die "payload checksum mismatch for $url (stale CDN cache?); try again"
+        fi
+        log "checksum ok ($expected_sha)"
     fi
 
     mkdir -p "$INSTALL_DIR"
@@ -158,7 +208,7 @@ download_payload() {
 
     chmod +x "$INSTALL_DIR/bin/beaconix-probe.js"
     ln -sf "$INSTALL_DIR/bin/beaconix-probe.js" "$BIN_LINK"
-    log "installed CLI to $INSTALL_DIR (linked at $BIN_LINK)"
+    log "installed CLI to $INSTALL_DIR ($resolved_version, linked at $BIN_LINK)"
 }
 
 maybe_enroll() {

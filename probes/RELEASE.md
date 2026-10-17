@@ -32,15 +32,17 @@ node probes/agent/scripts/build-release.js
 
 **三个不变量**（任一被破坏，线上安装或升级就会静默失败）：
 
-1. **文件名**：`beaconix-probe-$VERSION.tar.gz`，其中 `$VERSION` 是用户传给
-   `install.sh --version` 的值，默认 `latest`。
+1. **文件名**：`beaconix-probe-$VERSION.tar.gz`。`$VERSION` 默认由 `latest.json` 解析，
+   也可以用 `install.sh --version` / `PROBE_VERSION` 显式指定。
 2. **压缩包根布局**：`bin/beaconix-probe.js` 必须在归档根，且 `package.json`
    必须一起打包（`src/version.js` 通过 `require('../package.json')` 读版本）。
-3. **`latest.json` 字段**：`version` 用于与本地 `VERSION` 比较（不等即提示有更新），
-   `installUrl` 用于拼出升级命令。
+3. **`latest.json` 字段**：安装器（`install.sh` 与容器 entrypoint）用它解析
+   `version` 与 `sha256`，再下载不可变的版本化 tar；`self-update` 用 `version`
+   与 `installUrl`。`latest` 别名只作为 manifest 不可达时的回退。
 
-> `latest.json` 的其它字段（`sha256`、`commit`、`sourceDate`、`scf`…）由脚本附加，
-> `self-update` 会忽略，但对排查问题和做发布审计很有用。
+> `latest.json` 的其它字段（`commit`、`sourceDate`、`scf`…）由脚本附加，
+> 安装器会忽略，但对排查问题和做发布审计很有用。安装器请求 manifest 时带
+> `?ts=<epoch>` 与 `cache-control: no-cache`，避免被 CDN 缓存钉住旧版本。
 
 ---
 
@@ -67,6 +69,8 @@ node probes/agent/scripts/build-release.js
 
   需要强制让预发布占用 `latest` 时用 `--latest`（一般只在灰度环境这么做）。
 - `--require-clean` 会在 `probes/agent` 有未提交改动时直接失败，正式发布建议带上。
+- 每次发布都递增 `package.json` 的 `version`。容器启动时通过 `latest.json` 解析
+  当前版本并拉取对应的版本化 tar，所以升版本后无需手动清卷。
 
 ---
 
@@ -190,34 +194,49 @@ RELEASE.json
 
 | 本地产物 | 线上 URL | 缓存策略 |
 | --- | --- | --- |
-| `beaconix-probe-2.0.0.tar.gz` | `https://get.beaconix.app/probe/beaconix-probe-2.0.0.tar.gz` | 长缓存（`max-age=31536000, immutable`） |
-| `beaconix-probe-latest.tar.gz` | `https://get.beaconix.app/probe/beaconix-probe-latest.tar.gz` | 短缓存（60s 或 no-cache） |
-| `beaconix-probe-scf-2.0.0.zip` | `https://get.beaconix.app/probe/beaconix-probe-scf-2.0.0.zip` | 长缓存（同上） |
-| `latest.json` | `https://get.beaconix.app/probe/latest.json` | **必须短缓存**（60s 或 no-cache），否则 `self-update` 长期看不到新版本 |
+| `beaconix-probe-2.1.0.tar.gz` | `https://get.beaconix.app/probe/beaconix-probe-2.1.0.tar.gz` | 长缓存（`max-age=31536000, immutable`），URL 不可变 |
+| `beaconix-probe-latest.tar.gz` | `https://get.beaconix.app/probe/beaconix-probe-latest.tar.gz` | 短缓存；**只作为 manifest 不可达时的回退**，缓存旧了不影响安装 |
+| `beaconix-probe-scf-2.1.0.zip` | `https://get.beaconix.app/probe/beaconix-probe-scf-2.1.0.zip` | 长缓存（同上） |
+| `latest.json` | `https://get.beaconix.app/probe/latest.json` | **必须短缓存**（60s 或 no-cache）；安装器带 `?ts=` 主动绕过缓存 |
 | `SHA256SUMS` | `https://get.beaconix.app/probe/SHA256SUMS` | 短缓存 |
 | `install.sh` | `https://get.beaconix.app/install.sh` | 短缓存（它是入口脚本，改一次要尽快生效） |
 
 ```bash
 # 示例：rclone
-rclone copy probes/agent/dist/beaconix-probe-2.0.0.tar.gz   r2:beaconix/probe/
-rclone copy probes/agent/dist/beaconix-probe-scf-2.0.0.zip  r2:beaconix/probe/
+rclone copy probes/agent/dist/beaconix-probe-2.1.0.tar.gz   r2:beaconix/probe/
+rclone copy probes/agent/dist/beaconix-probe-scf-2.1.0.zip  r2:beaconix/probe/
 rclone copy probes/agent/dist/SHA256SUMS                    r2:beaconix/probe/
 rclone copy probes/agent/dist/latest.json                   r2:beaconix/probe/
-# latest 别名最后上传，避免指向还不存在的版本
+# 别名可选，但建议保持最新（老客户端 / manifest 不可达时会用到）
 rclone copy probes/agent/dist/beaconix-probe-latest.tar.gz  r2:beaconix/probe/
 rclone copy probes/agent/dist/install.sh                    r2:beaconix/
 ```
 
 **上传顺序**：具体版本文件 → `SHA256SUMS` → `latest.json` → `latest` 别名 →
-`install.sh`。任何时刻中断，线上都只会指向已经存在的完整文件。
+`install.sh`。安装链路只依赖前三个；别名是兼容回退，晚传也不影响新安装。
 
 发布后校验：
 
 ```bash
+pnpm probe:verify
+# 等价于 node probes/agent/scripts/verify-release.js [--base-url <url>]
+
+# 手工检查也可以：
 curl -fsSL https://get.beaconix.app/probe/latest.json | head -20
 curl -fsSL https://get.beaconix.app/probe/SHA256SUMS | sha256sum -c --ignore-missing
-curl -fsSLI https://get.beaconix.app/probe/beaconix-probe-latest.tar.gz | head -1
 ```
+
+`verify-release.js` 的判定：
+
+| 检查 | 级别 | 说明 |
+| --- | --- | --- |
+| `latest.json` 的 `version` / `sha256` / `installUrl` | FAIL | 安装器解析入口 |
+| `beaconix-probe-<version>.tar.gz` 的 sha256 与归档内版本 | FAIL | 实际安装的包 |
+| SCF zip、`install.sh` 下载模式 | FAIL | 其它分发通道 |
+| `beaconix-probe-latest.tar.gz` 与版本 tar 字节一致 | **WARN** | 仅回退路径；缓存旧了不再导致装错版本 |
+
+历史上「新 tar 和 `latest.json` 都传了、别名被 CDN 缓存住」会让整批新装机器停在旧版本；
+现在安装器不再读别名，这种情况只会得到一条 WARN。
 
 ---
 
@@ -227,9 +246,11 @@ curl -fsSLI https://get.beaconix.app/probe/beaconix-probe-latest.tar.gz | head -
 用户机器                                CDN                                    Beacon API
    │  curl install.sh                      │                                        │
    ├─────────────────────────────────────▶│                                        │
-   │  GET /probe/beaconix-probe-latest.tar.gz                                       │
+   │  GET /probe/latest.json?ts=…          │                                        │
    ├─────────────────────────────────────▶│                                        │
-   │  解压到 /opt/beaconix-probe           │                                        │
+   │  GET /probe/beaconix-probe-2.1.0.tar.gz                                        │
+   ├─────────────────────────────────────▶│                                        │
+   │  sha256 校验 → 解压到 /opt/beaconix-probe                                       │
    │  建 beaconix 用户 + systemd unit      │                                        │
    │  systemctl start → beaconix-probe run │                                        │
    │                                        │                                        │
@@ -305,16 +326,23 @@ docker compose --env-file probe.env logs -f
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `BEACON_API_URL` | — | 未登录时必填；生产必须 https |
+| `BEACON_API_URL` | `https://beaconix.app/api`（compose） | 后台 API；生产必须 https |
 | `PROBE_ENROLL_TOKEN` | 空 | 用 Web 下发的一次性 token 代替设备码登录 |
 | `PROBE_VERSION` | `latest` | 指定要下载的发布版本 |
 | `BEACON_DOWNLOAD_BASE` | `https://get.beaconix.app/probe` | 下载源（内网镜像 / 本机 dist） |
-| `PROBE_FORCE_INSTALL` | `0` | 设为 1 时重启会重新下载（升级用，凭据保留） |
+| `PROBE_AUTO_UPDATE` | `1` | 每次启动重新下载；`0` 复用卷里已安装的版本 |
+| `PROBE_FORCE_INSTALL` | `0` | 无视 `PROBE_AUTO_UPDATE=0` 强制重下（凭据保留） |
 
 其他行为：
 
 - **持久化**：`/data`（安装 `/data/agent`、凭据 `/data/etc/probe.json`）。不挂卷，
   容器重建后要重新登录。
+- **安装与升级**：每次启动先读 `<base>/latest.json?ts=…` 拿到 `version` / `sha256`，
+  再下载不可变的 `beaconix-probe-<version>.tar.gz`，校验 sha256 后解压到暂存目录
+  再整体替换；manifest 不可达时回退 `latest` 别名，下载或校验失败则保留已安装版本
+  继续运行。因此发布新包后 `docker compose up -d --build`（或 `restart`）就会生效，
+  **CDN 缓存了 `latest` 别名也不会钉住旧版本**。想固定当前版本用
+  `PROBE_AUTO_UPDATE=0` 或 `PROBE_VERSION=2.1.0`。
 - **不要 publish 端口**：探针纯出站。
 - **没有 healthcheck**：没有本地端点，以后台「最后心跳」为准。
 - **优雅退出**：entrypoint 用 `exec` 启动 `run`，`SIGTERM` 直达 node；compose
@@ -322,8 +350,8 @@ docker compose --env-file probe.env logs -f
 - **透传子命令**：`docker run --rm ... beacon-probe validate`（或 `run --once`、
   `status`）会跳过登录直接执行。
 - **登录失败**（拒绝/超时）容器退出，`docker start` 重新出码即可。
-- **升级**：改 `PROBE_VERSION` 并设 `PROBE_FORCE_INSTALL=1`，`docker compose up -d`；
-  旧凭据继续有效。
+- **升级**：发布新版本到下载源后，`docker compose up -d --build`（或 `restart`）
+  即可——启动时会重新拉取 `latest` 并替换卷里的 payload，凭据保留。
 
 ---
 
@@ -415,7 +443,7 @@ tag 版本与 `package.json` 一致（可在 step 里加一条断言）。
 | SCF 探针频繁 OFFLINE | 触发器周期 ≠ `PROBE_INTERVAL_SECONDS` | 两者必须相等，按部署指南设置 |
 | 容器日志出现 `curl: (22) … 404` / `curl: (6) Could not resolve host` | 下载源不可达，或该版本文件不存在 | 检查 `BEACON_DOWNLOAD_BASE` 与 `PROBE_VERSION`（预发布不写 `latest` 别名） |
 | 容器重建后又要求登录 | `/data` 没挂持久卷 | `-v beacon-probe-data:/data`（compose 已配命名卷） |
-| 升级后 `version` 没变 | 已安装的 payload 被直接复用 | 设 `PROBE_FORCE_INSTALL=1` 后重启，凭据保留 |
+| 容器每次安装后还是旧版本（日志显示 `installed to … (2.0.0)`） | `latest.json` 被 CDN 缓存成旧版本，或下载源缺少对应的版本化 tar | 安装器已带 `?ts=` 绕过缓存；确认 `pnpm probe:verify` 的 manifest / 版本 tar 检查为 OK，必要时手动刷新 `latest.json` 缓存 |
 | 容器日志 `Missing probe credential(s)` | 未登录就用透传子命令跑了 `run` | 先不带参数启动完成登录，或设置 `PROBE_ENROLL_TOKEN` |
 | `run` 长时间停在 `Waiting for approval` | 网页上还没确认，或链接已过期（10 分钟） | 重新打开链接；过期后进程退出，systemd / restart 策略会重新出码 |
 

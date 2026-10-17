@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { AdminTicketsService } from './admin-tickets.service';
 import type { PrismaService } from '../../../infra/database/prisma.service';
+import type { AttachmentsService } from '../../attachments/attachments.service';
 import type { NotificationsService } from '../../notifications/notifications.service';
 import type { ConfigService } from '@nestjs/config';
 
@@ -88,9 +89,19 @@ function createService() {
         get: jest.fn().mockReturnValue({ webUrl: 'https://beacon.test' }),
     };
 
+    const attachments = {
+        claimForTicket: jest.fn().mockResolvedValue([]),
+        toTicketAttachmentRefs: jest
+            .fn()
+            .mockImplementation((rows: unknown[] | undefined) =>
+                Promise.resolve(rows ?? []),
+            ),
+    };
+
     const service = new AdminTicketsService(
         prisma as unknown as PrismaService,
         notifications as unknown as NotificationsService,
+        attachments as unknown as AttachmentsService,
         config as unknown as ConfigService,
     );
 

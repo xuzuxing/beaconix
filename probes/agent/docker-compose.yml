@@ -2,15 +2,18 @@
 #
 # First `up` builds the image; the container then downloads the agent into the
 # probe-data volume, prints a device-code login URL in `docker compose logs`,
-# and starts running once you approve it. Later starts reuse the volume: no
-# re-download, no re-login.
+# and starts running once you approve it.
+#
+# Every start re-downloads the published payload (PROBE_AUTO_UPDATE=1), so
+# `up -d --build` picks up a newly published version; if the download source is
+# unreachable the installed copy is kept.
 #
 #   cp probe.env.example probe.env          # fill in BEACON_API_URL
 #   docker compose --env-file probe.env up -d --build
 #   docker compose --env-file probe.env logs -f      # open the printed URL
 #
-# Upgrade the agent: set PROBE_VERSION in probe.env and PROBE_FORCE_INSTALL=1,
-# then `up -d`. Credentials in /data/etc are kept.
+# Pinning: set PROBE_VERSION=2.1.0 (or PROBE_AUTO_UPDATE=0 to keep the payload
+# already in the volume). Credentials in /data/etc are always kept.
 
 name: beaconix-probe
 
@@ -21,8 +24,10 @@ services:
       dockerfile: Dockerfile
     image: beacon-probe:latest
     restart: unless-stopped
+    env_file:
+      - probe.env
     environment:
-      BEACON_API_URL: ${BEACON_API_URL:-https://beaconix.app/api}
+      BEACON_API_URL: ${BEACON_API_URL:-http://localhost:3000/api}
       # Optional: redeem a web-issued one-time token instead of the device flow.
       PROBE_ENROLL_TOKEN: ${PROBE_ENROLL_TOKEN:-}
       # Optional tuning; defaults match the agent's own defaults.
@@ -34,6 +39,7 @@ services:
       # Optional: pin a release / mirror, or re-download on restart.
       PROBE_VERSION: ${PROBE_VERSION:-latest}
       BEACON_DOWNLOAD_BASE: ${BEACON_DOWNLOAD_BASE:-https://get.beaconix.app/probe}
+      PROBE_AUTO_UPDATE: ${PROBE_AUTO_UPDATE:-1}
       PROBE_FORCE_INSTALL: ${PROBE_FORCE_INSTALL:-0}
     volumes:
       - probe-data:/data

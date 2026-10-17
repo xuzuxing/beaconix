@@ -3,6 +3,7 @@ import type {
     TicketActivityType,
     TicketAuthorType,
 } from '../../../generated/prisma/enums';
+import { TicketAttachmentEntity } from './ticket-attachment.entity';
 import { TicketUserSummaryEntity } from './ticket.entity';
 
 /**
@@ -72,6 +73,12 @@ export class TicketTimelineItemEntity {
         description: 'Snapshot data so renames do not rewrite history',
     })
     meta?: Record<string, unknown>;
+
+    @ApiPropertyOptional({
+        type: [TicketAttachmentEntity],
+        description: 'Attachments on the reply (kind = reply)',
+    })
+    attachments?: TicketAttachmentEntity[];
 
     @ApiProperty({ example: '2026-03-05T12:00:00.000Z' })
     createdAt: Date;

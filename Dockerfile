@@ -10,7 +10,7 @@ FROM node:22-alpine AS deps
 
 ARG NPM_REGISTRY
 ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
-    npm_config_registry=$NPM_REGISTRY
+    pnpm_config_registry=$NPM_REGISTRY
 
 # `corepack enable` installs the pnpm version pinned by package.json's
 # `packageManager` field, which is the one pnpm-lock.yaml was resolved with.
@@ -25,7 +25,11 @@ WORKDIR /app
 # postinstall steps (prisma, bcrypt, esbuild) are skipped.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile \
+        --registry=$NPM_REGISTRY \
+        --network-concurrency=4 \
+        --fetch-retries=5
 
 
 # Stage 2: Build
@@ -33,7 +37,7 @@ FROM node:22-alpine AS builder
 
 ARG NPM_REGISTRY
 ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
-    npm_config_registry=$NPM_REGISTRY
+    pnpm_config_registry=$NPM_REGISTRY
 
 RUN corepack enable
 

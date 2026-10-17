@@ -1,4 +1,8 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+} from '@nestjs/common';
 import { AttachmentsService } from './attachments.service';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 import { AttachmentEntity } from './entities';
@@ -50,9 +54,11 @@ function fixture(role = 'ADMIN', uploadedById = 'other') {
         },
         attachment: {
             findFirst: jest.fn().mockResolvedValue(attachment),
+            findMany: jest.fn().mockResolvedValue([]),
             delete: jest.fn().mockResolvedValue(attachment),
             create: jest.fn().mockResolvedValue(attachment),
             update: jest.fn().mockResolvedValue(attachment),
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         },
         auditLog: { create: jest.fn().mockResolvedValue({}) },
         $queryRaw: jest.fn().mockResolvedValue([]),
@@ -87,6 +93,11 @@ function fixture(role = 'ADMIN', uploadedById = 'other') {
             storage as never,
             settings as never,
             new ProjectAccessService(db as never),
+            { verifyAsync: jest.fn() } as never,
+            {
+                toObjectUrl: jest.fn().mockResolvedValue('signed-url'),
+                verify: jest.fn().mockReturnValue(false),
+            } as never,
         ),
         file: {
             buffer: Buffer.from('bytes'),
@@ -217,5 +228,168 @@ describe('Attachments authorization lifecycle', () => {
             }),
         ).rejects.toThrow('private upload endpoint');
         expect(db.attachment.create).not.toHaveBeenCalled();
+    });
+});
+
+describe('AttachmentsService.claimForTicket', () => {
+    const uploader = 'user';
+    const ref = {
+        filename: 'report.txt',
+        mimeType: 'text/plain',
+        size: 5,
+        url: '/api/attachments/object?key=users/user/2026/10/report.txt',
+        fileKey: 'users/user/2026/10/report.txt',
+    };
+    const unowned = {
+        id: 'attachment',
+        filename: 'report.txt',
+        mimeType: 'text/plain',
+        size: 5,
+        url: '',
+        fileKey: ref.fileKey,
+        storageProvider: 'LOCAL',
+        bucket: null,
+        checksum: null,
+        source: 'UPLOAD',
+        visibility: 'PUBLIC',
+        taskId: null,
+        ticketId: null,
+        ticketReplyId: null,
+        uploadedById: uploader,
+    };
+
+    it('claims an unowned upload for the caller', async () => {
+        const { service, db } = fixture();
+        db.attachment.findMany.mockResolvedValue([unowned]);
+
+        const claimed = await service.claimForTicket(
+            db as never,
+            [ref],
+            { ticketId: 'ticket-1' },
+            uploader,
+        );
+
+        expect(db.attachment.updateMany).toHaveBeenCalledWith({
+            where: {
+                fileKey: { in: [ref.fileKey] },
+                taskId: null,
+                ticketId: null,
+                ticketReplyId: null,
+            },
+            data: { ticketId: 'ticket-1' },
+        });
+        expect(claimed[0]).toMatchObject({
+            id: 'attachment',
+            ticketId: 'ticket-1',
+        });
+    });
+
+    it('returns nothing when no attachments were sent', async () => {
+        const { service, db } = fixture();
+
+        await expect(
+            service.claimForTicket(
+                db as never,
+                [],
+                { ticketId: 't' },
+                uploader,
+            ),
+        ).resolves.toEqual([]);
+        expect(db.attachment.findMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects an attachment uploaded by another user', async () => {
+        const { service, db } = fixture();
+        db.attachment.findMany.mockResolvedValue([
+            { ...unowned, uploadedById: 'other' },
+        ]);
+
+        await expect(
+            service.claimForTicket(
+                db as never,
+                [ref],
+                { ticketId: 't' },
+                uploader,
+            ),
+        ).rejects.toThrow(ForbiddenException);
+        expect(db.attachment.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects an attachment that already belongs to a host', async () => {
+        const { service, db } = fixture();
+        db.attachment.findMany.mockResolvedValue([
+            { ...unowned, taskId: 'task' },
+        ]);
+
+        await expect(
+            service.claimForTicket(
+                db as never,
+                [ref],
+                { ticketId: 't' },
+                uploader,
+            ),
+        ).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects missing, duplicated and oversized uploads', async () => {
+        const { service, db } = fixture();
+        db.attachment.findMany.mockResolvedValue([]);
+        await expect(
+            service.claimForTicket(
+                db as never,
+                [ref],
+                { ticketId: 't' },
+                uploader,
+            ),
+        ).rejects.toThrow('missing or expired');
+
+        await expect(
+            service.claimForTicket(
+                db as never,
+                [ref, ref],
+                { ticketId: 't' },
+                uploader,
+            ),
+        ).rejects.toThrow('Duplicate');
+
+        db.attachment.findMany.mockResolvedValue([
+            { ...unowned, size: 6 * 1024 * 1024 },
+        ]);
+        await expect(
+            service.claimForTicket(
+                db as never,
+                [ref],
+                { ticketId: 't' },
+                uploader,
+            ),
+        ).rejects.toThrow('5MB');
+    });
+
+    it('rejects more than five attachments and unsupported types', async () => {
+        const { service, db } = fixture();
+        const six = Array.from({ length: 6 }, (_, index) => ({
+            ...ref,
+            fileKey: `users/user/${index}.txt`,
+        }));
+        await expect(
+            service.claimForTicket(
+                db as never,
+                six,
+                { ticketId: 't' },
+                uploader,
+            ),
+        ).rejects.toThrow('At most 5');
+
+        db.attachment.findMany.mockResolvedValue([
+            { ...unowned, mimeType: 'image/svg+xml', filename: 'logo.svg' },
+        ]);
+        await expect(
+            service.claimForTicket(
+                db as never,
+                [ref],
+                { ticketId: 't' },
+                uploader,
+            ),
+        ).rejects.toThrow('Unsupported');
     });
 });

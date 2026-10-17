@@ -41,8 +41,13 @@ export class AttachmentEntity {
     })
     source: string;
 
-    @ApiProperty({ example: 'uuid-task' })
-    taskId: string;
+    @ApiPropertyOptional({
+        example: 'uuid-task',
+        nullable: true,
+        description:
+            'Host task; ticket attachments leave this null and use ticketId / ticketReplyId',
+    })
+    taskId: string | null;
 
     @ApiPropertyOptional({ example: 'uuid-uploader' })
     uploadedById: string | null;

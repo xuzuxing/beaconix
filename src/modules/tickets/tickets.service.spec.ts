@@ -6,6 +6,7 @@ import {
 import { Prisma } from '../../generated/prisma/client';
 import { TicketsService } from './tickets.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
+import type { AttachmentsService } from '../attachments/attachments.service';
 import type { NotificationsService } from '../notifications/notifications.service';
 import type { ConfigService } from '@nestjs/config';
 
@@ -75,13 +76,23 @@ function createService() {
         get: jest.fn().mockReturnValue({ webUrl: 'https://beacon.test' }),
     };
 
+    const attachments = {
+        claimForTicket: jest.fn().mockResolvedValue([]),
+        toTicketAttachmentRefs: jest
+            .fn()
+            .mockImplementation((rows: unknown[] | undefined) =>
+                Promise.resolve(rows ?? []),
+            ),
+    };
+
     const service = new TicketsService(
         prisma as unknown as PrismaService,
         notifications as unknown as NotificationsService,
+        attachments as unknown as AttachmentsService,
         config as unknown as ConfigService,
     );
 
-    return { service, prisma, notifications };
+    return { service, prisma, notifications, attachments };
 }
 
 describe('TicketsService.create', () => {
@@ -127,6 +138,48 @@ describe('TicketsService.create', () => {
             prisma,
         );
         expect(ticket).toMatchObject({ id: 'ticket-1', number: 42 });
+    });
+
+    it('claims uploaded attachments for the new ticket', async () => {
+        const { service, prisma, attachments } = createService();
+        prisma.membership.findFirst.mockResolvedValue({
+            organizationId: 'org-9',
+        });
+        prisma.ticket.findFirst.mockResolvedValue({ number: 41 });
+        prisma.ticket.create.mockResolvedValue({
+            ...ticketRow,
+            attachments: [],
+        });
+        attachments.claimForTicket.mockResolvedValue([
+            {
+                filename: 'error.log',
+                mimeType: 'text/plain',
+                size: 5,
+                url: '',
+                fileKey: 'tickets/2026/10/error.log',
+            },
+        ]);
+
+        await service.create('user-1', {
+            subject: 'Export fails on large workspaces',
+            content: 'Posting the export endpoint returns 500.',
+            attachments: [
+                {
+                    filename: 'error.log',
+                    mimeType: 'text/plain',
+                    size: 5,
+                    url: '/api/attachments/object?key=tickets/2026/10/error.log',
+                    fileKey: 'tickets/2026/10/error.log',
+                },
+            ],
+        });
+
+        expect(attachments.claimForTicket).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.any(Array),
+            { ticketId: 'ticket-1' },
+            'user-1',
+        );
     });
 
     it('retries once on a number collision', async () => {

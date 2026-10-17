@@ -43,7 +43,10 @@
     "probe:validate": "node probes/agent/bin/beaconix-probe.js validate",
     "probe:status": "node probes/agent/bin/beaconix-probe.js status",
     "probe:stop": "node probes/agent/bin/beaconix-probe.js stop",
-    "probe:scf": "node probes/agent/functions/scf.js"
+    "probe:scf": "node probes/agent/functions/scf.js",
+    "probe:pack": "node probes/agent/scripts/build-release.js",
+    "probe:verify": "node probes/agent/scripts/verify-release.js",
+    "probe:test": "node --test \"probes/agent/test/*.test.js\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

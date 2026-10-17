@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { QueuesModule } from '../../infra/queue/queues.module';
+import { AttachmentsModule } from '../attachments/attachments.module';
 import { ProbeValidationModule } from '../probes/probe-validation.module';
 import { AdminAuditLogsController } from './audit-logs/admin-audit-logs.controller';
 import { AdminAuditLogsService } from './audit-logs/admin-audit-logs.service';
@@ -19,7 +20,7 @@ import { AdminTicketsController } from './tickets/admin-tickets.controller';
 import { AdminTicketsService } from './tickets/admin-tickets.service';
 
 @Module({
-    imports: [ProbeValidationModule, QueuesModule],
+    imports: [ProbeValidationModule, QueuesModule, AttachmentsModule],
     controllers: [
         SystemProbesController,
         AdminTenantsController,

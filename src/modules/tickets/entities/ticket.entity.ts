@@ -3,6 +3,7 @@ import type {
     TicketPriority,
     TicketStatus,
 } from '../../../generated/prisma/enums';
+import { TicketAttachmentEntity } from './ticket-attachment.entity';
 import { TicketCategoryEntity } from './ticket-category.entity';
 
 /** Minimal user projection shared by ticket author / assignee / actors. */
@@ -54,6 +55,12 @@ export class TicketEntity {
 
     @ApiPropertyOptional({ type: TicketCategoryEntity, nullable: true })
     category?: TicketCategoryEntity | null;
+
+    @ApiPropertyOptional({
+        type: [TicketAttachmentEntity],
+        description: 'Files attached when the ticket was submitted',
+    })
+    attachments?: TicketAttachmentEntity[];
 
     @ApiPropertyOptional({
         description:

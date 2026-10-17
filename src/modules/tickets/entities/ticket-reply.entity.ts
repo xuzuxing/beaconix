@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import type { TicketAuthorType } from '../../../generated/prisma/enums';
+import { TicketAttachmentEntity } from './ticket-attachment.entity';
 import { TicketUserSummaryEntity } from './ticket.entity';
 
 export class TicketReplyEntity {
@@ -30,6 +31,12 @@ export class TicketReplyEntity {
 
     @ApiPropertyOptional({ type: TicketUserSummaryEntity, nullable: true })
     author?: TicketUserSummaryEntity | null;
+
+    @ApiPropertyOptional({
+        type: [TicketAttachmentEntity],
+        description: 'Files attached to this reply',
+    })
+    attachments?: TicketAttachmentEntity[];
 
     constructor(partial: Partial<TicketReplyEntity>) {
         Object.assign(this, partial);
