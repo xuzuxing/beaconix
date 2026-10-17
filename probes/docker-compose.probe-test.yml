@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile.probe-test
     init: true
     environment:
-      BEACON_API_URL: ${BEACON_API_URL:-http://host.docker.internal:9009/api}
+      BEACON_API_URL: ${BEACON_API_URL:-http://host.docker.internal:3000/api}
       BEACON_ADMIN_EMAIL: ${BEACON_ADMIN_EMAIL:-admin@beaconix.app}
       BEACON_ADMIN_PASSWORD: ${BEACON_ADMIN_PASSWORD:-Qwer1234}
       PROBE_FLEET_COUNT: ${PROBE_FLEET_COUNT:-100}

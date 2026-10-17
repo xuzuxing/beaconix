@@ -28,6 +28,9 @@ probes/agent/
 │   └── service/             # systemd / launchd / pidfile 集成
 ├── functions/scf.js         # 腾讯云 SCF 入口（单次执行）
 ├── install/                 # install.sh 与 systemd unit 模板
+├── scripts/build-release.js # 发布打包（tar.gz / SCF zip / latest.json）
+├── docker-entrypoint.sh     # 容器入口（首次下载安装 + 登录）
+├── docker-compose.yml       # 容器部署（运行时下载安装 + 登录，配套 probe.env.example）
 └── test/                    # node --test 用例
 ```
 
@@ -35,9 +38,19 @@ probes/agent/
 
 | 形态 | 入口 | 说明 |
 | --- | --- | --- |
-| systemd 常驻 | `install/install.sh` → `beaconix-probe run` | 生产推荐；system unit，以 `beaconix` 用户运行 |
-| 容器 | `Dockerfile.probe` | `docker run` 即常驻 `run` |
+| systemd 常驻 | `install/install.sh` → `beaconix-probe run` | 生产推荐；安装只装程序，首次启动自动打印设备码授权链接（`journalctl -u beaconix-probe -f`） |
+| 容器 | [`Dockerfile`](Dockerfile) / [`agent/docker-compose.yml`](agent/docker-compose.yml) | 首次启动自动下载安装并打印设备码登录地址，登录后常驻 `run`；`/data` 卷保存安装与凭据 |
 | 云函数 | `functions/scf.js` | 每次触发执行**一轮**；无本地调度，见下方文档 |
+
+`install.sh` 默认只安装并启动服务，授权在首次启动时由 `run` 自动发起：
+
+```bash
+curl -fsSL https://get.beaconix.app/install.sh | sudo sh
+```
+
+- `--token <t>`：用 Web「添加探针」下发的一次性 token 直接注册（无交互）；
+- `--login`：安装时立即走设备码登录（阻塞到授权成功或超时）；
+- `--no-service`：只装程序，之后手动 `sudo beaconix-probe run`。
 
 本地批量测试可使用 [系统探针测试容器](test-fleet/README.md)：启动时通过管理员账号登录，
 自动补齐默认 100 个专用系统探针，并在一个容器里运行独立 Agent 进程。
@@ -72,7 +85,7 @@ probes/agent/
 
 | 命令 | 说明 |
 | --- | --- |
-| `run [--once]` | 前台常驻（默认命令）；`--once` 只跑一轮 |
+| `run [--once]` | 前台常驻（默认命令）；无凭据时自动发起设备码授权并打印链接，`--once` 只跑一轮（仍需先注册） |
 | `validate` | 部署校验：TLS + 心跳往返 + key 匹配 |
 | `heartbeat` | 发送单次心跳并打印响应（排查用） |
 
@@ -92,6 +105,7 @@ probes/agent/
 | `maxResultsPerReport` | `PROBE_MAX_RESULTS` | `100` | 单次上报条数上限（≤ 100） |
 | `allowInsecure` | `PROBE_ALLOW_INSECURE` | `false` | 允许 `http://`（仅测试，生产禁用） |
 | — | `PROBE_CONCURRENCY` | `3` | 单轮并发检查数（上限 20） |
+| — | `PROBE_ENROLL_TOKEN` | — | 无凭据时用一次性 token 自动注册（容器 / 无人值守） |
 | — | `BEACON_HOME` / `BEACON_CREDENTIALS` | 见 `src/paths.js` | 凭据与运行目录覆盖 |
 
 ## 凭据与安全
@@ -112,6 +126,11 @@ node probes/agent/bin/beaconix-probe.js run --once
 
 # 单元测试（注册、服务生命周期、self-update、SCF 单次执行）
 cd probes/agent && node --test
+# 从仓库根跑同一套用例
+pnpm probe:test
+
+# 打发布包（tar.gz / SCF zip / latest.json，输出到 probes/agent/dist）
+pnpm probe:pack
 
 # 本地调试 SCF 入口
 BEACON_API_URL=https://api.example.com/api \
@@ -123,3 +142,4 @@ node probes/agent/functions/scf.js
 
 - [探针 CLI 与 OAuth2 注册方案](../docs/design/probe-agent.md)
 - [云函数（SCF）部署指南](../docs/guides/probe-scf-deployment.md)
+- [打包与发布指南](RELEASE.md)

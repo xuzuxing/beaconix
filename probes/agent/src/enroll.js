@@ -5,8 +5,9 @@ const { spawn } = require('node:child_process');
 
 const { requestJson } = require('./api');
 const { VERSION } = require('./version');
-const { saveCredentials } = require('./credentials');
+const { loadCredentials, saveCredentials } = require('./credentials');
 const { CREDENTIALS_PATH } = require('./paths');
+const { assertEncryptedTransport } = require('./preflight');
 const { sleep } = require('./util');
 const logger = require('./logger');
 
@@ -190,6 +191,58 @@ async function enrollWithToken(config, enrollToken) {
     return { ok: true, probeId };
 }
 
+/**
+ * Make sure this host has credentials before it starts reporting.
+ *
+ * `run` calls this on startup, so a fresh installation does not fail with
+ * "Missing probe credential": it starts the device authorization, prints the
+ * verification URL on stdout (journalctl / docker logs) and waits for the
+ * operator to approve it. Hosts that already have credentials — from
+ * install.sh, a previous run, or PROBE_KEY/PROBE_TOKEN — skip this entirely.
+ *
+ * Returns the credential to merge into the runtime config, or null when the
+ * existing config is already usable.
+ */
+async function ensureEnrolled(config) {
+    if (config.key && config.token) return null;
+
+    const stored = loadCredentials();
+    if (stored && stored.key && stored.token) {
+        return {
+            key: stored.key,
+            token: stored.token,
+            apiUrl: stored.apiUrl || config.apiUrl,
+        };
+    }
+
+    assertEncryptedTransport(config);
+
+    // A web-issued one-time token lets the container/host skip the interactive
+    // flow entirely (compose passes it as PROBE_ENROLL_TOKEN).
+    const enrollToken = process.env.PROBE_ENROLL_TOKEN;
+    if (enrollToken) {
+        logger.log('No probe credential found; redeeming PROBE_ENROLL_TOKEN');
+        await enrollWithToken(config, enrollToken);
+    } else {
+        logger.log(
+            'No probe credential found; starting device authorization ' +
+                '(the URL below expires in about 10 minutes)',
+        );
+        await loginViaDeviceFlow(config, { noOpen: true });
+    }
+
+    const fresh = loadCredentials();
+    if (!fresh || !fresh.key || !fresh.token) {
+        throw new Error('Enrollment completed without a stored credential');
+    }
+
+    return {
+        key: fresh.key,
+        token: fresh.token,
+        apiUrl: fresh.apiUrl || config.apiUrl,
+    };
+}
+
 module.exports = {
     DEVICE_FLOW_CLIENT,
     clientInfo,
@@ -200,4 +253,5 @@ module.exports = {
     openBrowser,
     loginViaDeviceFlow,
     enrollWithToken,
+    ensureEnrolled,
 };

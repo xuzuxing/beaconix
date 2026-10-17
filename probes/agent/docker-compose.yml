@@ -1,0 +1,48 @@
+# Beacon probe agent — Docker Compose (runtime bootstrap).
+#
+# First `up` builds the image; the container then downloads the agent into the
+# probe-data volume, prints a device-code login URL in `docker compose logs`,
+# and starts running once you approve it. Later starts reuse the volume: no
+# re-download, no re-login.
+#
+#   cp probe.env.example probe.env          # fill in BEACON_API_URL
+#   docker compose --env-file probe.env up -d --build
+#   docker compose --env-file probe.env logs -f      # open the printed URL
+#
+# Upgrade the agent: set PROBE_VERSION in probe.env and PROBE_FORCE_INSTALL=1,
+# then `up -d`. Credentials in /data/etc are kept.
+
+name: beaconix-probe
+
+services:
+  probe:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: beacon-probe:latest
+    restart: unless-stopped
+    environment:
+      BEACON_API_URL: ${BEACON_API_URL:-https://beaconix.app/api}
+      # Optional: redeem a web-issued one-time token instead of the device flow.
+      PROBE_ENROLL_TOKEN: ${PROBE_ENROLL_TOKEN:-}
+      # Optional tuning; defaults match the agent's own defaults.
+      PROBE_INTERVAL_SECONDS: ${PROBE_INTERVAL_SECONDS:-60}
+      PROBE_TIMEOUT_MS: ${PROBE_TIMEOUT_MS:-5000}
+      PROBE_MAX_RESULTS: ${PROBE_MAX_RESULTS:-100}
+      PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-3}
+      PROBE_ALLOW_INSECURE: ${PROBE_ALLOW_INSECURE:-false}
+      # Optional: pin a release / mirror, or re-download on restart.
+      PROBE_VERSION: ${PROBE_VERSION:-latest}
+      BEACON_DOWNLOAD_BASE: ${BEACON_DOWNLOAD_BASE:-https://get.beaconix.app/probe}
+      PROBE_FORCE_INSTALL: ${PROBE_FORCE_INSTALL:-0}
+    volumes:
+      - probe-data:/data
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  probe-data:

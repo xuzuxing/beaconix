@@ -5,9 +5,12 @@
 #   curl -fsSL https://get.beaconix.app/install.sh | sudo sh -s -- [options]
 #
 # Installs the CLI under /opt/beaconix-probe as the dedicated `beaconix` system
-# user, registers a systemd **system** unit, and enrolls the probe — either by
-# redeeming a one-time token (handed out by the web UI) or through the
-# interactive device-code login.
+# user and registers a systemd **system** unit.
+#
+# Enrollment is optional at install time:
+#   --token <t>   redeem a one-time token issued in the web UI (no interaction)
+#   --login       run the interactive device-code login right now
+#   (neither)     install only — the first probe start prints the approval URL
 #
 set -eu
 
@@ -17,6 +20,7 @@ ENROLL_TOKEN=""
 VERSION="latest"
 MANAGE_SERVICE=1
 DO_UNINSTALL=0
+DO_LOGIN=0
 
 INSTALL_DIR="/opt/beaconix-probe"
 BIN_LINK="/usr/local/bin/beaconix-probe"
@@ -40,11 +44,15 @@ Usage:
 
 Options:
   --token <t>       One-time enrollment token issued in the web UI
+  --login           Start the interactive device-code login after installing
   --api-url <url>   Beacon API base URL
   --version <v>     Install a specific CLI version (default: latest)
   --no-service      Install/update the payload only; do not touch the unit
   --uninstall       Remove the agent and its systemd unit
   -h, --help        Show this help
+
+Without --token/--login the installer only installs; the first probe start
+prints the approval URL (systemd: journalctl -u beaconix-probe -f).
 EOF
 }
 
@@ -67,6 +75,10 @@ while [ $# -gt 0 ]; do
             ;;
         --no-service)
             MANAGE_SERVICE=0
+            shift
+            ;;
+        --login)
+            DO_LOGIN=1
             shift
             ;;
         --uninstall)
@@ -149,7 +161,7 @@ download_payload() {
     log "installed CLI to $INSTALL_DIR (linked at $BIN_LINK)"
 }
 
-enroll_probe() {
+maybe_enroll() {
     if [ -n "$ENROLL_TOKEN" ]; then
         log "redeeming enrollment token"
         if [ -n "$API_URL" ]; then
@@ -157,15 +169,17 @@ enroll_probe() {
         else
             "$BIN_LINK" enroll --enroll-token "$ENROLL_TOKEN"
         fi
-    else
-        log "no --token given; starting interactive device-code login"
+    elif [ "$DO_LOGIN" -eq 1 ]; then
+        log "starting interactive device-code login"
         if [ -n "$API_URL" ]; then
             "$BIN_LINK" login --api-url "$API_URL" || \
-                log "login did not complete; run later: sudo $BIN_LINK login"
+                log "login did not complete; the probe will retry on startup"
         else
             "$BIN_LINK" login || \
-                log "login did not complete; run later: sudo $BIN_LINK login"
+                log "login did not complete; the probe will retry on startup"
         fi
+    else
+        log "no --token/--login given; the probe will print an approval URL on first start"
     fi
 
     if [ -f "$CONF_DIR/probe.json" ]; then
@@ -212,12 +226,19 @@ main() {
     ensure_user
     prepare_dirs
     download_payload
-    enroll_probe
+    maybe_enroll
 
     if [ "$MANAGE_SERVICE" -eq 1 ]; then
         write_unit
         systemctl restart "$SERVICE_NAME"
         "$BIN_LINK" status || true
+        if [ ! -f "$CONF_DIR/probe.json" ]; then
+            log "authorize this probe; the approval URL is printed by the service:"
+            log "  journalctl -u $SERVICE_NAME -f"
+        fi
+    elif [ ! -f "$CONF_DIR/probe.json" ]; then
+        log "authorize this probe by starting it in the foreground:"
+        log "  sudo $BIN_LINK run"
     fi
 
     log "done"

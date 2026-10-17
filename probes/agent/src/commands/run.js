@@ -3,6 +3,7 @@
 const { createSchedule, resolveConcurrency } = require('../schedule');
 const { heartbeat } = require('../api');
 const { pollAndAnswerValidation } = require('../validation');
+const { ensureEnrolled } = require('../enroll');
 const { assertCredentials, assertEncryptedTransport } = require('../preflight');
 const { sleep } = require('../util');
 const logger = require('../logger');
@@ -92,20 +93,24 @@ async function runCycle(config, schedule) {
 }
 
 async function runLoop(config) {
-    assertCredentials(config);
+    // A fresh host has no credential yet: run the device authorization first so
+    // the operator sees the approval URL instead of a hard failure.
+    const enrolled = await ensureEnrolled(config);
+    const activeConfig = enrolled ? { ...config, ...enrolled } : config;
+    assertCredentials(activeConfig);
 
     const signal = createShutdownSignal();
     const schedule = createSchedule();
     let consecutiveFailures = 0;
 
     logger.log(
-        `Probe agent started: probe=${config.key} heartbeat=${config.intervalSeconds}s ` +
+        `Probe agent started: probe=${activeConfig.key} heartbeat=${activeConfig.intervalSeconds}s ` +
             `concurrency=${resolveConcurrency()} (checks follow each monitor's interval)`,
     );
 
     while (!signal.aborted) {
         try {
-            await runCycle(config, schedule);
+            await runCycle(activeConfig, schedule);
             consecutiveFailures = 0;
         } catch (err) {
             consecutiveFailures += 1;
@@ -116,7 +121,7 @@ async function runLoop(config) {
 
         if (signal.aborted) break;
 
-        let delayMs = config.intervalSeconds * 1000;
+        let delayMs = activeConfig.intervalSeconds * 1000;
         if (consecutiveFailures > 0) {
             // Retry sooner after failures so a transient network blip recovers
             // quickly, but never wait longer than the configured interval.

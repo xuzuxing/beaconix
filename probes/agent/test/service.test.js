@@ -103,16 +103,18 @@ test('start/status/restart/stop drive the pidfile backend', async () => {
     }
 });
 
-test('start refuses to run without credentials', async () => {
+test('start without credentials leaves enrollment to the first run', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-service-'));
     try {
         const result = await runCli(
-            ['start', '--api-url', 'https://api.example.com/api'],
+            ['start', '--api-url', 'http://127.0.0.1:9/api', '--allow-insecure'],
             home,
         );
-        assert.equal(result.status, 1);
-        assert.match(result.stderr, /Missing probe credential/);
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        assert.match(result.stdout, /No probe credential yet/);
+        assert.match(result.stdout, /Authorization URL: tail -f/);
     } finally {
+        await runCli(['stop'], home).catch(() => undefined);
         fs.rmSync(home, { recursive: true, force: true });
     }
 });

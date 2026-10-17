@@ -1,0 +1,9 @@
+# probes/Dockerfile installs the published payload and never COPYs from this
+# context. This file only keeps local credentials and build artifacts out of the
+# build context (Docker ignores .gitignore), e.g. before sending it to a remote
+# daemon. It stays narrow on purpose: Dockerfile.probe-test is documented to
+# build from this directory too and needs the agent sources.
+.env
+**/.env
+**/probe.env
+agent/dist/
