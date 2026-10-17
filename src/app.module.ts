@@ -44,6 +44,7 @@ import { AttachmentsModule } from './modules/attachments/attachments.module';
 import { LabelsModule } from './modules/labels/labels.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { TicketsModule } from './modules/tickets/tickets.module';
 import { EmailModule } from './modules/email/email.module';
 import { CronModule } from './modules/cron/cron.module';
 import { MonitorsModule } from './modules/monitors/monitors.module';
@@ -161,6 +162,7 @@ import { HealthController } from './health.controller';
         LabelsModule,
         AuditLogsModule,
         NotificationsModule,
+        TicketsModule,
         CronModule,
         MonitorsModule,
         RulesModule,

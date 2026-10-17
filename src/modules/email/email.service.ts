@@ -334,6 +334,16 @@ export class EmailService {
                     payload as EmailPayloadMap[EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED],
                 );
                 break;
+            case EmailTemplate.TICKET_REPLIED:
+                result = this.buildTicketRepliedEmail(
+                    payload as EmailPayloadMap[EmailTemplate.TICKET_REPLIED],
+                );
+                break;
+            case EmailTemplate.TICKET_STATUS_CHANGED:
+                result = this.buildTicketStatusChangedEmail(
+                    payload as EmailPayloadMap[EmailTemplate.TICKET_STATUS_CHANGED],
+                );
+                break;
             default:
                 throw new Error(`Unknown email template: ${String(template)}`);
         }
@@ -587,6 +597,45 @@ export class EmailService {
                     <tr><td style="padding:6px 0; color:#6b7280;">IP address</td><td style="padding:6px 0;">${ipAddress}</td></tr>
                 </table>
                 <p style="color:#dc2626; font-size:14px;">If this wasn't you, reset your password and regenerate your recovery codes immediately.</p>
+            `,
+        };
+    }
+
+    private buildTicketRepliedEmail(
+        payload: EmailPayloadMap[EmailTemplate.TICKET_REPLIED],
+    ) {
+        const name = escapeHtml(payload.name);
+        const subject = escapeHtml(payload.subject);
+        const body = escapeHtml(payload.body).replace(/\n/g, '<br/>');
+        const ticketUrl = escapeHtml(payload.ticketUrl);
+        return {
+            subject: `New reply on ticket #${payload.ticketNumber}`,
+            html: `
+                <h2>New reply on your ticket</h2>
+                <p>Hi ${name},</p>
+                <p>The support team replied to <strong>#${payload.ticketNumber} ${subject}</strong>:</p>
+                <blockquote style="margin:16px 0; padding:12px 16px; background:#f9fafb; border-left:3px solid #4F46E5; color:#374151;">${body}</blockquote>
+                <p><a href="${ticketUrl}" style="background:#4F46E5; color:#fff; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block;">View Ticket</a></p>
+                <p style="color:#6b7280; font-size:14px;">Reply from the ticket page if you still need help.</p>
+            `,
+        };
+    }
+
+    private buildTicketStatusChangedEmail(
+        payload: EmailPayloadMap[EmailTemplate.TICKET_STATUS_CHANGED],
+    ) {
+        const name = escapeHtml(payload.name);
+        const subject = escapeHtml(payload.subject);
+        const status = escapeHtml(payload.status);
+        const ticketUrl = escapeHtml(payload.ticketUrl);
+        return {
+            subject: `Ticket #${payload.ticketNumber} is now ${payload.status}`,
+            html: `
+                <h2>Ticket ${status}</h2>
+                <p>Hi ${name},</p>
+                <p>Your ticket <strong>#${payload.ticketNumber} ${subject}</strong> was marked as <strong>${status}</strong>.</p>
+                <p><a href="${ticketUrl}" style="background:#4F46E5; color:#fff; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block;">View Ticket</a></p>
+                <p style="color:#6b7280; font-size:14px;">If you need more help, reply on the ticket and it will be reopened.</p>
             `,
         };
     }

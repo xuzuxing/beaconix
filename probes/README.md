@@ -140,6 +140,6 @@ node probes/agent/functions/scf.js
 
 ## 相关文档
 
-- [探针 CLI 与 OAuth2 注册方案](../docs/design/probe-agent.md)
+- [探针 Agent 与 CLI 设计](../docs/design/probe-agent.md)
 - [云函数（SCF）部署指南](../docs/guides/probe-scf-deployment.md)
 - [打包与发布指南](RELEASE.md)

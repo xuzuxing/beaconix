@@ -13,6 +13,8 @@ export enum EmailTemplate {
     TWO_FACTOR_ENABLED = 'two-factor-enabled',
     TWO_FACTOR_DISABLED = 'two-factor-disabled',
     TWO_FACTOR_RECOVERY_CODE_USED = 'two-factor-recovery-code-used',
+    TICKET_REPLIED = 'ticket-replied',
+    TICKET_STATUS_CHANGED = 'ticket-status-changed',
 }
 
 export interface EmailPayloadMap {
@@ -76,6 +78,30 @@ export interface EmailPayloadMap {
     [EmailTemplate.TWO_FACTOR_ENABLED]: TwoFactorSecurityEmailPayload;
     [EmailTemplate.TWO_FACTOR_DISABLED]: TwoFactorSecurityEmailPayload;
     [EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED]: RecoveryCodeUsedEmailPayload;
+    [EmailTemplate.TICKET_REPLIED]: TicketRepliedEmailPayload;
+    [EmailTemplate.TICKET_STATUS_CHANGED]: TicketStatusChangedEmailPayload;
+}
+
+/** Payload for "a platform operator replied to your ticket". */
+export interface TicketRepliedEmailPayload {
+    to: string;
+    name: string;
+    ticketNumber: number;
+    subject: string;
+    /** Reply body, already truncated to the notification excerpt length. */
+    body: string;
+    ticketUrl: string;
+}
+
+/** Payload for "your ticket was resolved / closed". */
+export interface TicketStatusChangedEmailPayload {
+    to: string;
+    name: string;
+    ticketNumber: number;
+    subject: string;
+    /** Target status, `RESOLVED` or `CLOSED`. */
+    status: string;
+    ticketUrl: string;
 }
 
 /** Payload for the 2FA enabled / disabled security notifications. */

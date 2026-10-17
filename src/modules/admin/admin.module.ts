@@ -13,6 +13,10 @@ import { SystemProbeScheduler } from './system-probes/system-probe-scheduler';
 import { SystemProbesService } from './system-probes/system-probes.service';
 import { AdminTenantsController } from './tenants/admin-tenants.controller';
 import { AdminTenantsService } from './tenants/admin-tenants.service';
+import { AdminTicketCategoriesController } from './tickets/admin-ticket-categories.controller';
+import { AdminTicketCategoriesService } from './tickets/admin-ticket-categories.service';
+import { AdminTicketsController } from './tickets/admin-tickets.controller';
+import { AdminTicketsService } from './tickets/admin-tickets.service';
 
 @Module({
     imports: [ProbeValidationModule, QueuesModule],
@@ -22,6 +26,8 @@ import { AdminTenantsService } from './tenants/admin-tenants.service';
         AdminMetricsController,
         AdminAuditLogsController,
         AdminOrdersController,
+        AdminTicketsController,
+        AdminTicketCategoriesController,
     ],
     providers: [
         SystemProbesService,
@@ -31,6 +37,8 @@ import { AdminTenantsService } from './tenants/admin-tenants.service';
         AdminMetricsService,
         AdminAuditLogsService,
         AdminOrdersService,
+        AdminTicketsService,
+        AdminTicketCategoriesService,
     ],
     exports: [SystemProbeScheduler],
 })
