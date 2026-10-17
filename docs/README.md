@@ -56,7 +56,7 @@ docs/
 | ------------------------------------------------- | ------------------------------------------------------------------ |
 | [可用率告警](design/availability-alerts.md)       | 消费规则结论，计算可用率和连续异常，绑定渠道、去重与恢复           |
 | [规则引擎](design/rule-engine.md)                 | 规则树、字段元数据、求值、规则组管理、鉴权、检查链路接入与验收     |
-| [探针 Agent](design/probe-agent.md)               | CLI 注册设计与挑战应答设计的演进；日常使用以探针 README 为准       |
+| [探针 Agent](design/probe-agent.md)               | CLI 工程、两条注册路径、安装与 systemd 常驻、心跳/上报/校验协议    |
 | [探针动态调度](design/probe-scheduling.md)        | SYSTEM/TENANT 分工、Redis 分配、调度与降级；保留原设计示例         |
 | [工作区通知](design/workspace-notifications.md)   | 已实现事件清单、接收者、邀请访问、事务 outbox 和多实例 SSE         |
 | [双因素认证](design/two-factor-authentication.md) | TOTP、恢复码、challenge、secret 加密、安全策略与原设计决策         |
