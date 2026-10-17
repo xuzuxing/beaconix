@@ -2,6 +2,7 @@ import { BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { SettingValueType } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infra/database/prisma.service';
+import { SETTING_DEFINITIONS } from './settings.defaults';
 import { SettingsService } from './settings.service';
 
 describe('SettingsService', () => {
@@ -167,6 +168,70 @@ describe('SettingsService', () => {
                 value: 'ops@example.com',
             }),
         ).resolves.toMatchObject({ group: 'system' });
+    });
+
+    it('exposes only the public settings through findPublic', async () => {
+        prisma.setting.findMany.mockResolvedValue([]);
+
+        const snapshot = await service.findPublic();
+
+        expect(Object.keys(snapshot).sort()).toEqual([
+            'system.defaultLocale',
+            'system.faviconUrl',
+            'system.footerCopyright',
+            'system.icpLicense',
+            'system.logoUrl',
+            'system.maintenanceMode',
+            'system.siteDescription',
+            'system.siteName',
+            'system.supportEmail',
+        ]);
+        expect(snapshot['system.siteName']).toBe('Beacon');
+        expect(snapshot['system.maintenanceMode']).toBe(false);
+    });
+
+    it('never leaks runtime parameters or secrets through findPublic', async () => {
+        prisma.setting.findMany.mockResolvedValue([]);
+
+        const snapshot = await service.findPublic();
+
+        for (const key of [
+            'smtp.host',
+            'smtp.account',
+            'smtp.password',
+            'storage.driver',
+            'storage.oss.signedUrlTtlSeconds',
+            'attachments.maxImageSizeMb',
+            'develop.configGroup',
+            'develop.debugMode',
+        ]) {
+            expect(snapshot).not.toHaveProperty(key);
+        }
+    });
+
+    it('serves the stored value in the public snapshot', async () => {
+        prisma.setting.findMany.mockResolvedValue([
+            row({
+                key: 'system.siteName',
+                name: '站点名称',
+                value: 'Acme 监控',
+                valueType: SettingValueType.STRING,
+                description: '浏览器标题、系统邮件与状态页上展示的产品名。',
+                overridden: true,
+            }),
+        ]);
+
+        const snapshot = await service.findPublic();
+
+        expect(snapshot['system.siteName']).toBe('Acme 监控');
+    });
+
+    it('never marks a secret setting as public', () => {
+        expect(
+            SETTING_DEFINITIONS.filter(
+                (definition) => definition.isPublic && definition.isSecret,
+            ),
+        ).toEqual([]);
     });
 
     it('upserts known settings with their built-in metadata', async () => {

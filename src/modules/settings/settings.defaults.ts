@@ -27,6 +27,11 @@ export interface SettingDefinition {
     email?: boolean;
     /** 值必须是「非空且不重复的字符串数组」 */
     stringArray?: boolean;
+    /**
+     * 是否通过公开端点 `GET /api/settings/public` 暴露给前端。
+     * 只有展示型配置才是公开的；`isSecret` 的项即使标了也会被过滤掉。
+     */
+    isPublic?: boolean;
 }
 
 /**
@@ -42,6 +47,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.siteName',
         name: '站点名称',
         group: 'system',
+        isPublic: true,
         value: 'Beacon',
         valueType: SettingValueType.STRING,
         description: '浏览器标题、系统邮件与状态页上展示的产品名。',
@@ -50,6 +56,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.siteDescription',
         name: '站点描述',
         group: 'system',
+        isPublic: true,
         value: '云监控与状态页平台',
         valueType: SettingValueType.STRING,
         description: '登录页与状态页上的站点简介。',
@@ -58,6 +65,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.logoUrl',
         name: '站点 Logo',
         group: 'system',
+        isPublic: true,
         value: '',
         valueType: SettingValueType.STRING,
         description: '顶栏与登录页使用的 Logo 地址，留空则用内置图标。',
@@ -67,6 +75,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.faviconUrl',
         name: '浏览器图标',
         group: 'system',
+        isPublic: true,
         value: '',
         valueType: SettingValueType.STRING,
         description: '浏览器标签页图标地址，留空则用内置图标。',
@@ -76,6 +85,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.footerCopyright',
         name: '页脚版权',
         group: 'system',
+        isPublic: true,
         value: '© 2026 Beacon',
         valueType: SettingValueType.STRING,
         description: '页面底部展示的版权文案。',
@@ -84,6 +94,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.icpLicense',
         name: 'ICP 备案号',
         group: 'system',
+        isPublic: true,
         value: '',
         valueType: SettingValueType.STRING,
         description: '中国大陆部署时展示在页脚的备案号。',
@@ -92,6 +103,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.supportEmail',
         name: '客服邮箱',
         group: 'system',
+        isPublic: true,
         value: 'support@beacon.example.com',
         valueType: SettingValueType.STRING,
         description: '页脚与系统邮件里对外提供的联系邮箱。',
@@ -101,6 +113,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.defaultLocale',
         name: '默认语言',
         group: 'system',
+        isPublic: true,
         value: 'zh-CN',
         valueType: SettingValueType.STRING,
         description: '新访客与注册用户的默认界面语言。',
@@ -111,6 +124,7 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'system.maintenanceMode',
         name: '维护模式',
         group: 'system',
+        isPublic: true,
         value: false,
         valueType: SettingValueType.BOOLEAN,
         description: '开启后除平台超级管理员外的访问一律被挡在维护页。',

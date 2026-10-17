@@ -1178,6 +1178,8 @@ Runtime-tunable platform settings live in the `settings` table and can be manage
 
 Built-in rows are inserted by `pnpm prisma:db:seed`. That step is **idempotent and only fills in keys the table does not have yet** — anything already in the table (including values changed from the admin UI) is left untouched, so it is safe to run on every deploy. Run it after a deploy, also on existing databases, otherwise newly added settings simply show up as the code default without a row. `isDefault` means "never overridden" (`settings.overridden = false`, set to `true` by `PATCH`), so a value edited from the UI stops being a default even if it is set back to the built-in value.
 
+`GET /api/settings/public` is the unauthenticated read used on public pages (login, status pages). It returns a flat `{ key: value }` map of the built-in settings marked `isPublic` in `settings.defaults.ts` — currently the nine `system.*` display keys. Internal parameters (`smtp.*`, `storage.*`, `attachments.*`, `develop.*`) and anything flagged `isSecret` are never included, even if a definition is mislabelled. Values come from the same merged/ cached read as the admin endpoint, so a write is visible within 30 seconds.
+
 ### Which settings actually change behaviour
 
 Consumed at runtime today:

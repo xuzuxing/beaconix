@@ -55,6 +55,7 @@ services:
       - .env
     environment:
       PORT: 3000
+      NODE_ENV: ${NODE_ENV:-production}
       APP_WEB_URL: ${APP_WEB_URL:-http://localhost:5173}
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-beaconix}?schema=public&sslmode=disable
       REDIS_URL: redis://redis:6379

@@ -91,6 +91,27 @@ export class SettingsService {
     }
 
     /**
+     * 公开端点用的配置快照：只取 `isPublic` 的内置项，并强制剔除 secret
+     * （即使有人误把某个 secret 项标成公开，也不会出现在响应里）。
+     * 返回扁平的 `{ key: value }`，前端不必再按 entity 拆。
+     */
+    async findPublic(): Promise<Record<string, unknown>> {
+        const allowed = new Set(
+            SETTING_DEFINITIONS.filter(
+                (definition) => definition.isPublic && !definition.isSecret,
+            ).map((definition) => definition.key),
+        );
+
+        const snapshot: Record<string, unknown> = {};
+        for (const entity of await this.findAll()) {
+            if (!allowed.has(entity.key) || entity.isSecret) continue;
+            snapshot[entity.key] = entity.value;
+        }
+
+        return snapshot;
+    }
+
+    /**
      * 只覆盖值。元数据（name / group / valueType / isSecret / description）
      * 由内置定义维护，接口改不动，避免把元数据写坏（例如 valueType 被改成
      * STRING 后存量 JSON 值再也解析不出来）。

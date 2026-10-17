@@ -78,10 +78,11 @@ COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 # Needed by some packages at runtime
 COPY package.json ./
 
-EXPOSE 3000
+ARG APP_PORT=3000
+EXPOSE $APP_PORT
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD wget -qO- http://localhost:3000/api/health/live || exit 1
+    CMD wget -qO- http://localhost:$APP_PORT/api/health/live || exit 1
 
 # Run migrations first, then start the server
 # DATABASE_URL is injected by Render at container startup — not available at build time
