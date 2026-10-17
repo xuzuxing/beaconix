@@ -86,11 +86,18 @@ export class LocalStorageProvider implements AttachmentStorageProvider {
         key: string,
         _bucket?: string | null,
         visibility: StorageVisibility = 'PRIVATE',
+        options?: { followPublicUrl?: boolean },
     ): Promise<DownloadResult> {
-        const publicUrl =
-            visibility === 'PUBLIC' ? await this.publicUrl(key) : '';
-        if (publicUrl) {
-            return { type: 'redirect', url: publicUrl };
+        // `storage.publicBaseUrl` only resolves when a web server actually maps
+        // it onto the public storage root; pointing it at another host or a
+        // frontend domain turns the download into a 404. Signed attachment links
+        // therefore opt out (`followPublicUrl: false`) and stream from disk.
+        if (options?.followPublicUrl !== false) {
+            const publicUrl =
+                visibility === 'PUBLIC' ? await this.publicUrl(key) : '';
+            if (publicUrl) {
+                return { type: 'redirect', url: publicUrl };
+            }
         }
 
         return {

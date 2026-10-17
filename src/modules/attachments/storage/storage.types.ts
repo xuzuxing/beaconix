@@ -41,5 +41,6 @@ export interface AttachmentStorageProvider {
         key: string,
         bucket?: string | null,
         visibility?: StorageVisibility,
+        options?: { followPublicUrl?: boolean },
     ): Promise<DownloadResult>;
 }

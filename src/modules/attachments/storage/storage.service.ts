@@ -35,8 +35,14 @@ export class StorageService {
         key: string,
         bucket?: string | null,
         visibility: StorageVisibility = 'PRIVATE',
+        options?: { followPublicUrl?: boolean },
     ): Promise<DownloadResult> {
-        return this.provider(provider).getDownload(key, bucket, visibility);
+        return this.provider(provider).getDownload(
+            key,
+            bucket,
+            visibility,
+            options,
+        );
     }
 
     async activeProviderName(): Promise<'LOCAL' | 'OSS'> {

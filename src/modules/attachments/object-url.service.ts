@@ -5,9 +5,15 @@ import type { JwtConfig } from '../../config';
 import { SettingsService } from '../settings';
 
 /** Fallback lifetime of a signed object link, in seconds. */
-const DEFAULT_TTL_SECONDS = 900;
+const DEFAULT_TTL_SECONDS = 3600;
 
-const MIN_TTL_SECONDS = 30;
+/**
+ * Even a deliberately short OSS signature TTL is too short for a ticket form:
+ * the file is uploaded first and previewed until the ticket is submitted, so a
+ * five-minute link would be dead before the user is done typing.
+ */
+const MIN_TTL_SECONDS = 30 * 60;
+
 const MAX_TTL_SECONDS = 24 * 60 * 60;
 
 /** Path the signed links point at — the endpoint reads `exp` + `sig` back. */
@@ -34,12 +40,20 @@ export class AttachmentObjectUrlService {
     }
 
     /**
-     * Direct link for a stored object: the storage provider's own URL when it
-     * has one (OSS / a configured public base URL), otherwise a signed link
-     * back to this API.
+     * Direct link for a stored object.
+     *
+     * Only a remote provider is trusted to own a public URL (OSS / CDN). A LOCAL
+     * object lives on this server's disk, while `storage.publicBaseUrl` often
+     * points at a host or path that does not map to that directory — following
+     * it is what turned ticket images into 404s — so LOCAL always goes through
+     * the signed endpoint.
      */
-    async toObjectUrl(key: string, storedUrl?: string | null): Promise<string> {
-        if (storedUrl) return storedUrl;
+    async toObjectUrl(
+        key: string,
+        provider: string,
+        storedUrl?: string | null,
+    ): Promise<string> {
+        if (provider === 'OSS' && storedUrl) return storedUrl;
         return this.sign(key);
     }
 

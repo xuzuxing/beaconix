@@ -37,7 +37,7 @@ import { AttachmentObjectUrlService } from './object-url.service';
 /** Minimal attachment row the ticket flow reads (structural, not Prisma-bound). */
 export type TicketAttachmentRow = Pick<
     Attachment,
-    'filename' | 'mimeType' | 'size' | 'url' | 'fileKey'
+    'filename' | 'mimeType' | 'size' | 'url' | 'fileKey' | 'storageProvider'
 >;
 
 /** Query the public object endpoint accepts; `exp` / `sig` make it a signed link. */
@@ -257,7 +257,14 @@ export class AttachmentsService {
             directory: uploadDirectory,
             bucket: attachment.bucket ?? undefined,
             fileKey: stored.key,
-            url: await this.objectUrls.toObjectUrl(stored.key, stored.url),
+            url: await this.objectUrls.toObjectUrl(
+                stored.key,
+                stored.provider,
+                // Ticket files always ship as a signed link; other directories
+                // (avatars, brand images) keep whatever the storage layer gave
+                // us, because those URLs are persisted by the caller.
+                uploadDirectory === TICKET_UPLOAD_DIRECTORY ? null : stored.url,
+            ),
             checksum: attachment.checksum ?? undefined,
             uploadedById: userId,
         });
@@ -343,7 +350,11 @@ export class AttachmentsService {
                 size: row.size,
                 fileKey: row.fileKey ?? '',
                 url: row.fileKey
-                    ? await this.objectUrls.toObjectUrl(row.fileKey, row.url)
+                    ? await this.objectUrls.toObjectUrl(
+                          row.fileKey,
+                          row.storageProvider,
+                          row.url,
+                      )
                     : row.url,
             })),
         );
@@ -375,6 +386,10 @@ export class AttachmentsService {
                 query.key,
                 query.bucket,
                 'PUBLIC',
+                // This endpoint is the signed link target: it must stream from
+                // the storage itself instead of bouncing to a public base URL
+                // that may not map onto the storage root.
+                { followPublicUrl: false },
             ),
         };
     }

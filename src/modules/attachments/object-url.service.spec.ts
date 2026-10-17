@@ -56,14 +56,28 @@ describe('AttachmentObjectUrlService', () => {
         ).toBe(false);
     });
 
-    it('uses the storage provider url when one exists', async () => {
+    it('uses the provider url only for remote storage', async () => {
         const { service } = createService();
 
         await expect(
-            service.toObjectUrl('tickets/a.png', 'https://cdn.test/a.png'),
+            service.toObjectUrl(
+                'tickets/a.png',
+                'OSS',
+                'https://cdn.test/a.png',
+            ),
         ).resolves.toBe('https://cdn.test/a.png');
-        await expect(service.toObjectUrl('tickets/a.png', '')).resolves.toMatch(
-            /^\/api\/attachments\/object\?/,
-        );
+
+        // A LOCAL object is only reachable through the signed endpoint, even
+        // when storage.publicBaseUrl produced an absolute URL.
+        await expect(
+            service.toObjectUrl(
+                'tickets/a.png',
+                'LOCAL',
+                'https://cdn.test/a.png',
+            ),
+        ).resolves.toMatch(/^\/api\/attachments\/object\?/);
+        await expect(
+            service.toObjectUrl('tickets/a.png', 'LOCAL', ''),
+        ).resolves.toMatch(/^\/api\/attachments\/object\?/);
     });
 });
