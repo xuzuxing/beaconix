@@ -8,6 +8,7 @@ import {
 } from '@nestjs/swagger';
 import { TicketCategoriesService } from './ticket-categories.service';
 import { TicketCategoryEntity } from './entities';
+import { SkipMaintenance } from '../../common/decorators';
 
 /**
  * Registered before {@link TicketsController} in the module so that
@@ -15,6 +16,7 @@ import { TicketCategoryEntity } from './entities';
  */
 @ApiTags('Tickets')
 @ApiBearerAuth('access-token')
+@SkipMaintenance()
 @Controller('tickets')
 export class TicketCategoriesController {
     constructor(

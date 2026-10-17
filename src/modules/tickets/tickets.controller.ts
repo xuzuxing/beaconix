@@ -23,7 +23,7 @@ import {
     ApiUnauthorizedResponse,
     getSchemaPath,
 } from '@nestjs/swagger';
-import { CurrentUser } from '../../common/decorators';
+import { CurrentUser, SkipMaintenance } from '../../common/decorators';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { TicketsService } from './tickets.service';
 import { CreateTicketDto, CreateTicketReplyDto, QueryTicketsDto } from './dto';
@@ -36,6 +36,7 @@ import { TicketEntity } from './entities';
  */
 @ApiTags('Tickets')
 @ApiBearerAuth('access-token')
+@SkipMaintenance()
 @ApiExtraModels(TicketEntity)
 @Controller('tickets')
 export class TicketsController {
