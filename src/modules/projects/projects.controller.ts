@@ -27,7 +27,12 @@ import {
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto, UpdateProjectDto } from './dto';
 import { ProjectEntity } from './entities';
-import { CurrentUser, Roles, AuditLog } from '../../common/decorators';
+import {
+    CurrentUser,
+    Roles,
+    AuditLog,
+    SkipMaintenance,
+} from '../../common/decorators';
 import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
@@ -40,6 +45,7 @@ export class ProjectsController {
     constructor(private readonly projectsService: ProjectsService) {}
 
     @Get()
+    @SkipMaintenance()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'List all projects in the organization' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })

@@ -8,6 +8,7 @@ import {
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { SkipMaintenance } from '../../../common/decorators';
 import { OrgMemberGuard } from '../../../common/guards';
 import { SubscriptionStackEntity } from './entities';
 import { SubscriptionService } from './subscription.service';
@@ -19,6 +20,7 @@ export class SubscriptionController {
     constructor(private readonly subscriptionService: SubscriptionService) {}
 
     @Get()
+    @SkipMaintenance()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Get the subscription stack of an organization' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })

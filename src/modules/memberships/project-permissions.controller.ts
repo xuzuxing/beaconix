@@ -11,7 +11,7 @@ import {
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { CurrentUser } from '../../common/decorators';
+import { CurrentUser, SkipMaintenance } from '../../common/decorators';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
 import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
@@ -30,6 +30,7 @@ export class OrganizationProjectPermissionsController {
     constructor(private readonly permissions: ProjectPermissionsService) {}
 
     @Get('my-permissions')
+    @SkipMaintenance()
     @ApiOperation({ summary: 'Get current organization capabilities' })
     @ApiOkResponse({
         description:
@@ -93,6 +94,7 @@ export class ProjectPermissionsController {
     constructor(private readonly permissions: ProjectPermissionsService) {}
 
     @Get('my-permissions')
+    @SkipMaintenance()
     @ApiOperation({ summary: 'Get current project role and capabilities' })
     @ApiOkResponse({
         description: 'Assigned and effective role with action capabilities',

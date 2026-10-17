@@ -24,7 +24,11 @@ import { Observable } from 'rxjs';
 import { NotificationsService } from './notifications.service';
 import { QueryNotificationsDto } from './dto';
 import { NotificationEntity } from './entities';
-import { CurrentUser, SkipTransform } from '../../common/decorators';
+import {
+    CurrentUser,
+    SkipTransform,
+    SkipMaintenance,
+} from '../../common/decorators';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
 interface MessageEvent {
@@ -35,6 +39,7 @@ interface MessageEvent {
 }
 
 @ApiTags('Notifications')
+@SkipMaintenance()
 @ApiBearerAuth('access-token')
 @Controller('notifications')
 export class NotificationsController {

@@ -8,6 +8,7 @@ import {
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { SkipMaintenance } from '../../../common/decorators';
 import { OrgMemberGuard } from '../../../common/guards';
 import { QuotaService } from '../../../shared/quota/quota.service';
 
@@ -18,6 +19,7 @@ export class QuotaController {
     constructor(private readonly quotaService: QuotaService) {}
 
     @Get()
+    @SkipMaintenance()
     @UseGuards(OrgMemberGuard)
     @ApiOperation({ summary: 'Current plan usage summary' })
     @ApiParam({ name: 'orgId', description: 'Organization CUID' })

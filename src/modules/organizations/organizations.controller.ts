@@ -31,7 +31,12 @@ import {
     TransferOwnershipDto,
 } from './dto';
 import { OrganizationEntity } from './entities';
-import { CurrentUser, Roles, AuditLog } from '../../common/decorators';
+import {
+    CurrentUser,
+    Roles,
+    AuditLog,
+    SkipMaintenance,
+} from '../../common/decorators';
 import { RolesGuard, OrgMemberGuard } from '../../common/guards';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 
@@ -60,6 +65,7 @@ export class OrganizationsController {
     }
 
     @Get()
+    @SkipMaintenance()
     @ApiOperation({ summary: "List current user's organizations" })
     @ApiOkResponse({
         type: [OrganizationEntity],
