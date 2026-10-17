@@ -73,7 +73,7 @@ export class AdminTicketsService {
         const page = query.page ?? 1;
         const limit = query.limit ?? 20;
         const where = this.buildWhere(query);
-        const [tickets, total] = await Promise.all([
+        const [items, total] = await Promise.all([
             this.prisma.ticket.findMany({
                 where,
                 include: ticketInclude,
@@ -84,8 +84,11 @@ export class AdminTicketsService {
             this.prisma.ticket.count({ where }),
         ]);
         return {
-            data: tickets.map((ticket) => new TicketEntity(ticket)),
-            meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+            items: items.map((ticket) => new TicketEntity(ticket)),
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
         };
     }
 

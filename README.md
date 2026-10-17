@@ -10,7 +10,7 @@
   <img src="https://shieldcn.dev/badge/TypeScript-6.0-3178C6.svg?logo=typescript&logoColor=white" alt="TypeScript 6.0" />
   <img src="https://shieldcn.dev/badge/Node.js-22-5FA04E.svg?logo=nodedotjs&logoColor=white" alt="Node.js 22" />
   <img src="https://shieldcn.dev/badge/Docker-ready-2496ED.svg?logo=docker&logoColor=white" alt="Docker ready" />
-  <a href="https://getbeacon.dev/api/docs/api/docs"><img src="https://shieldcn.dev/badge/API_Docs-Swagger-85EA2D.svg?logo=swagger&logoColor=white" alt="API Docs" /></a>
+  <a href="https://beaconix.app/api/docs"><img src="https://shieldcn.dev/badge/API_Docs-Swagger-85EA2D.svg?logo=swagger&logoColor=white" alt="API Docs" /></a>
 </p>
 
 ---
@@ -1189,10 +1189,23 @@ Consumed at runtime today:
 | `system.siteName` | Email sender display name, and the header/footer of every email template |
 | `system.supportEmail` | "Contact" line in the email footer (omitted when empty) |
 | `develop.debugMode` | `GlobalExceptionFilter`, which adds `detail` to 5xx responses |
+| `system.maintenanceMode` | `MaintenanceGuard` — answers `503` for everyone except platform SUPER_ADMINs and the exempt prefixes |
 | `smtp.*` | With `smtp.host` set, system mail is delivered over SMTP instead of Resend |
 | `storage.*`, `attachments.max*` | Attachment upload/download path |
 
 The remaining keys are stored, validated and editable, but nothing reads them yet: `system.siteDescription` / `logoUrl` / `faviconUrl` / `footerCopyright` / `icpLicense` / `defaultLocale` and `system.maintenanceMode` are front-end concerns; `develop.apiDocsUrl` / `rateLimitPerMinute` / `seedDemoData` are not wired up.
+
+### Maintenance mode
+
+`system.maintenanceMode` is enforced by `MaintenanceGuard`, registered globally **after** `JwtAuthGuard` (so `request.user` is available). While the switch is on, a request gets `503` with `Retry-After: 60` unless it is:
+
+- a platform `SUPER_ADMIN` (otherwise nobody could turn the switch back off),
+- marked with `@SkipMaintenance()`, or
+- under one of `MAINTENANCE_EXEMPT_PREFIXES`: `/api/health`, `/api/status`, `/api/auth`, `/api/plans`, `/api/settings/public`, `/api/payment`, `/api/probes`.
+
+Each entry covers the exact segment or anything below it — `/api/status` deliberately does not cover `/api/status-pages`. Those seven are the surfaces that must stay reachable: health probes, sign-in/token refresh, the public status pages, the public settings the web client needs to render the maintenance notice, WeChat Pay callbacks, and probe heartbeats/results.
+
+If the setting cannot be read the guard **fails open** — a settings/DB hiccup must not turn the whole API into 503. The 503 body carries a human-readable `message`, which the web client surfaces as-is.
 
 ### When a change takes effect
 

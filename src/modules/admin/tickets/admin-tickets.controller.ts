@@ -16,6 +16,7 @@ import {
     ApiBody,
     ApiConflictResponse,
     ApiCreatedResponse,
+    ApiExtraModels,
     ApiForbiddenResponse,
     ApiNoContentResponse,
     ApiNotFoundResponse,
@@ -24,6 +25,7 @@ import {
     ApiParam,
     ApiTags,
     ApiUnauthorizedResponse,
+    getSchemaPath,
 } from '@nestjs/swagger';
 import { AuditLog, CurrentUser } from '../../../common/decorators';
 import { SuperAdminGuard } from '../../../common/guards';
@@ -39,13 +41,28 @@ import { TicketEntity } from '../../tickets/entities';
 @ApiTags('Admin / Tickets')
 @ApiBearerAuth('access-token')
 @UseGuards(SuperAdminGuard)
+@ApiExtraModels(TicketEntity)
 @Controller('admin/tickets')
 export class AdminTicketsController {
     constructor(private readonly adminTicketsService: AdminTicketsService) {}
 
     @Get()
     @ApiOperation({ summary: 'List every ticket across the platform' })
-    @ApiOkResponse({ description: 'Paginated ticket list' })
+    @ApiOkResponse({
+        description: 'Paginated ticket list',
+        schema: {
+            properties: {
+                items: {
+                    type: 'array',
+                    items: { $ref: getSchemaPath(TicketEntity) },
+                },
+                total: { type: 'number', example: 128 },
+                page: { type: 'number', example: 1 },
+                limit: { type: 'number', example: 25 },
+                totalPages: { type: 'number', example: 6 },
+            },
+        },
+    })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })
     async findAll(@Query() query: QueryAdminTicketsDto) {

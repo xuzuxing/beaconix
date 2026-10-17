@@ -106,7 +106,7 @@ export class TicketsService {
             ...(query.status ? { status: query.status } : {}),
             ...(query.categoryId ? { categoryId: query.categoryId } : {}),
         };
-        const [tickets, total] = await Promise.all([
+        const [items, total] = await Promise.all([
             this.prisma.ticket.findMany({
                 where,
                 include: ticketInclude,
@@ -117,8 +117,11 @@ export class TicketsService {
             this.prisma.ticket.count({ where }),
         ]);
         return {
-            data: tickets.map((ticket) => new TicketEntity(ticket)),
-            meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+            items: items.map((ticket) => new TicketEntity(ticket)),
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
         };
     }
 

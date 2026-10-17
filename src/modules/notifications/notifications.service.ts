@@ -427,11 +427,14 @@ export class NotificationsService {
             this.prisma.notification.count({ where }),
         ]);
         return {
-            data: await projectInvitationState(
+            items: await projectInvitationState(
                 this.prisma,
                 notifications.map((n) => new NotificationEntity(n)),
             ),
-            meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
         };
     }
 

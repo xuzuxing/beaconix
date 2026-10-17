@@ -162,6 +162,24 @@ describe('AdminTicketsService.findAll', () => {
             }),
         );
     });
+
+    it('paginates with the flat items envelope', async () => {
+        const { service, prisma } = createService();
+        prisma.ticket.findMany.mockResolvedValue([ticketRow]);
+        prisma.ticket.count.mockResolvedValue(12);
+
+        const result = await service.findAll({ page: 2, limit: 5 });
+
+        expect(result).toMatchObject({
+            total: 12,
+            page: 2,
+            limit: 5,
+            totalPages: 3,
+        });
+        expect(result.items[0]).toMatchObject({ id: 'ticket-1' });
+        expect(result).not.toHaveProperty('data');
+        expect(result).not.toHaveProperty('meta');
+    });
 });
 
 describe('AdminTicketsService.findStats', () => {

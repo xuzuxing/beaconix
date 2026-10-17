@@ -50,21 +50,16 @@ export class NotificationsController {
         description: 'Paginated notifications',
         schema: {
             properties: {
-                data: {
+                items: {
                     type: 'array',
                     items: {
                         $ref: '#/components/schemas/NotificationEntity',
                     },
                 },
-                meta: {
-                    type: 'object',
-                    properties: {
-                        total: { type: 'number' },
-                        page: { type: 'number' },
-                        limit: { type: 'number' },
-                        totalPages: { type: 'number' },
-                    },
-                },
+                total: { type: 'number', example: 24 },
+                page: { type: 'number', example: 1 },
+                limit: { type: 'number', example: 20 },
+                totalPages: { type: 'number', example: 2 },
             },
         },
     })

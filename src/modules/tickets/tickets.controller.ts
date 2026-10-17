@@ -14,12 +14,14 @@ import {
     ApiBody,
     ApiConflictResponse,
     ApiCreatedResponse,
+    ApiExtraModels,
     ApiNotFoundResponse,
     ApiOkResponse,
     ApiOperation,
     ApiParam,
     ApiTags,
     ApiUnauthorizedResponse,
+    getSchemaPath,
 } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators';
 import type { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
@@ -34,6 +36,7 @@ import { TicketEntity } from './entities';
  */
 @ApiTags('Tickets')
 @ApiBearerAuth('access-token')
+@ApiExtraModels(TicketEntity)
 @Controller('tickets')
 export class TicketsController {
     constructor(private readonly ticketsService: TicketsService) {}
@@ -55,7 +58,21 @@ export class TicketsController {
 
     @Get()
     @ApiOperation({ summary: 'List my tickets with filters and pagination' })
-    @ApiOkResponse({ description: 'Paginated ticket list' })
+    @ApiOkResponse({
+        description: 'Paginated ticket list',
+        schema: {
+            properties: {
+                items: {
+                    type: 'array',
+                    items: { $ref: getSchemaPath(TicketEntity) },
+                },
+                total: { type: 'number', example: 12 },
+                page: { type: 'number', example: 1 },
+                limit: { type: 'number', example: 20 },
+                totalPages: { type: 'number', example: 1 },
+            },
+        },
+    })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     async findMine(
         @CurrentUser() user: JwtPayload,

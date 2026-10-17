@@ -216,13 +216,13 @@ describe('TicketsService.findMine', () => {
                 take: 10,
             }),
         );
-        expect(result.meta).toEqual({
+        expect(result).toMatchObject({
             total: 1,
             page: 2,
             limit: 10,
             totalPages: 1,
         });
-        expect(result.data[0]).toMatchObject({ id: 'ticket-1' });
+        expect(result.items[0]).toMatchObject({ id: 'ticket-1' });
     });
 });
 

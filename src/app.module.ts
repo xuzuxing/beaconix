@@ -30,7 +30,7 @@ import { QueueModule } from './infra/queue/queue.module';
 import { RedisModule } from './infra/redis/redis.module';
 import { ScheduledJobsModule } from './infra/scheduler/scheduled-jobs.module';
 import { WechatModule } from './infra/wechat/wechat.module';
-import { JwtAuthGuard } from './common/guards';
+import { JwtAuthGuard, MaintenanceGuard } from './common/guards';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
@@ -183,6 +183,7 @@ import { HealthController } from './health.controller';
         AppService,
         { provide: APP_FILTER, useClass: GlobalExceptionFilter },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
+        { provide: APP_GUARD, useClass: MaintenanceGuard },
         { provide: APP_GUARD, useClass: ThrottlerGuard },
     ],
 })

@@ -248,7 +248,7 @@ void test('workspace notifications with real PostgreSQL transactions', async (t)
                     1,
                 );
                 const listed = await notifications.findAll('invitee', {});
-                const received = listed.data.find(
+                const received = listed.items.find(
                     (notice) => notice.type === 'INVITATION_RECEIVED',
                 );
                 assert.equal(received?.meta.invitationStatus, 'ACCEPTED');
