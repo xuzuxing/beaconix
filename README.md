@@ -1128,12 +1128,16 @@ cp .env.example .env
 | `THROTTLE_TTL` | No | Rate limit window in seconds (default: `60`) |
 | `THROTTLE_LIMIT` | No | Max requests per window (default: `10`) |
 | `STORAGE_LOCAL_ROOT` | No | Local upload directory (default: `storage/uploads`) |
-| `STORAGE_OSS_ENDPOINT` | Required for OSS | S3-compatible endpoint |
-| `STORAGE_OSS_REGION` | No | OSS region (default: `auto`) |
-| `STORAGE_OSS_BUCKET` | Required for OSS | OSS bucket name |
-| `STORAGE_OSS_ACCESS_KEY_ID` | Required for OSS | OSS access key ID |
-| `STORAGE_OSS_ACCESS_KEY_SECRET` | Required for OSS | OSS access key secret |
-| `STORAGE_OSS_FORCE_PATH_STYLE` | No | Use path-style URLs for MinIO/S3-compatible providers |
+| `STORAGE_OSS_ENDPOINT` | Fallback | S3-compatible endpoint; the `storage.oss.endpoint` setting wins when set |
+| `STORAGE_OSS_REGION` | Fallback | OSS region (default: `auto`) |
+| `STORAGE_OSS_BUCKET` | Fallback | Public attachment bucket; the `storage.oss.bucket` setting wins |
+| `STORAGE_OSS_PRIVATE_BUCKET` | Fallback | Private attachment bucket, must differ from the public one |
+| `STORAGE_OSS_ACCESS_KEY_ID` | Fallback | OSS access key ID |
+| `STORAGE_OSS_ACCESS_KEY_SECRET` | Fallback | OSS access key secret |
+| `STORAGE_OSS_FORCE_PATH_STYLE` | Fallback | Use path-style URLs for MinIO/S3-compatible providers |
+
+Every `STORAGE_OSS_*` variable is only a fallback: the OSS connection is configured from the
+`storage.oss.*` platform settings (admin UI), which take precedence whenever the row is non-empty.
 | `RESEND_API_KEY` | Yes¹ | Resend email service API key |
 | `RESEND_FROM_EMAIL` | No | Sender email address |
 | `RESEND_FROM_NAME` | No | Sender display name (default: `Beacon`) |
@@ -1166,6 +1170,13 @@ Runtime-tunable platform settings live in the `settings` table and can be manage
 | develop | `develop.seedDemoData` | `true` | Seed demo monitors/status pages for new tenants |
 | develop | `develop.configGroup` | `["system","develop","storage","attachments"]` | Tab list and order of the platform settings page |
 | storage | `storage.driver` | `local` | Active attachment storage driver: `local` or `oss` |
+| storage | `storage.oss.endpoint` | empty | OSS/S3-compatible endpoint; falls back to `STORAGE_OSS_ENDPOINT` |
+| storage | `storage.oss.region` | `auto` | OSS region; falls back to `STORAGE_OSS_REGION` |
+| storage | `storage.oss.bucket` | empty | Public attachment bucket; falls back to `STORAGE_OSS_BUCKET` |
+| storage | `storage.oss.privateBucket` | empty | Private attachment bucket, must differ; falls back to `STORAGE_OSS_PRIVATE_BUCKET` |
+| storage | `storage.oss.accessKeyId` | empty (secret) | OSS access key ID; falls back to `STORAGE_OSS_ACCESS_KEY_ID` |
+| storage | `storage.oss.accessKeySecret` | empty (secret) | OSS access key secret; falls back to `STORAGE_OSS_ACCESS_KEY_SECRET` |
+| storage | `storage.oss.forcePathStyle` | `false` | Path-style object URLs for MinIO/S3-compatible providers |
 | storage | `storage.publicBaseUrl` | empty | Optional public base URL for local/static serving |
 | storage | `storage.oss.publicBaseUrl` | empty | Optional public/CDN base URL for OSS objects |
 | storage | `storage.oss.signedUrlTtlSeconds` | `300` | Signed OSS download URL TTL |
@@ -1213,7 +1224,7 @@ If the setting cannot be read the guard **fails open** — a settings/DB hiccup 
 - On a multi-instance deployment the other instances keep serving the cached value for at most 30 seconds.
 - `system.siteName` / `system.supportEmail` are resolved per email send, so the next outgoing message picks them up.
 - System mail goes through Resend by default. Setting `smtp.host` switches the *next* send to SMTP — `smtp.port` / `smtp.secure` / `smtp.account` / `smtp.password` are read per send and the sender resolves as `smtp.fromAddress` → `smtp.account` → `RESEND_FROM_EMAIL`. Clearing `smtp.host` switches back to Resend. If reading the `smtp.*` values fails, the send falls back to Resend and logs a warning.
-- `storage.driver` selects the active upload provider per upload (`StorageService` resolves it on every call) — no restart needed. The OSS endpoint, region, buckets and credentials are **not** managed here: they come from the `STORAGE_OSS_*` environment variables, so OSS has to be configured in the environment before switching the driver.
+- `storage.driver` selects the active upload provider per upload (`StorageService` resolves it on every call) — no restart needed. The OSS endpoint, region, buckets and credentials are read from the `storage.oss.*` settings rows and fall back to the `STORAGE_OSS_*` environment variables when a row is empty, so OSS can be configured — and rotated — entirely from the admin UI. `OssStorageProvider` rebuilds its S3 client on the next call whenever any of those values changes.
 - `storage.oss.signedUrlTtlSeconds` is clamped to 300 seconds when a signed download URL is generated.
 - `attachments.maxFilesPerRequest` is reserved; the upload path does not consume it yet.
 

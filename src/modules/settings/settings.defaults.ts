@@ -237,6 +237,71 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         optionLabels: { local: '本地存储', oss: 'OSS 对象存储' },
     },
     {
+        key: 'storage.oss.endpoint',
+        name: 'OSS Endpoint',
+        group: 'storage',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            'OSS / S3 兼容服务的访问端点，例如 https://oss-cn-hangzhou.aliyuncs.com；留空使用云厂商默认端点。',
+        url: true,
+    },
+    {
+        key: 'storage.oss.region',
+        name: 'OSS 区域',
+        group: 'storage',
+        value: 'auto',
+        valueType: SettingValueType.STRING,
+        description:
+            '区域标识，例如 oss-cn-hangzhou；自建 S3 兼容服务通常填 auto。',
+    },
+    {
+        key: 'storage.oss.bucket',
+        name: 'OSS 公开 Bucket',
+        group: 'storage',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description: '存放公开附件（头像、工单附件等）的 bucket 名称。',
+    },
+    {
+        key: 'storage.oss.privateBucket',
+        name: 'OSS 私有 Bucket',
+        group: 'storage',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '存放任务私有附件的 bucket 名称，必须与公开 bucket 不同且不可公开读。',
+    },
+    {
+        key: 'storage.oss.accessKeyId',
+        name: 'OSS Access Key ID',
+        group: 'storage',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '留空则回退到环境变量 STORAGE_OSS_ACCESS_KEY_ID；填过之后不会再回显。',
+    },
+    {
+        key: 'storage.oss.accessKeySecret',
+        name: 'OSS Access Key Secret',
+        group: 'storage',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '留空则回退到环境变量 STORAGE_OSS_ACCESS_KEY_SECRET；填过之后不会再回显。',
+    },
+    {
+        key: 'storage.oss.forcePathStyle',
+        name: 'OSS 强制 Path Style',
+        group: 'storage',
+        value: false,
+        valueType: SettingValueType.BOOLEAN,
+        description:
+            '自建 MinIO 等兼容服务通常需要开启；云厂商 OSS/COS 保持关闭。',
+    },
+    {
         key: 'storage.publicBaseUrl',
         name: '本地存储公网地址',
         group: 'storage',

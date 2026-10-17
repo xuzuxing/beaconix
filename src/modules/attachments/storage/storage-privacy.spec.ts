@@ -34,7 +34,7 @@ jest.mock('@aws-sdk/s3-request-presigner', () => ({
     getSignedUrl: jest.fn().mockResolvedValue('https://private.test/signed'),
 }));
 
-function fixture(options = {}) {
+function fixture(options = {}, settingValues: Record<string, unknown> = {}) {
     const config = new ConfigService({
         storage: {
             localRoot: 'storage/test-public',
@@ -48,8 +48,29 @@ function fixture(options = {}) {
         },
     });
     const settings = {
-        getString: jest.fn().mockResolvedValue('https://public.test'),
-        getNumber: jest.fn().mockResolvedValue(900),
+        // `storage.oss.*` reads fall back to the environment fixture unless the
+        // test seeds an explicit setting value.
+        getString: jest.fn((key: string, fallback: string): Promise<string> =>
+            Promise.resolve(
+                typeof settingValues[key] === 'string'
+                    ? settingValues[key]
+                    : key === 'storage.publicBaseUrl' ||
+                        key === 'storage.oss.publicBaseUrl'
+                      ? 'https://public.test'
+                      : fallback,
+            ),
+        ),
+        getNumber: jest.fn((_key: string, fallback: number): Promise<number> =>
+            Promise.resolve(fallback),
+        ),
+        getBoolean: jest.fn(
+            (key: string, fallback: boolean): Promise<boolean> =>
+                Promise.resolve(
+                    typeof settingValues[key] === 'boolean'
+                        ? settingValues[key]
+                        : fallback,
+                ),
+        ),
     };
     const input: PutObjectInput = {
         buffer: Buffer.from('private bytes'),
@@ -142,7 +163,11 @@ describe('Attachment physical storage isolation', () => {
         );
         expect(stored.bucket).toBe('private');
         expect(stored.url).toBe('');
-        expect(settings.getString).not.toHaveBeenCalled();
+        // Bucket names come from settings first and the environment second.
+        expect(settings.getString).toHaveBeenCalledWith(
+            'storage.oss.privateBucket',
+            'private',
+        );
         await expect(
             provider.getDownload(stored.key, 'private', 'PRIVATE'),
         ).resolves.toEqual({
@@ -158,7 +183,10 @@ describe('Attachment physical storage isolation', () => {
             expect.anything(),
             { expiresIn: 300 },
         );
-        expect(settings.getString).not.toHaveBeenCalled();
+        expect(settings.getNumber).toHaveBeenCalledWith(
+            'storage.oss.signedUrlTtlSeconds',
+            300,
+        );
     });
 
     it.each(['', 'public'])(
@@ -186,5 +214,48 @@ describe('Attachment physical storage isolation', () => {
             provider.getDownload('key', 'private', 'PUBLIC'),
         ).rejects.toThrow(BadRequestException);
         expect(getSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('lets admin settings override the environment and rebuilds the client', async () => {
+        const { config, settings, input } = fixture(
+            {},
+            {
+                'storage.oss.endpoint': 'https://oss.example.test',
+                'storage.oss.region': 'oss-cn-hangzhou',
+                'storage.oss.bucket': 'settings-public',
+                'storage.oss.privateBucket': 'settings-private',
+            },
+        );
+        const provider = new OssStorageProvider(config, settings as never);
+
+        const stored = await provider.putObject(input);
+
+        expect(stored.bucket).toBe('settings-private');
+        expect(S3Client).toHaveBeenCalledWith(
+            expect.objectContaining({
+                endpoint: 'https://oss.example.test',
+                region: 'oss-cn-hangzhou',
+            }),
+        );
+        expect(S3Client).toHaveBeenCalledTimes(1);
+
+        // An admin edit changes the fingerprint, so the next call rebuilds.
+        settings.getString.mockImplementation(
+            (key: string, fallback: string): Promise<string> =>
+                Promise.resolve(
+                    key === 'storage.oss.endpoint'
+                        ? 'https://oss2.example.test'
+                        : key === 'storage.oss.bucket'
+                          ? 'settings-public'
+                          : key === 'storage.oss.privateBucket'
+                            ? 'settings-private'
+                            : fallback,
+                ),
+        );
+        await provider.putObject(input);
+        expect(S3Client).toHaveBeenCalledTimes(2);
+        expect(S3Client).toHaveBeenLastCalledWith(
+            expect.objectContaining({ endpoint: 'https://oss2.example.test' }),
+        );
     });
 });
