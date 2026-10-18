@@ -7,3 +7,4 @@ export * from './audit-log.decorator';
 export * from './request-meta.decorator';
 export * from './skip-transform.decorator';
 export * from './is-cuid.decorator';
+export * from './is-browser-url.decorator';

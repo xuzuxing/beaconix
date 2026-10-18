@@ -7,8 +7,8 @@ function dtoWith(avatarUrl: string): UpdateProfileDto {
 
 describe('UpdateProfileDto', () => {
     it('accepts the API static host on localhost', async () => {
-        // The reported case: a self-hosted avatar URL carries no TLD, which the
-        // default `@IsUrl()` rejects.
+        // The reported case: a self-hosted avatar URL carries no TLD, which a
+        // validator.js `@IsUrl()` rejects.
         await expect(
             validate(
                 dtoWith(
@@ -36,6 +36,11 @@ describe('UpdateProfileDto', () => {
             const errors = await validate(dtoWith(value));
             expect(errors).toHaveLength(1);
             expect(errors[0].property).toBe('avatarUrl');
+            // The message doubles as a "is the new code running?" marker: the
+            // old @IsUrl() said "must be a URL address".
+            expect(Object.values(errors[0].constraints ?? {}).join(' ')).toBe(
+                'avatarUrl must be an http(s) URL',
+            );
         }
     });
 });

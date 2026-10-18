@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
-import { BROWSER_URL_OPTIONS } from '../../../common/utils';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBrowserUrl } from '../../../common/decorators';
 
 export class UpdateOrganizationDto {
     @ApiPropertyOptional({ example: 'Acme Corp Renamed' })
@@ -17,11 +17,11 @@ export class UpdateOrganizationDto {
 
     @ApiPropertyOptional({ example: 'https://acme.com/new-logo.png' })
     @IsOptional()
-    @IsUrl(BROWSER_URL_OPTIONS)
+    @IsBrowserUrl()
     logoUrl?: string;
 
     @ApiPropertyOptional({ example: 'https://acme.com' })
     @IsOptional()
-    @IsUrl(BROWSER_URL_OPTIONS)
+    @IsBrowserUrl()
     website?: string;
 }

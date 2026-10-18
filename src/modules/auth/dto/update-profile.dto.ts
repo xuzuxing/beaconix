@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
-import { BROWSER_URL_OPTIONS } from '../../../common/utils';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBrowserUrl } from '../../../common/decorators';
 
 export class UpdateProfileDto {
     @ApiPropertyOptional({ example: 'Jane Doe' })
@@ -11,6 +11,6 @@ export class UpdateProfileDto {
 
     @ApiPropertyOptional({ example: 'https://example.com/avatar.png' })
     @IsOptional()
-    @IsUrl(BROWSER_URL_OPTIONS)
+    @IsBrowserUrl()
     avatarUrl?: string;
 }

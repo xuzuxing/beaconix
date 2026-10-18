@@ -3,11 +3,10 @@ import {
     IsNotEmpty,
     IsOptional,
     IsString,
-    IsUrl,
     Matches,
     MaxLength,
 } from 'class-validator';
-import { BROWSER_URL_OPTIONS } from '../../../common/utils';
+import { IsBrowserUrl } from '../../../common/decorators';
 
 export class CreateOrganizationDto {
     @ApiProperty({ example: 'Acme Corporation' })
@@ -37,11 +36,11 @@ export class CreateOrganizationDto {
 
     @ApiPropertyOptional({ example: 'https://acme.com/logo.png' })
     @IsOptional()
-    @IsUrl(BROWSER_URL_OPTIONS)
+    @IsBrowserUrl()
     logoUrl?: string;
 
     @ApiPropertyOptional({ example: 'https://acme.com' })
     @IsOptional()
-    @IsUrl(BROWSER_URL_OPTIONS)
+    @IsBrowserUrl()
     website?: string;
 }

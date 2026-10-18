@@ -5,10 +5,9 @@ import {
     IsOptional,
     IsInt,
     IsEnum,
-    IsUrl,
     MaxLength,
 } from 'class-validator';
-import { BROWSER_URL_OPTIONS } from '../../../common/utils';
+import { IsBrowserUrl } from '../../../common/decorators';
 
 export class SaveAttachmentDto {
     @ApiProperty({ example: 'design-spec.pdf' })
@@ -30,7 +29,7 @@ export class SaveAttachmentDto {
         example: '/api/tasks/task_xxx/attachments/att_xxx/download',
     })
     @IsNotEmpty()
-    @IsUrl(BROWSER_URL_OPTIONS)
+    @IsBrowserUrl()
     url: string;
 
     @ApiPropertyOptional({
