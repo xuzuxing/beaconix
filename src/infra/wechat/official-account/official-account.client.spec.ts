@@ -1,4 +1,3 @@
-import type { ConfigService } from '@nestjs/config';
 import type { WechatHttpClient } from '../clients/wechat-http.client';
 import {
     buildMsgSignature,
@@ -8,6 +7,7 @@ import {
     sha1Hex,
 } from '../clients/wechat-signature.util';
 import type { WechatTokenService } from '../clients/wechat-token.service';
+import type { WechatRuntimeConfigService } from '../wechat-runtime-config.service';
 import { WechatApiError, WechatConfigurationError } from '../wechat.types';
 import { OfficialAccountClient } from './official-account.client';
 
@@ -39,17 +39,15 @@ function createClient(
         getAccessToken: jest.fn().mockResolvedValue('access-token-1'),
         invalidate: jest.fn().mockResolvedValue(undefined),
     };
-    const configService = {
-        get: jest.fn().mockReturnValue({
-            officialAccount: config,
-            website,
-        }),
+    const runtimeConfig = {
+        officialAccount: jest.fn().mockResolvedValue(config),
+        website: jest.fn().mockResolvedValue(website),
     };
 
     const client = new OfficialAccountClient(
         http as unknown as WechatHttpClient,
         tokens as unknown as WechatTokenService,
-        configService as unknown as ConfigService,
+        runtimeConfig as unknown as WechatRuntimeConfigService,
     );
 
     return { client, http, tokens, config };
@@ -57,10 +55,10 @@ function createClient(
 
 describe('OfficialAccountClient', () => {
     describe('buildOAuthUrl', () => {
-        it('builds an encoded authorisation URL ending with #wechat_redirect', () => {
+        it('builds an encoded authorisation URL ending with #wechat_redirect', async () => {
             const { client } = createClient();
 
-            const url = client.buildOAuthUrl({
+            const url = await client.buildOAuthUrl({
                 redirectUri: 'https://beaconix.example.com/oauth/cb',
                 state: 's1',
             });
@@ -80,10 +78,10 @@ describe('OfficialAccountClient', () => {
             expect(url.endsWith('#wechat_redirect')).toBe(true);
         });
 
-        it('honours an explicit scope', () => {
+        it('honours an explicit scope', async () => {
             const { client } = createClient();
 
-            const url = client.buildOAuthUrl({
+            const url = await client.buildOAuthUrl({
                 redirectUri: 'https://beaconix.example.com/oauth/cb',
                 scope: 'snsapi_userinfo',
             });
@@ -91,20 +89,20 @@ describe('OfficialAccountClient', () => {
             expect(url).toContain('scope=snsapi_userinfo');
         });
 
-        it('rejects a missing appId', () => {
+        it('rejects a missing appId', async () => {
             const { client } = createClient({ appId: '' });
 
-            expect(() =>
+            await expect(
                 client.buildOAuthUrl({ redirectUri: 'https://x/cb' }),
-            ).toThrow(WechatConfigurationError);
+            ).rejects.toThrow(WechatConfigurationError);
         });
     });
 
     describe('buildQrConnectUrl', () => {
-        it('builds a snsapi_login QR-connect URL ending with #wechat_redirect', () => {
+        it('builds a snsapi_login QR-connect URL ending with #wechat_redirect', async () => {
             const { client } = createClient();
 
-            const url = client.buildQrConnectUrl({
+            const url = await client.buildQrConnectUrl({
                 redirectUri: 'https://beaconix.example.com/wechat/cb',
                 state: 's2',
             });
@@ -122,14 +120,14 @@ describe('OfficialAccountClient', () => {
             expect(url.endsWith('#wechat_redirect')).toBe(true);
         });
 
-        it('rejects a missing website appId', () => {
+        it('rejects a missing website appId', async () => {
             const { client } = createClient({}, { appId: '' });
 
-            expect(() =>
+            await expect(
                 client.buildQrConnectUrl({
                     redirectUri: 'https://x/cb',
                 }),
-            ).toThrow(WechatConfigurationError);
+            ).rejects.toThrow(WechatConfigurationError);
         });
     });
 
@@ -338,39 +336,39 @@ describe('OfficialAccountClient', () => {
         const timestamp = '1700000000';
         const nonce = 'nonce-1';
 
-        it('accepts a matching signature', () => {
+        it('accepts a matching signature', async () => {
             const { client } = createClient();
             const signature = sha1Hex(
                 ['OA_TOKEN', timestamp, nonce].sort().join(''),
             );
 
-            expect(
+            await expect(
                 client.verifyServerSignature({ signature, timestamp, nonce }),
-            ).toBe(true);
+            ).resolves.toBe(true);
         });
 
-        it('rejects a mismatching signature', () => {
+        it('rejects a mismatching signature', async () => {
             const { client } = createClient();
 
-            expect(
+            await expect(
                 client.verifyServerSignature({
                     signature: 'nope',
                     timestamp,
                     nonce,
                 }),
-            ).toBe(false);
+            ).resolves.toBe(false);
         });
 
-        it('rejects when no token is configured', () => {
+        it('rejects when no token is configured', async () => {
             const { client } = createClient({ token: '' });
 
-            expect(() =>
+            await expect(
                 client.verifyServerSignature({
                     signature: 'x',
                     timestamp,
                     nonce,
                 }),
-            ).toThrow(WechatConfigurationError);
+            ).rejects.toThrow(WechatConfigurationError);
         });
     });
 
@@ -379,11 +377,11 @@ describe('OfficialAccountClient', () => {
         const nonce = 'nonce-1';
         const plaintext = '<xml><Content><![CDATA[hello]]></Content></xml>';
 
-        it('verifies and decrypts a safe-mode message', () => {
+        it('verifies and decrypts a safe-mode message', async () => {
             const { client } = createClient();
             const encrypted = encryptMessage(plaintext, AES_KEY, 'wx-oa');
 
-            const result = client.parseServerMessage({
+            const result = await client.parseServerMessage({
                 encrypted,
                 msgSignature: buildMsgSignature(
                     'OA_TOKEN',
@@ -398,39 +396,39 @@ describe('OfficialAccountClient', () => {
             expect(result).toBe(plaintext);
         });
 
-        it('rejects a tampered signature', () => {
+        it('rejects a tampered signature', async () => {
             const { client } = createClient();
             const encrypted = encryptMessage(plaintext, AES_KEY, 'wx-oa');
 
-            expect(() =>
+            await expect(
                 client.parseServerMessage({
                     encrypted,
                     msgSignature: 'deadbeef',
                     timestamp,
                     nonce,
                 }),
-            ).toThrow('signature verification failed');
+            ).rejects.toThrow('signature verification failed');
         });
 
-        it('rejects when the AES key is missing', () => {
+        it('rejects when the AES key is missing', async () => {
             const { client } = createClient({ aesKey: '' });
 
-            expect(() =>
+            await expect(
                 client.parseServerMessage({
                     encrypted: 'x',
                     msgSignature: 'y',
                     timestamp,
                     nonce,
                 }),
-            ).toThrow(WechatConfigurationError);
+            ).rejects.toThrow(WechatConfigurationError);
         });
     });
 
     describe('buildEncryptedReply', () => {
-        it('encrypts and signs the reply', () => {
+        it('encrypts and signs the reply', async () => {
             const { client } = createClient();
 
-            const reply = client.buildEncryptedReply('<xml>ok</xml>');
+            const reply = await client.buildEncryptedReply('<xml>ok</xml>');
 
             expect(
                 checkMsgSignature(

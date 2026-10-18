@@ -1,4 +1,5 @@
 export * from './wechat.types';
+export * from './wechat-runtime-config.service';
 export * from './clients';
 export * from './pay';
 export * from './miniprogram';

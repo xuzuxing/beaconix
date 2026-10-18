@@ -1,5 +1,5 @@
-import type { ConfigService } from '@nestjs/config';
 import type { WechatPayClient } from '../../../infra/wechat/pay';
+import type { WechatRuntimeConfigService } from '../../../infra/wechat/wechat-runtime-config.service';
 import { WechatPaymentService } from './wechat-payment.service';
 
 function createService(mock: boolean) {
@@ -8,16 +8,16 @@ function createService(mock: boolean) {
         buildJsapiPayParams: jest.fn(),
         parseNotification: jest.fn(),
     };
-    const configService = {
-        get: jest.fn().mockReturnValue({ pay: { mock } }),
+    const runtimeConfig = {
+        pay: jest.fn().mockResolvedValue({ mock }),
     };
 
     const service = new WechatPaymentService(
         payClient as unknown as WechatPayClient,
-        configService as unknown as ConfigService,
+        runtimeConfig as unknown as WechatRuntimeConfigService,
     );
 
-    return { service, payClient, configService };
+    return { service, payClient, runtimeConfig };
 }
 
 describe('WechatPaymentService', () => {

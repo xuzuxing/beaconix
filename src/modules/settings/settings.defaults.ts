@@ -11,6 +11,14 @@ export interface SettingDefinition {
      * tab 的清单与顺序另由 `develop.configGroup` 的值决定。
      */
     group: string;
+    /**
+     * tab 内的二级分组（小标题 / 折叠面板），同样只由代码定义、不入库。
+     * 项数多的 tab（例如 `wechat`）靠它把平铺的长表单切成若干块；
+     * 同一 group 内首次出现的顺序即二级分组顺序，未声明则回到 tab 顶层。
+     * 取值是稳定的英文标识（与 `group` 同风格），展示文案由前端按 key 做 i18n，
+     * 这样改文案不会动到已经存量的前端映射。
+     */
+    section?: string;
     value: string | number | boolean | Record<string, unknown> | unknown[];
     valueType: SettingValueType;
     description: string;
@@ -377,6 +385,309 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         description: '预留给批量上传的单次文件数上限（当前上传路径尚未消费）。',
         min: 1,
         max: 20,
+        integer: true,
+    },
+
+    // ── 微信支付 ──────────────────────────────────────────────────────
+    // 微信整组的取值规则统一：DB 覆盖过就用 DB，留空/未覆盖则回退同名环境
+    // 变量（见 `WechatRuntimeConfigService`），因此升级不会改变既有部署行为。
+    {
+        key: 'wechat.pay.mchId',
+        name: '支付商户号',
+        group: 'wechat',
+        section: 'pay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '微信支付商户号（mchid）。留空则回退环境变量 WECHAT_PAY_MCHID。',
+    },
+    {
+        key: 'wechat.pay.appId',
+        name: '支付 AppID',
+        group: 'wechat',
+        section: 'pay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '与商户号绑定的 AppID（小程序或网站应用），与登录用的 AppID 不是一套。留空则回退 WECHAT_PAY_APPID。',
+    },
+    {
+        key: 'wechat.pay.serialNo',
+        name: '商户证书序列号',
+        group: 'wechat',
+        section: 'pay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '商户 API 证书序列号，请求签名时写入 Wechatpay-Serial 头。留空则回退 WECHAT_PAY_SERIAL_NO。',
+    },
+    {
+        key: 'wechat.pay.privateKey',
+        name: '商户私钥',
+        group: 'wechat',
+        section: 'pay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '商户私钥：可粘贴 PEM 全文，也可填服务器上的私钥文件路径。保存后不回显；留空则回退 WECHAT_PAY_PRIVATE_KEY。',
+    },
+    {
+        key: 'wechat.pay.apiV3Key',
+        name: 'APIv3 密钥',
+        group: 'wechat',
+        section: 'pay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '32 位 APIv3 密钥，用于回调报文解密。保存后不回显；留空则回退 WECHAT_PAY_APIV3_KEY。',
+    },
+    {
+        key: 'wechat.pay.publicKey',
+        name: '微信支付公钥',
+        group: 'wechat',
+        section: 'pay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '微信支付公钥（新商户模式）：可粘贴 PEM 全文，也可填文件路径。留空则回退 WECHAT_PAY_PUBLIC_KEY。',
+    },
+    {
+        key: 'wechat.pay.publicKeyId',
+        name: '微信支付公钥 ID',
+        group: 'wechat',
+        section: 'pay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '公钥 ID（形如 PUB_KEY_ID_xxx），写入请求的 Wechatpay-Serial 头。留空则回退 WECHAT_PAY_PUBLIC_KEY_ID。',
+    },
+    {
+        key: 'wechat.pay.notifyUrl',
+        name: '支付回调地址',
+        group: 'wechat',
+        section: 'pay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '微信支付完成后回调的公网 HTTPS 地址，需与网关放行路径一致。留空则回退 WECHAT_PAY_NOTIFY_URL。',
+        url: true,
+    },
+    {
+        key: 'wechat.pay.mock',
+        name: '模拟支付',
+        group: 'wechat',
+        section: 'pay',
+        value: true,
+        valueType: SettingValueType.BOOLEAN,
+        description:
+            '开启后计费模块不调用真实支付，直接返回模拟支付参数，便于无商户号时联调；开始真实收款前必须关闭。对应 WECHAT_PAY_MOCK。',
+    },
+
+    // ── 小程序 ────────────────────────────────────────────────────────
+    {
+        key: 'wechat.miniprogram.appId',
+        name: '小程序 AppID',
+        group: 'wechat',
+        section: 'miniProgram',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '小程序登录、扫码登录与订阅消息共用的小程序 AppID。留空则回退 WECHAT_MINI_APPID。',
+    },
+    {
+        key: 'wechat.miniprogram.appSecret',
+        name: '小程序 AppSecret',
+        group: 'wechat',
+        section: 'miniProgram',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '小程序密钥，用于换取会话与 access_token。保存后不回显；留空则回退 WECHAT_MINI_APPSECRET。',
+    },
+
+    // ── 网站应用 ──────────────────────────────────────────────────────
+    {
+        key: 'wechat.website.appId',
+        name: '网站应用 AppID',
+        group: 'wechat',
+        section: 'website',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '微信开放平台网站应用 AppID，用于网页扫码登录。留空则回退 WECHAT_WEB_APPID。',
+    },
+    {
+        key: 'wechat.website.appSecret',
+        name: '网站应用 AppSecret',
+        group: 'wechat',
+        section: 'website',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '网站应用密钥，用于换取授权令牌。保存后不回显；留空则回退 WECHAT_WEB_APPSECRET。',
+    },
+
+    // ── 扫码登录 ──────────────────────────────────────────────────────
+    {
+        key: 'wechat.scanLogin.page',
+        name: '二维码落地页',
+        group: 'wechat',
+        section: 'scanLogin',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '扫码后打开的小程序页面路径（如 pages/login/login），留空为小程序首页。对应 WECHAT_SCAN_LOGIN_PAGE。',
+    },
+    {
+        key: 'wechat.scanLogin.envVersion',
+        name: '小程序版本',
+        group: 'wechat',
+        section: 'scanLogin',
+        value: 'release',
+        valueType: SettingValueType.STRING,
+        description:
+            '生成小程序码时指定的版本，测试期可切到体验版/开发版。对应 WECHAT_SCAN_LOGIN_ENV_VERSION。',
+        allowedValues: ['release', 'trial', 'develop'],
+        optionLabels: {
+            release: '正式版',
+            trial: '体验版',
+            develop: '开发版',
+        },
+    },
+    {
+        key: 'wechat.scanLogin.ttlSeconds',
+        name: '登录票据有效期（秒）',
+        group: 'wechat',
+        section: 'scanLogin',
+        value: 300,
+        valueType: SettingValueType.NUMBER,
+        description:
+            '扫码票据在缓存中的存活时间，超时后需重新生成二维码。对应 WECHAT_SCAN_LOGIN_TTL_SECONDS。',
+        min: 30,
+        max: 86400,
+        integer: true,
+    },
+    {
+        key: 'wechat.scanLogin.pollTimeoutMs',
+        name: '扫码轮询超时（毫秒）',
+        group: 'wechat',
+        section: 'scanLogin',
+        value: 25000,
+        valueType: SettingValueType.NUMBER,
+        description:
+            '网页端长轮询等待扫码结果的最长时间，需小于网关超时。对应 WECHAT_SCAN_LOGIN_POLL_TIMEOUT_MS。',
+        min: 1000,
+        max: 60000,
+        integer: true,
+    },
+
+    // ── 公众号 ────────────────────────────────────────────────────────
+    {
+        key: 'wechat.officialAccount.appId',
+        name: '公众号 AppID',
+        group: 'wechat',
+        section: 'officialAccount',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '公众号 AppID，用于网页授权、模板/客服消息与安全模式回调。留空则回退 WECHAT_OA_APPID。',
+    },
+    {
+        key: 'wechat.officialAccount.appSecret',
+        name: '公众号 AppSecret',
+        group: 'wechat',
+        section: 'officialAccount',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '公众号密钥，用于换取 access_token。保存后不回显；留空则回退 WECHAT_OA_APPSECRET。',
+    },
+    {
+        key: 'wechat.officialAccount.token',
+        name: '服务器配置 Token',
+        group: 'wechat',
+        section: 'officialAccount',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '公众号后台「服务器配置」里的 Token，用于回调地址的 SHA1 验签；泄露可被伪造回调。保存后不回显；留空则回退 WECHAT_OA_TOKEN。',
+    },
+    {
+        key: 'wechat.officialAccount.aesKey',
+        name: '消息加解密密钥',
+        group: 'wechat',
+        section: 'officialAccount',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '43 位 EncodingAESKey，安全模式下加解密回调消息。保存后不回显；留空则回退 WECHAT_OA_AES_KEY。',
+    },
+
+    // ── 企业微信 ──────────────────────────────────────────────────────
+    {
+        key: 'wechat.work.corpId',
+        name: '企业 CorpID',
+        group: 'wechat',
+        section: 'work',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '企业微信 CorpID。当前企业微信客户端尚未被业务模块消费，仅作预留。留空则回退 WECHAT_WORK_CORPID。',
+    },
+    {
+        key: 'wechat.work.corpSecret',
+        name: '企业 CorpSecret',
+        group: 'wechat',
+        section: 'work',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '企业微信应用密钥，用于获取 access_token。保存后不回显；留空则回退 WECHAT_WORK_CORPSECRET。',
+    },
+    {
+        key: 'wechat.work.agentId',
+        name: '应用 AgentID',
+        group: 'wechat',
+        section: 'work',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '企业微信应用 AgentID，发应用消息时必填。留空则回退 WECHAT_WORK_AGENTID。',
+    },
+
+    // ── 微信接口客户端 ────────────────────────────────────────────────
+    {
+        key: 'wechat.http.timeoutMs',
+        name: '接口超时（毫秒）',
+        group: 'wechat',
+        section: 'http',
+        value: 8000,
+        valueType: SettingValueType.NUMBER,
+        description:
+            '调用微信接口的 HTTP 超时。由启动时构造的客户端读取，改动需重启生效。对应 WECHAT_HTTP_TIMEOUT_MS。',
+        min: 500,
+        max: 60000,
+        integer: true,
+    },
+    {
+        key: 'wechat.http.maxRetries',
+        name: '接口重试次数',
+        group: 'wechat',
+        section: 'http',
+        value: 2,
+        valueType: SettingValueType.NUMBER,
+        description:
+            '微信接口失败后的重试次数（仅幂等请求）。改动需重启生效。对应 WECHAT_HTTP_MAX_RETRIES。',
+        min: 0,
+        max: 5,
         integer: true,
     },
 ];

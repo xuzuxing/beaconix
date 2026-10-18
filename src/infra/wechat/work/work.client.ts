@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import type { WechatConfig, WechatWorkConfig } from '../../../config';
+import type { WechatWorkConfig } from '../../../config';
 import { WechatHttpClient } from '../clients/wechat-http.client';
 import {
     type AccessTokenCredentials,
     WechatTokenService,
     withAccessToken,
 } from '../clients/wechat-token.service';
+import { WechatRuntimeConfigService } from '../wechat-runtime-config.service';
 import { WechatApiError, WechatConfigurationError } from '../wechat.types';
 import type {
     ListWorkUsersInput,
@@ -68,15 +68,15 @@ export class WorkClient {
     constructor(
         private readonly http: WechatHttpClient,
         private readonly tokens: WechatTokenService,
-        private readonly configService: ConfigService,
+        private readonly runtimeConfig: WechatRuntimeConfigService,
     ) {}
 
     /** Sends an application message to users / departments / tags. */
     async sendAppMessage(
         input: SendWorkAppMessageInput,
     ): Promise<SendWorkAppMessageResult> {
-        const credentials = this.resolveCredentials(input);
-        const agentId = this.resolveAgentId(input.agentId);
+        const credentials = await this.resolveCredentials(input);
+        const agentId = await this.resolveAgentId(input.agentId);
 
         const body: Record<string, unknown> = {
             touser: joinTargets(input.toUser),
@@ -126,7 +126,7 @@ export class WorkClient {
             corpSecret?: string;
         } = {},
     ): Promise<WorkDepartment[]> {
-        const credentials = this.resolveCredentials(input);
+        const credentials = await this.resolveCredentials(input);
 
         const response = await withAccessToken(
             this.tokens,
@@ -151,7 +151,7 @@ export class WorkClient {
 
     /** Reads one member of the contact directory. */
     async getUser(input: WorkUserInput): Promise<WorkUser> {
-        const credentials = this.resolveCredentials(input);
+        const credentials = await this.resolveCredentials(input);
 
         const response = await withAccessToken(
             this.tokens,
@@ -194,7 +194,7 @@ export class WorkClient {
     async listUsersByDepartment(
         input: ListWorkUsersInput,
     ): Promise<WorkUser[]> {
-        const credentials = this.resolveCredentials(input);
+        const credentials = await this.resolveCredentials(input);
 
         const response = await withAccessToken(
             this.tokens,
@@ -219,11 +219,11 @@ export class WorkClient {
 
     // -- Helpers ---------------------------------------------------------
 
-    private resolveCredentials(input: {
+    private async resolveCredentials(input: {
         corpId?: string;
         corpSecret?: string;
-    }): AccessTokenCredentials {
-        const config = this.workConfig;
+    }): Promise<AccessTokenCredentials> {
+        const config = await this.workConfig();
         const corpId = input.corpId ?? config.corpId;
         const corpSecret = input.corpSecret ?? config.corpSecret;
 
@@ -236,8 +236,8 @@ export class WorkClient {
         return { kind: 'work', corpId, corpSecret };
     }
 
-    private resolveAgentId(override?: string): number {
-        const agentId = override ?? this.workConfig.agentId;
+    private async resolveAgentId(override?: string): Promise<number> {
+        const agentId = override ?? (await this.workConfig()).agentId;
 
         if (!agentId) {
             throw new WechatConfigurationError(
@@ -256,15 +256,7 @@ export class WorkClient {
         return numeric;
     }
 
-    private get workConfig(): WechatWorkConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
-
-        if (!wechat) {
-            throw new WechatConfigurationError(
-                'WeChat config is not registered',
-            );
-        }
-
-        return wechat.work;
+    private workConfig(): Promise<WechatWorkConfig> {
+        return this.runtimeConfig.work();
     }
 }

@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import type { WechatConfig } from '../../../config';
 import { PaymentChannel } from '../../../generated/prisma/enums';
 import { WechatPayClient } from '../../../infra/wechat/pay';
+import { WechatRuntimeConfigService } from '../../../infra/wechat/wechat-runtime-config.service';
 import type {
     PaymentCallbackHeaders,
     PaymentProvider,
@@ -24,13 +23,13 @@ export class WechatPaymentService implements PaymentProvider {
 
     constructor(
         private readonly payClient: WechatPayClient,
-        private readonly configService: ConfigService,
+        private readonly runtimeConfig: WechatRuntimeConfigService,
     ) {}
 
     async createPayment(
         input: PaymentProviderCreateInput,
     ): Promise<PaymentProviderPayParams> {
-        if (this.mockEnabled) {
+        if (await this.mockEnabled()) {
             return this.mockPayParams(input);
         }
 
@@ -49,7 +48,7 @@ export class WechatPaymentService implements PaymentProvider {
         signature: string,
         headers?: PaymentCallbackHeaders,
     ): Promise<PaymentProviderCallbackResult> {
-        if (this.mockEnabled) {
+        if (await this.mockEnabled()) {
             return JSON.parse(rawBody) as PaymentProviderCallbackResult;
         }
 
@@ -62,8 +61,10 @@ export class WechatPaymentService implements PaymentProvider {
         return this.payClient.parseNotification(rawBody, notificationHeaders);
     }
 
-    private get mockEnabled(): boolean {
-        return this.configService.get<WechatConfig>('wechat')?.pay.mock ?? true;
+    private async mockEnabled(): Promise<boolean> {
+        const { mock } = await this.runtimeConfig.pay();
+
+        return mock;
     }
 
     private mockPayParams(
