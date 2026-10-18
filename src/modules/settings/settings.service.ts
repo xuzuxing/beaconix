@@ -75,7 +75,7 @@ export class SettingsService {
 
         // 内置项按 SETTING_DEFINITIONS 的定义顺序返回（管理页据此展示同一 tab
         // 内的顺序），DB 里多出来的非内置行按 key 追加在末尾。
-        return [...defaults, ...custom];
+        return this.deriveSections([...defaults, ...custom]);
     }
 
     async findOne(key: string): Promise<SettingEntity> {
@@ -259,6 +259,37 @@ export class SettingsService {
         });
 
         return value;
+    }
+
+    /**
+     * 没显式声明 `section` 的项按 key 的第二段自动归类，新增 tab 时不必再改代码。
+     *
+     * 规则是「全或无」：只有同一个 tab 内每一项的 key 都能切出第二段
+     * （`wechat.pay.mchId` → `pay`）时才自动分段，否则整组平铺。否则像
+     * `storage.driver` 这样的两层 key 会让同组的三层 key 形成带标题的块，
+     * 与无标题的项混排。显式声明的 `section` 永远优先于推断。
+     */
+    private deriveSections(entities: SettingEntity[]): SettingEntity[] {
+        const byGroup = new Map<string, SettingEntity[]>();
+        entities.forEach((entity) => {
+            const list = byGroup.get(entity.group);
+            if (list) list.push(entity);
+            else byGroup.set(entity.group, [entity]);
+        });
+
+        byGroup.forEach((items) => {
+            const derivable = items.every(
+                (item) => item.key.split('.').length >= 3,
+            );
+            if (!derivable) return;
+
+            items.forEach((item) => {
+                if (item.section !== undefined) return;
+                item.section = item.key.split('.')[1];
+            });
+        });
+
+        return entities;
     }
 
     private entityFromRow(

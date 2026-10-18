@@ -13,6 +13,7 @@
 | 腾讯云 SCF 探针部署                  | [SCF 部署指南](guides/probe-scf-deployment.md)                                 |
 | 规则校验与阈值告警的关系             | [规则引擎](design/rule-engine.md)、[可用率告警](design/availability-alerts.md) |
 | 站内通知事件、收件人、SSE 与可靠投递 | [工作区通知](design/workspace-notifications.md)                                |
+| 设置页分组（section）方案对比        | [设置页分组提案](proposals/settings-sections.md)                               |
 | 执行中的专项设计与验收契约           | [实施计划](#实施计划)                                                          |
 
 ## 目录与命名

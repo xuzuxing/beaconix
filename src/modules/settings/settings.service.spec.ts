@@ -79,29 +79,53 @@ describe('SettingsService', () => {
         expect(settings.every((item) => Boolean(item.group))).toBe(true);
     });
 
-    it('serves the tab sub-section metadata', async () => {
+    it('derives the tab sub-section metadata from the key', async () => {
         prisma.setting.findMany.mockResolvedValue([]);
 
         const settings = await service.findAll();
         const byKey = new Map(settings.map((item) => [item.key, item]));
 
-        // 项数多的 tab 靠 section 切成若干块；未声明的项直接挂在 tab 顶层
+        // 没显式声明 section 时按 key 的第二段归类
         expect(byKey.get('wechat.pay.mchId')?.section).toBe('pay');
+        expect(byKey.get('wechat.miniprogram.appId')?.section).toBe(
+            'miniprogram',
+        );
         expect(byKey.get('wechat.scanLogin.page')?.section).toBe('scanLogin');
-        expect(byKey.get('storage.driver')?.section).toBeUndefined();
 
         const wechat = settings.filter((item) => item.group === 'wechat');
         expect(wechat).toHaveLength(26);
-        // section 是稳定英文标识，顺序即定义顺序，展示文案由前端按 key 做 i18n
+        // 顺序即 key 首次出现的顺序，展示文案由前端按 key 做 i18n
         expect([...new Set(wechat.map((item) => item.section))]).toEqual([
             'pay',
-            'miniProgram',
+            'miniprogram',
             'website',
             'scanLogin',
             'officialAccount',
             'work',
             'http',
         ]);
+
+        // 全或无：storage 里混着两层 key（storage.driver），整组保持平铺，
+        // 避免「带标题的块」与「无标题的项」混排
+        expect(byKey.get('storage.driver')?.section).toBeUndefined();
+        expect(byKey.get('storage.oss.endpoint')?.section).toBeUndefined();
+        // 本来就是两层的 tab 不受影响
+        expect(byKey.get('smtp.host')?.section).toBeUndefined();
+        expect(byKey.get('develop.configGroup')?.section).toBeUndefined();
+    });
+
+    it('derives sections for non-built-in rows as well', async () => {
+        prisma.setting.findMany.mockResolvedValue([
+            row({ key: 'custom.alpha.one', name: 'A1', overridden: true }),
+            row({ key: 'custom.alpha.two', name: 'A2', overridden: true }),
+            row({ key: 'custom.flat', name: 'Flat', overridden: true }),
+        ]);
+
+        const settings = await service.findAll();
+        const custom = settings.filter((item) => item.group === 'custom');
+
+        // 三条都是 custom 组，含一条两层 key → 全或无，整组平铺
+        expect(custom.every((item) => item.section === undefined)).toBe(true);
     });
 
     it('reports only the values the admin page actually overrode', async () => {

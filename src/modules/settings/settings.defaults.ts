@@ -13,10 +13,13 @@ export interface SettingDefinition {
     group: string;
     /**
      * tab 内的二级分组（小标题 / 折叠面板），同样只由代码定义、不入库。
-     * 项数多的 tab（例如 `wechat`）靠它把平铺的长表单切成若干块；
-     * 同一 group 内首次出现的顺序即二级分组顺序，未声明则回到 tab 顶层。
-     * 取值是稳定的英文标识（与 `group` 同风格），展示文案由前端按 key 做 i18n，
-     * 这样改文案不会动到已经存量的前端映射。
+     *
+     * 通常**不需要显式声明**：`SettingsService.deriveSections` 会按 key 的第二段
+     * 自动归类（`wechat.pay.mchId` → `pay`），前提是该 tab 内每一项 key 都能切出
+     * 三段。这里只在需要覆盖推断结果时写（例如让两层 key 的项也归进某个段）。
+     *
+     * 同一 group 内首次出现的顺序即二级分组顺序；取值是稳定的英文标识（与
+     * `group` 同风格），展示文案由前端按 key 做 i18n。
      */
     section?: string;
     value: string | number | boolean | Record<string, unknown> | unknown[];
@@ -395,7 +398,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.mchId',
         name: '支付商户号',
         group: 'wechat',
-        section: 'pay',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -405,7 +407,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.appId',
         name: '支付 AppID',
         group: 'wechat',
-        section: 'pay',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -415,7 +416,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.serialNo',
         name: '商户证书序列号',
         group: 'wechat',
-        section: 'pay',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -425,7 +425,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.privateKey',
         name: '商户私钥',
         group: 'wechat',
-        section: 'pay',
         value: '',
         valueType: SettingValueType.STRING,
         isSecret: true,
@@ -436,7 +435,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.apiV3Key',
         name: 'APIv3 密钥',
         group: 'wechat',
-        section: 'pay',
         value: '',
         valueType: SettingValueType.STRING,
         isSecret: true,
@@ -447,7 +445,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.publicKey',
         name: '微信支付公钥',
         group: 'wechat',
-        section: 'pay',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -457,7 +454,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.publicKeyId',
         name: '微信支付公钥 ID',
         group: 'wechat',
-        section: 'pay',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -467,7 +463,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.notifyUrl',
         name: '支付回调地址',
         group: 'wechat',
-        section: 'pay',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -478,7 +473,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.pay.mock',
         name: '模拟支付',
         group: 'wechat',
-        section: 'pay',
         value: true,
         valueType: SettingValueType.BOOLEAN,
         description:
@@ -490,7 +484,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.miniprogram.appId',
         name: '小程序 AppID',
         group: 'wechat',
-        section: 'miniProgram',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -500,7 +493,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.miniprogram.appSecret',
         name: '小程序 AppSecret',
         group: 'wechat',
-        section: 'miniProgram',
         value: '',
         valueType: SettingValueType.STRING,
         isSecret: true,
@@ -513,7 +505,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.website.appId',
         name: '网站应用 AppID',
         group: 'wechat',
-        section: 'website',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -523,7 +514,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.website.appSecret',
         name: '网站应用 AppSecret',
         group: 'wechat',
-        section: 'website',
         value: '',
         valueType: SettingValueType.STRING,
         isSecret: true,
@@ -536,7 +526,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.scanLogin.page',
         name: '二维码落地页',
         group: 'wechat',
-        section: 'scanLogin',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -546,7 +535,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.scanLogin.envVersion',
         name: '小程序版本',
         group: 'wechat',
-        section: 'scanLogin',
         value: 'release',
         valueType: SettingValueType.STRING,
         description:
@@ -562,7 +550,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.scanLogin.ttlSeconds',
         name: '登录票据有效期（秒）',
         group: 'wechat',
-        section: 'scanLogin',
         value: 300,
         valueType: SettingValueType.NUMBER,
         description:
@@ -575,7 +562,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.scanLogin.pollTimeoutMs',
         name: '扫码轮询超时（毫秒）',
         group: 'wechat',
-        section: 'scanLogin',
         value: 25000,
         valueType: SettingValueType.NUMBER,
         description:
@@ -590,7 +576,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.officialAccount.appId',
         name: '公众号 AppID',
         group: 'wechat',
-        section: 'officialAccount',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -600,7 +585,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.officialAccount.appSecret',
         name: '公众号 AppSecret',
         group: 'wechat',
-        section: 'officialAccount',
         value: '',
         valueType: SettingValueType.STRING,
         isSecret: true,
@@ -611,7 +595,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.officialAccount.token',
         name: '服务器配置 Token',
         group: 'wechat',
-        section: 'officialAccount',
         value: '',
         valueType: SettingValueType.STRING,
         isSecret: true,
@@ -622,7 +605,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.officialAccount.aesKey',
         name: '消息加解密密钥',
         group: 'wechat',
-        section: 'officialAccount',
         value: '',
         valueType: SettingValueType.STRING,
         isSecret: true,
@@ -635,7 +617,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.work.corpId',
         name: '企业 CorpID',
         group: 'wechat',
-        section: 'work',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -645,7 +626,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.work.corpSecret',
         name: '企业 CorpSecret',
         group: 'wechat',
-        section: 'work',
         value: '',
         valueType: SettingValueType.STRING,
         isSecret: true,
@@ -656,7 +636,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.work.agentId',
         name: '应用 AgentID',
         group: 'wechat',
-        section: 'work',
         value: '',
         valueType: SettingValueType.STRING,
         description:
@@ -668,7 +647,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.http.timeoutMs',
         name: '接口超时（毫秒）',
         group: 'wechat',
-        section: 'http',
         value: 8000,
         valueType: SettingValueType.NUMBER,
         description:
@@ -681,7 +659,6 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         key: 'wechat.http.maxRetries',
         name: '接口重试次数',
         group: 'wechat',
-        section: 'http',
         value: 2,
         valueType: SettingValueType.NUMBER,
         description:
