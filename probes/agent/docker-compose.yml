@@ -27,7 +27,7 @@ services:
     env_file:
       - probe.env
     environment:
-      BEACON_API_URL: ${BEACON_API_URL:-http://localhost:3000/api}
+      BEACON_API_URL: ${BEACON_API_URL:-http://host.docker.internal:3000/api}
       # Optional: redeem a web-issued one-time token instead of the device flow.
       PROBE_ENROLL_TOKEN: ${PROBE_ENROLL_TOKEN:-}
       # Optional tuning; defaults match the agent's own defaults.
@@ -35,7 +35,7 @@ services:
       PROBE_TIMEOUT_MS: ${PROBE_TIMEOUT_MS:-5000}
       PROBE_MAX_RESULTS: ${PROBE_MAX_RESULTS:-100}
       PROBE_CONCURRENCY: ${PROBE_CONCURRENCY:-3}
-      PROBE_ALLOW_INSECURE: ${PROBE_ALLOW_INSECURE:-false}
+      PROBE_ALLOW_INSECURE: ${PROBE_ALLOW_INSECURE:-true}
       # Optional: pin a release / mirror, or re-download on restart.
       PROBE_VERSION: ${PROBE_VERSION:-latest}
       BEACON_DOWNLOAD_BASE: ${BEACON_DOWNLOAD_BASE:-https://get.beaconix.app/probe}
@@ -49,6 +49,8 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   probe-data:

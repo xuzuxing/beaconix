@@ -22,7 +22,7 @@ node probes/agent/scripts/build-release.js
 | --- | --- | --- |
 | `beaconix-probe-<version>.tar.gz` | `install/install.sh --version <v>` | 解压后**根目录**必须是 `bin/`、`src/`…（`install.sh` 直接 `tar -xzf … -C /opt/beaconix-probe`，不剥前缀目录） |
 | `beaconix-probe-latest.tar.gz` | `install.sh` 默认路径（`VERSION=latest`） | 与 `beaconix-probe-<version>.tar.gz` 字节级一致 |
-| `beaconix-probe-scf-<version>.zip` | 腾讯云 SCF「上传代码包」 | 根目录含 `functions/scf.js` 与 `src/`；控制台 handler 填 `functions/scf.main_handler` |
+| `beaconix-probe-scf-<version>.zip` | 腾讯云 SCF「上传代码包」 | 根目录含 `index.js`、`functions/scf.js` 与 `src/`；控制台 handler 填 `index.main` |
 | `latest.json` | `src/commands/self-update.js` | 至少含 `version`、`installUrl`；缺失则 `self-update` 直接报错 |
 | `install.sh` | 安装入口 `https://get.beaconix.app/install.sh` | 与 `probes/agent/install/install.sh` 完全一致 |
 | `SHA256SUMS` | 人工 / CI 校验 | `sha256sum -c` 兼容格式 |
@@ -88,6 +88,10 @@ node probes/agent/scripts/build-release.js --base-url https://cdn.example.com/pr
 
 # 不构建 SCF 包
 node probes/agent/scripts/build-release.js --no-scf
+
+# 只构建 SCF 代码包（不清空、不覆盖 dist 里的其它发布物）
+pnpm probe:pack:scf
+# 等价于 node probes/agent/scripts/build-release.js --scf-only
 ```
 
 参数：
@@ -98,6 +102,7 @@ node probes/agent/scripts/build-release.js --no-scf
 | `--base-url <url>` | `https://get.beaconix.app/probe` | 写进 `latest.json` 的 tarball 地址前缀 |
 | `--install-url <url>` | `https://get.beaconix.app/install.sh` | 写进 `latest.json` 的安装脚本地址 |
 | `--no-scf` | 构建 | 跳过腾讯云 SCF zip |
+| `--scf-only` | 关 | 只生成 SCF zip，保留 `dist` 里其它已有产物 |
 | `--latest` / `--no-latest` | 稳定版生成 | 强制开 / 关 `latest` 别名与 `latest.json` |
 | `--require-clean` | 关 | `probes/agent` 有未提交改动时报错 |
 | `--no-verify` | 关 | 跳过构建后的归档校验（不建议） |
@@ -138,7 +143,8 @@ Output: probes/agent/dist
 RELEASE.json                      # 版本 / commit / 源码时间 / engines
 bin/beaconix-probe.js             # 0755，CLI 入口
 src/...                           # 全部运行时代码
-functions/scf.js                  # 云函数入口（随包附带，便于现场改部署形态）
+index.js                          # SCF 根入口（exports.main）
+functions/scf.js                  # 单次执行实现（require('../src/...')）
 install/install.sh                # 安装脚本本身
 install/beacon-probe.service.tpl  # systemd unit 模板
 package.json                      # 版本来源，必须存在
@@ -149,17 +155,37 @@ package.json                      # 版本来源，必须存在
 
 ### 4.2 SCF zip
 
+```bash
+pnpm probe:pack:scf
+# → probes/agent/dist/beaconix-probe-scf-<version>.zip
 ```
+
+```
+index.js
 functions/scf.js
 src/...
 package.json
 RELEASE.json
 ```
 
-`functions/scf.js` 里用的是 `require('../src/...')`，所以 zip 必须保留
-`functions/` 这层目录，**不能**把 `scf.js` 挪到根目录。控制台 handler 填
-`functions/scf.main_handler`；环境变量见
+`index.js` 是根入口，导出 `main`（`exports.main = async (event, context) => …`），
+内部 `require('./functions/scf')`。`functions/scf.js` 用的是 `require('../src/...')`，
+所以 zip 必须保留 `functions/` 这层目录，**不能**把 `scf.js` 挪到根目录。
+控制台 handler 填 `index.main`；环境变量见
 [云函数部署指南](../docs/guides/probe-scf-deployment.md)（`/docs` 为本地文档，未纳入版本库）。
+
+腾讯云控制台新建函数时的关键配置：
+
+| 项 | 值 |
+| --- | --- |
+| 运行环境 | Node.js 18 / 20 / 22 |
+| 提交方式 | 上传代码包（`beaconix-probe-scf-<version>.zip`） |
+| 执行方法（handler） | `index.main` |
+| 环境变量 | `BEACON_API_URL`、`PROBE_KEY`、`PROBE_TOKEN`、`PROBE_INTERVAL_SECONDS` |
+| 定时触发器 | 周期必须等于 `PROBE_INTERVAL_SECONDS`（否则会被判离线） |
+| 超时 | 大于 `PROBE_TIMEOUT_MS`，建议 ≥ 30s |
+
+更新函数时重新 `pnpm probe:pack:scf` 并上传覆盖即可；凭据在环境变量里，不受影响。
 
 ### 4.3 `latest.json`
 
@@ -177,7 +203,7 @@ RELEASE.json
     "latestTarball": "https://get.beaconix.app/probe/beaconix-probe-latest.tar.gz",
     "scf": {
         "tarball": "https://get.beaconix.app/probe/beaconix-probe-scf-2.0.0.zip",
-        "handler": "functions/scf.main_handler"
+        "handler": "index.main"
     }
 }
 ```
@@ -439,7 +465,7 @@ tag 版本与 `package.json` 一致（可在 step 里加一条断言）。
 | `self-update` 长期显示「Up to date」但已发新版 | CDN 缓存了 `latest.json` | 给 `latest.json` 设 60s / no-cache 并刷新缓存 |
 | `self-update` 报 `missing a version` | manifest 被手工改坏 | 用脚本重新生成，不要手写 |
 | 安装后 `beaconix-probe: command not found` | 软链 `/usr/local/bin/beaconix-probe` 没建（通常是脚本中途失败） | 重跑 `install.sh`；检查 `/usr/local/bin` 是否在 PATH |
-| SCF 报 `Cannot find module '../src/config'` | zip 把 `scf.js` 放到了根目录 | 保持 `functions/scf.js` + `src/` 布局，handler 用 `functions/scf.main_handler` |
+| SCF 报 `Cannot find module './functions/scf'` 或 `../src/config` | zip 里缺了 `index.js` 或 `functions/` 目录 | 重新 `pnpm probe:pack:scf` 上传；保持 `index.js` + `functions/scf.js` + `src/` 布局，handler 用 `index.main` |
 | SCF 探针频繁 OFFLINE | 触发器周期 ≠ `PROBE_INTERVAL_SECONDS` | 两者必须相等，按部署指南设置 |
 | 容器日志出现 `curl: (22) … 404` / `curl: (6) Could not resolve host` | 下载源不可达，或该版本文件不存在 | 检查 `BEACON_DOWNLOAD_BASE` 与 `PROBE_VERSION`（预发布不写 `latest` 别名） |
 | 容器重建后又要求登录 | `/data` 没挂持久卷 | `-v beacon-probe-data:/data`（compose 已配命名卷） |

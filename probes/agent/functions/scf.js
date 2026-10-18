@@ -20,7 +20,7 @@
  * Optional: PROBE_SCF_MODE (run|validate), PROBE_TIMEOUT_MS, PROBE_MAX_RESULTS,
  *           PROBE_CONCURRENCY, PROBE_ALLOW_INSECURE.
  *
- * SCF console handler: `scf.main_handler`
+ * SCF console handler: `index.main` (root entry: functions/index.js)
  */
 
 const { parseArgs, loadConfig } = require('../src/config');

@@ -133,3 +133,9 @@ test('a failed run is returned as code 1 instead of throwing', async () => {
     assert.equal(result.mode, 'run');
     assert.ok(typeof result.error === 'string' && result.error.length > 0);
 });
+
+test('index.main is the SCF root entry point', () => {
+    const entry = require('../index.js');
+    assert.equal(typeof entry.main, 'function');
+    assert.equal(typeof require('../functions/scf.js').main_handler, 'function');
+});

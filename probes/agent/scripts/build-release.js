@@ -54,7 +54,7 @@ const DEFAULT_INSTALL_URL = 'https://get.beaconix.app/install.sh';
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /** Top-level payload entries that ship to probe hosts. */
-const PAYLOAD_ENTRIES = ['bin', 'src', 'functions', 'install', 'package.json'];
+const PAYLOAD_ENTRIES = ['index.js', 'bin', 'src', 'functions', 'install', 'package.json'];
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'test', '.git']);
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db', 'package-lock.json']);
 
@@ -68,6 +68,7 @@ Options:
   --base-url <url>   Public base URL of the published tarballs
   --install-url <u>  Installer URL written into latest.json
   --no-scf           Do not build the Tencent SCF zip
+  --scf-only         Only build the Tencent SCF zip (other artifacts untouched)
   --latest           Always publish the "latest" alias and latest.json
   --no-latest        Never publish them (default: stable versions only)
   --require-clean    Fail when probes/agent has uncommitted changes
@@ -94,6 +95,7 @@ function parseArgs(argv) {
         baseUrl: DEFAULT_BASE_URL,
         installUrl: DEFAULT_INSTALL_URL,
         includeScf: true,
+        scfOnly: false,
         latest: 'auto',
         requireClean: false,
         verify: true,
@@ -112,6 +114,8 @@ function parseArgs(argv) {
             opts.installUrl = requireValue(argv, ++i, arg);
         } else if (arg === '--no-scf') {
             opts.includeScf = false;
+        } else if (arg === '--scf-only') {
+            opts.scfOnly = true;
         } else if (arg === '--latest') {
             opts.latest = 'always';
         } else if (arg === '--no-latest') {
@@ -595,6 +599,58 @@ function resetOutDir(dir) {
     }
 }
 
+function isScfEntry(entry) {
+    return (
+        entry.name === 'index.js' ||
+        entry.name === 'package.json' ||
+        entry.name === 'RELEASE.json' ||
+        entry.name.startsWith('src/') ||
+        entry.name === 'functions/scf.js'
+    );
+}
+
+function scfEntriesFrom(entries) {
+    return entries.filter(isScfEntry);
+}
+
+function buildScfArchive(entries, epochSeconds, verify) {
+    const scfEntries = scfEntriesFrom(entries);
+    const zip = buildZip(scfEntries, epochSeconds);
+    if (verify) {
+        const names = verifyZip(zip);
+        if (!names.includes('index.js')) {
+            throw new Error('SCF zip is missing the root index.js entry');
+        }
+    }
+    return { zip, scfEntries };
+}
+
+function buildScfOnly(opts, entries, source, version) {
+    if (!opts.includeScf) {
+        throw new Error('--scf-only conflicts with --no-scf');
+    }
+
+    const { zip, scfEntries } = buildScfArchive(
+        entries,
+        source.epochSeconds,
+        opts.verify,
+    );
+
+    fs.mkdirSync(opts.outDir, { recursive: true });
+    const zipName = `beaconix-probe-scf-${version}.zip`;
+    fs.writeFileSync(path.join(opts.outDir, zipName), zip);
+
+    return {
+        scfOnly: true,
+        version,
+        zipName,
+        zipSize: zip.length,
+        zipSha: sha256(zip),
+        entries: scfEntries.length,
+        outDir: opts.outDir,
+    };
+}
+
 function build(opts) {
     if (!SEMVER.test(PKG.version)) {
         throw new Error(`Invalid version in package.json: ${PKG.version}`);
@@ -609,6 +665,11 @@ function build(opts) {
     const source = readSourceMeta();
     const entries = buildEntries(source);
     const version = PKG.version;
+
+    if (opts.scfOnly) {
+        return buildScfOnly(opts, entries, source, version);
+    }
+
     const tarName = `beaconix-probe-${version}.tar.gz`;
     const latestTarName = 'beaconix-probe-latest.tar.gz';
     const zipName = `beaconix-probe-scf-${version}.zip`;
@@ -632,17 +693,11 @@ function build(opts) {
 
     let zipInfo;
     if (opts.includeScf) {
-        const scfEntries = entries.filter(
-            (entry) =>
-                entry.name === 'package.json' ||
-                entry.name === 'RELEASE.json' ||
-                entry.name.startsWith('src/') ||
-                entry.name === 'functions/scf.js',
+        const { zip, scfEntries } = buildScfArchive(
+            entries,
+            source.epochSeconds,
+            opts.verify,
         );
-        const zip = buildZip(scfEntries, source.epochSeconds);
-        if (opts.verify) {
-            verifyZip(zip);
-        }
         fs.writeFileSync(path.join(opts.outDir, zipName), zip);
         artifacts.push({ name: zipName, size: zip.length });
         zipInfo = { name: zipName, size: zip.length, entries: scfEntries.length };
@@ -678,7 +733,7 @@ function build(opts) {
     if (zipInfo) {
         manifest.scf = {
             tarball: `${opts.baseUrl}/${zipName}`,
-            handler: 'functions/scf.main_handler',
+            handler: 'index.main',
         };
     }
     if (publishLatestAlias) {
@@ -720,6 +775,27 @@ function build(opts) {
 }
 
 function printSummary(result) {
+    if (result.scfOnly) {
+        console.log(`Beacon probe agent SCF package ${result.version}`);
+        console.log(`Output: ${result.outDir}`);
+        console.log('');
+        console.log(
+            `  ${result.zipName.padEnd(36)} ${formatBytes(result.zipSize)}`,
+        );
+        console.log(`  sha256 ${result.zipSha}`);
+        console.log('');
+        console.log('Tencent SCF console:');
+        console.log('  Runtime:  Node.js 18 / 20 / 22');
+        console.log('  Handler:  index.main');
+        console.log(
+            '  Env:      BEACON_API_URL, PROBE_KEY, PROBE_TOKEN, PROBE_INTERVAL_SECONDS',
+        );
+        console.log(
+            '  Trigger:  timer period must equal PROBE_INTERVAL_SECONDS',
+        );
+        return;
+    }
+
     console.log(
         `Beacon probe agent ${result.version} (${result.manifest.channel}, ${result.source.commit})`,
     );

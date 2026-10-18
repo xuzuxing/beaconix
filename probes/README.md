@@ -26,7 +26,8 @@ probes/agent/
 │   ├── preflight.js         # 凭据与 TLS 前置校验
 │   ├── commands/            # 各子命令的实现
 │   └── service/             # systemd / launchd / pidfile 集成
-├── functions/scf.js         # 腾讯云 SCF 入口（单次执行）
+├── index.js                 # 腾讯云 SCF 根入口（exports.main → index.main）
+├── functions/scf.js         # 单次执行实现
 ├── install/                 # install.sh 与 systemd unit 模板
 ├── scripts/build-release.js # 发布打包（tar.gz / SCF zip / latest.json）
 ├── docker-entrypoint.sh     # 容器入口（首次下载安装 + 登录）
@@ -40,7 +41,7 @@ probes/agent/
 | --- | --- | --- |
 | systemd 常驻 | `install/install.sh` → `beaconix-probe run` | 生产推荐；安装只装程序，首次启动自动打印设备码授权链接（`journalctl -u beaconix-probe -f`） |
 | 容器 | [`Dockerfile`](Dockerfile) / [`agent/docker-compose.yml`](agent/docker-compose.yml) | 每次启动通过 `latest.json` 解析版本并下载版本化 tar（失败沿用卷内安装），首次启动打印设备码登录地址，登录后常驻 `run` |
-| 云函数 | `functions/scf.js` | 每次触发执行**一轮**；无本地调度，见下方文档 |
+| 云函数 | `index.js`（handler `index.main`） | 每次触发执行**一轮**；无本地调度，见下方文档 |
 
 `install.sh` 默认只安装并启动服务，授权在首次启动时由 `run` 自动发起：
 
@@ -131,6 +132,8 @@ pnpm probe:test
 
 # 打发布包（tar.gz / SCF zip / latest.json，输出到 probes/agent/dist）
 pnpm probe:pack
+# 只打腾讯云 SCF 代码包
+pnpm probe:pack:scf
 
 # 本地调试 SCF 入口
 BEACON_API_URL=https://api.example.com/api \
