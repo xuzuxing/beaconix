@@ -39,6 +39,13 @@ export class AttachmentObjectUrlService {
         this.secret = configService.get<JwtConfig>('jwt')!.secret;
     }
 
+    private async publicUrl(key: string): Promise<string> {
+        const base = (
+            await this.settings.getString('storage.publicBaseUrl', '')
+        ).replace(/\/$/, '');
+        return base ? `${base}/${key}` : '';
+    }
+
     /**
      * Direct link for a stored object.
      *
@@ -60,7 +67,7 @@ export class AttachmentObjectUrlService {
     async sign(key: string): Promise<string> {
         const exp = Math.floor(Date.now() / 1000) + (await this.ttlSeconds());
         const sig = this.digest(key, exp);
-        return `${PUBLIC_OBJECT_PATH}?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sig}`;
+        return `${await this.publicUrl(key)}${PUBLIC_OBJECT_PATH}?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sig}`;
     }
 
     /** True when `sig` was issued for exactly this key and has not expired. */
