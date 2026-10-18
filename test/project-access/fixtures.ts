@@ -39,7 +39,10 @@ export function businessServices(prisma: PrismaService) {
         putObject(input: PutObjectInput) {
             return Promise.resolve({
                 provider: 'LOCAL' as const,
-                key: buildPublicObjectKey({ ...input, objectId: randomUUID() }),
+                key: buildPublicObjectKey({
+                    ...input,
+                    objectId: randomUUID(),
+                }),
                 url: '',
             });
         },
@@ -70,8 +73,8 @@ export function businessServices(prisma: PrismaService) {
             storageBoundary as unknown as StorageService,
             settings,
             access,
-            {} as never,
-            {} as never,
+            { verifyAsync: () => Promise.reject(new Error('unused')) } as never,
+            { toObjectUrl: () => Promise.resolve('') } as never,
         ),
     };
 }
