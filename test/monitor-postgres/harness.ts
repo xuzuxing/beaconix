@@ -16,6 +16,13 @@ export const localMigrations = [
 const compatibilityMigrations = [
     '20261011100000_merge_monitor_revision_tracking',
 ] as const;
+/**
+ * Probe success ratio: deployed as its own upgrade stage so the acceptance run
+ * proves an existing database can be upgraded instead of only creating one.
+ */
+export const probeSuccessRatioMigrations = [
+    '20261018120000_add_probe_success_ratio',
+] as const;
 
 export function validateTestUrl(value: string | undefined): string {
     const refusal =
@@ -66,9 +73,11 @@ export async function stageMigrations(): Promise<string> {
         for (const entry of await readdir(source, { withFileTypes: true })) {
             if (
                 (entry.isDirectory() &&
-                    ![...localMigrations, ...compatibilityMigrations].some(
-                        (name) => name === entry.name,
-                    )) ||
+                    ![
+                        ...localMigrations,
+                        ...compatibilityMigrations,
+                        ...probeSuccessRatioMigrations,
+                    ].some((name) => name === entry.name)) ||
                 entry.name === 'migration_lock.toml'
             ) {
                 await cp(join(source, entry.name), join(target, entry.name), {
@@ -85,6 +94,17 @@ export async function stageMigrations(): Promise<string> {
 
 export async function addLocalMigrations(target: string): Promise<void> {
     for (const name of [...localMigrations, ...compatibilityMigrations]) {
+        await cp(join(root, 'prisma/migrations', name), join(target, name), {
+            recursive: true,
+        });
+    }
+}
+
+/** Deploys the ratio migration on top of an already-migrated system. */
+export async function addProbeSuccessRatioMigration(
+    target: string,
+): Promise<void> {
+    for (const name of probeSuccessRatioMigrations) {
         await cp(join(root, 'prisma/migrations', name), join(target, name), {
             recursive: true,
         });

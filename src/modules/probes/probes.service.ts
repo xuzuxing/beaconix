@@ -32,7 +32,10 @@ import { ADMIN_ROLES } from '../notifications/notification-event';
 import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { QuotaService } from '../../shared/quota/quota.service';
-import { CheckerService } from '../checker/checker.service';
+import {
+    CheckerService,
+    roundAttributionWindowMs,
+} from '../checker/checker.service';
 import { hashSecret, secretPrefixOf } from './probe-secret.util';
 import {
     BindMonitorsDto,
@@ -310,6 +313,8 @@ export class ProbesService implements OnModuleInit {
             );
         }
 
+        await this.assertPerMonitorProbeLimit(orgId, probeId, monitors);
+
         await this.prisma.monitorProbe.createMany({
             data: monitors.map((monitor) => ({
                 monitorId: monitor.id,
@@ -321,6 +326,51 @@ export class ProbesService implements OnModuleInit {
         await this.systemProbeScheduler.rebalance();
 
         return this.findOne(orgId, probeId);
+    }
+
+    /**
+     * Enforces the plan's per-monitor probe budget on the probe-side binding
+     * path, so attaching from either direction hits the same limit
+     * (`MonitorsService.setProbes` is the other entry point).
+     */
+    private async assertPerMonitorProbeLimit(
+        orgId: string,
+        probeId: string,
+        monitors: { id: string }[],
+    ): Promise<void> {
+        if (monitors.length === 0) return;
+
+        const limit = await this.quotaService.getProbeAssignmentLimit(orgId);
+        const bindings = await this.prisma.monitorProbe.findMany({
+            where: { monitorId: { in: monitors.map((m) => m.id) } },
+            select: { monitorId: true, probeId: true },
+        });
+
+        const boundPerMonitor = new Map<string, number>();
+        const alreadyBound = new Set<string>();
+        for (const binding of bindings) {
+            boundPerMonitor.set(
+                binding.monitorId,
+                (boundPerMonitor.get(binding.monitorId) ?? 0) + 1,
+            );
+            if (binding.probeId === probeId)
+                alreadyBound.add(binding.monitorId);
+        }
+
+        const overflow = monitors.find(
+            (monitor) =>
+                !alreadyBound.has(monitor.id) &&
+                (boundPerMonitor.get(monitor.id) ?? 0) + 1 > limit,
+        );
+
+        if (overflow) {
+            throw new ForbiddenException({
+                code: 'QUOTA_EXCEEDED',
+                resource: 'probesPerMonitor',
+                limit,
+                message: `当前套餐单个监控最多可分配 ${limit} 个探针，请升级套餐`,
+            });
+        }
     }
 
     async unbindMonitor(
@@ -692,6 +742,23 @@ export class ProbesService implements OnModuleInit {
                         'Monitor configuration changed; refresh heartbeat',
                     );
                 }
+                // A report joins the monitor's open batch; without one it is
+                // stored as an orphan that no aggregation will look at.
+                const open = await tx.checkLog.findFirst({
+                    where: {
+                        monitorId: current.id,
+                        roundId: { not: null },
+                        appliedAt: null,
+                    },
+                    orderBy: [{ checkedAt: 'desc' }, { id: 'desc' }],
+                    select: { roundId: true, checkedAt: true },
+                });
+                const roundId =
+                    open?.roundId &&
+                    receivedAt.getTime() - open.checkedAt.getTime() <=
+                        roundAttributionWindowMs(current.interval)
+                        ? open.roundId
+                        : `${current.id}:orphan:${Math.floor(receivedAt.getTime() / 1000)}`;
                 saved.push(
                     await tx.probeResult.create({
                         data: {
@@ -705,6 +772,7 @@ export class ProbesService implements OnModuleInit {
                             monitorType: item.monitor.type,
                             configRevision: item.canonical.configRevision,
                             target: item.canonical.target,
+                            roundId,
                             checkedAt: item.checkedAt,
                             receivedAt,
                             success: item.canonical.success,

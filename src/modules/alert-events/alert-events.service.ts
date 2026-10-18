@@ -128,6 +128,9 @@ export class AlertEventsService {
                     monitorId: monitor.id,
                     evaluated: true,
                     revision: monitor.revision,
+                    // Unsettled batch rows are not evidence yet; legacy rows
+                    // (no roundId) stay in the window.
+                    OR: [{ appliedAt: { not: null } }, { roundId: null }],
                 },
                 orderBy: [{ checkedAt: 'desc' }, { id: 'desc' }],
                 take: monitor.availabilityWindow ?? 10,

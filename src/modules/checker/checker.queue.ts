@@ -16,6 +16,9 @@ export const MONITOR_CHECK_QUEUE = 'monitor-checks';
 /** Job that runs the local check of a single monitor. */
 export const MONITOR_CHECK_JOB = 'monitor-check';
 
+/** Job that settles a batch once its window closed without all probes reporting. */
+export const MONITOR_SETTLE_JOB = 'monitor-settle';
+
 /** How many monitors one worker checks in parallel. */
 export const MONITOR_CHECK_CONCURRENCY = 5;
 
@@ -30,4 +33,9 @@ export const MONITOR_CHECK_DEDUP_PREFIX = 'monitor-check';
 
 export interface MonitorCheckJobData {
     monitorId: string;
+}
+
+export interface MonitorSettleJobData {
+    monitorId: string;
+    roundId: string;
 }

@@ -25,6 +25,7 @@ const FEATURE_LABELS: Record<QuotaFeature, string> = {
 const FREE_FALLBACK = {
     maxMonitors: 5,
     maxProbes: 0,
+    maxProbesPerMonitor: 0,
     maxMembers: 3,
     maxChannels: 1,
     maxApiKeys: 5,
@@ -40,8 +41,23 @@ const FREE_FALLBACK = {
 type QuotaPlan = Pick<PlanModel, keyof typeof FREE_FALLBACK>;
 export type MonitorPolicy = Pick<
     PlanModel,
-    'allowedMonitorTypes' | 'minInterval'
+    'allowedMonitorTypes' | 'minInterval' | 'maxProbes' | 'maxProbesPerMonitor'
 >;
+
+/**
+ * Effective budget of tenant probes a single monitor may bind.
+ *
+ * `maxProbesPerMonitor` is clamped by the organization-wide `maxProbes` so a
+ * plan can never let one monitor consume more probes than the tenant owns.
+ * `0` means manual assignment is not available on this plan.
+ */
+export function probeAssignmentLimit(plan: {
+    maxProbes: number;
+    maxProbesPerMonitor?: number | null;
+}): number {
+    const perMonitor = plan.maxProbesPerMonitor ?? 0;
+    return Math.max(0, Math.min(plan.maxProbes, perMonitor));
+}
 
 @Injectable()
 export class QuotaService {
@@ -170,7 +186,43 @@ export class QuotaService {
         return {
             allowedMonitorTypes: plan.allowedMonitorTypes,
             minInterval: plan.minInterval,
+            maxProbes: plan.maxProbes,
+            maxProbesPerMonitor: plan.maxProbesPerMonitor,
         };
+    }
+
+    /**
+     * Effective number of tenant probes a single monitor may bind on the
+     * organization's current plan (`min(maxProbes, maxProbesPerMonitor)`).
+     */
+    async getProbeAssignmentLimit(
+        organizationId: string,
+        policy?: MonitorPolicy,
+    ): Promise<number> {
+        const plan = policy ?? (await this.getPlan(organizationId));
+        return probeAssignmentLimit(plan);
+    }
+
+    /** Rejects a probe set larger than the per-monitor budget of the plan. */
+    async assertProbesAssignable(
+        organizationId: string,
+        count: number,
+        policy?: MonitorPolicy,
+    ): Promise<void> {
+        const limit = await this.getProbeAssignmentLimit(
+            organizationId,
+            policy,
+        );
+
+        if (count > limit) {
+            throw new ForbiddenException({
+                code: 'QUOTA_EXCEEDED',
+                resource: 'probesPerMonitor',
+                current: count,
+                limit,
+                message: `当前套餐单个监控最多可分配 ${limit} 个探针，请升级套餐`,
+            });
+        }
     }
 
     async assertFeatureAllowed(
@@ -218,6 +270,8 @@ export class QuotaService {
             },
             minInterval: plan.minInterval,
             allowedMonitorTypes: plan.allowedMonitorTypes,
+            // Per-monitor probe budget the assignment UI must honour.
+            maxProbesPerMonitor: probeAssignmentLimit(plan),
         };
     }
 

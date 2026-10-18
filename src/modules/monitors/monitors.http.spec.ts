@@ -28,7 +28,14 @@ describe('Monitor HTTP integration', () => {
             findMany: jest.fn().mockResolvedValue([{ id: 'membership' }]),
         },
         projectMembership: { findUnique: jest.fn().mockResolvedValue(null) },
-        monitor: { create: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+        monitor: {
+            create: jest.fn(),
+            findFirst: jest.fn(),
+            findFirstOrThrow: jest.fn(),
+            update: jest.fn(),
+        },
+        probe: { count: jest.fn().mockResolvedValue(0) },
+        monitorProbe: { createMany: jest.fn(), deleteMany: jest.fn() },
         $queryRaw: jest.fn().mockResolvedValue([]),
         $transaction: jest.fn(),
     };
@@ -36,6 +43,14 @@ describe('Monitor HTTP integration', () => {
         assertCanCreate: jest.fn(),
         assertIntervalAllowed: jest.fn(),
         assertMonitorTypeAllowed: jest.fn(),
+        assertProbesAssignable: jest.fn(),
+        getProbeAssignmentLimit: jest.fn().mockResolvedValue(10),
+        getMonitorPolicy: jest.fn().mockResolvedValue({
+            allowedMonitorTypes: ['HTTP', 'TCP', 'PING', 'DNS'],
+            minInterval: 10,
+            maxProbes: 10,
+            maxProbesPerMonitor: 10,
+        }),
         monitorEligibility: jest.fn(),
     };
 
@@ -78,6 +93,9 @@ describe('Monitor HTTP integration', () => {
                 whitelist: true,
                 forbidNonWhitelisted: true,
                 transform: true,
+                transformOptions: {
+                    enableImplicitConversion: true,
+                },
             }),
         );
         app.useGlobalInterceptors(new TransformInterceptor());
@@ -109,6 +127,8 @@ describe('Monitor HTTP integration', () => {
             interval: 60,
             configVersion: 1,
             revision: 1,
+            // The database default, which the mock has to restate.
+            probeSuccessRatio: data.probeSuccessRatio ?? 1,
             state: null,
         }));
     });
@@ -381,6 +401,211 @@ describe('Monitor HTTP integration', () => {
                 data: expect.objectContaining({ revision: { increment: 1 } }),
             }),
         );
+    });
+
+    describe('probe assignment', () => {
+        const existing = {
+            id: 'monitor-1',
+            projectId: 'project-1',
+            organizationId: 'org-1',
+            name: 'Health',
+            type: 'HTTP',
+            target: 'https://example.com/health',
+            interval: 60,
+            timeout: 5000,
+            expectedStatus: 200,
+            failureThreshold: 3,
+            probeSuccessRatio: 1,
+            checkSsl: false,
+            sslExpiryThreshold: 30,
+            enabled: true,
+            availabilityEnabled: false,
+            availabilityThreshold: 90,
+            availabilityWindow: 10,
+            config: {},
+            configVersion: 1,
+            revision: 1,
+            deletedAt: null,
+        };
+
+        it('replaces the probe set through the DTO pipeline', async () => {
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.probe.count.mockResolvedValue(1);
+            prisma.monitorProbe.deleteMany.mockResolvedValue({ count: 1 });
+            prisma.monitorProbe.createMany.mockResolvedValue({ count: 1 });
+            prisma.monitor.findFirstOrThrow.mockResolvedValue({
+                ...existing,
+                state: null,
+                notificationChannels: [],
+                probes: [
+                    {
+                        probe: {
+                            id: 'probe-1',
+                            name: 'Tokyo probe',
+                            provider: 'TENCENT',
+                            region: 'ap-northeast-1',
+                            status: 'ONLINE',
+                            enabled: true,
+                            lastHeartbeat: null,
+                        },
+                    },
+                ],
+            });
+
+            const response = await request(app.getHttpServer())
+                .patch('/api/projects/project-1/monitors/monitor-1/probes')
+                .send({ probeIds: ['probe-1'] })
+                .expect(200);
+
+            expect(prisma.monitorProbe.deleteMany).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+            });
+            expect(prisma.monitorProbe.createMany).toHaveBeenCalledWith({
+                data: [{ monitorId: 'monitor-1', probeId: 'probe-1' }],
+                skipDuplicates: true,
+            });
+            expect(response.body.data.probes).toHaveLength(1);
+            expect(response.body.data.probes[0].id).toBe('probe-1');
+            expect(response.body.data.maxProbes).toBe(10);
+        });
+
+        it('rejects a non-array probeIds body through the validation pipe', async () => {
+            await request(app.getHttpServer())
+                .patch('/api/projects/project-1/monitors/monitor-1/probes')
+                .send({ probeIds: 'probe-1' })
+                .expect(400);
+            expect(prisma.monitorProbe.deleteMany).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('probe success ratio', () => {
+        const base = {
+            name: 'Health',
+            type: 'HTTP',
+            target: 'https://example.com/health',
+        };
+
+        it('leaves the ratio to the database default when omitted', async () => {
+            const response = await request(app.getHttpServer())
+                .post('/api/projects/project-1/monitors')
+                .send(base)
+                .expect(201);
+
+            expect(
+                prisma.monitor.create.mock.calls[0][0].data.probeSuccessRatio,
+            ).toBeUndefined();
+            expect(response.body.data.probeSuccessRatio).toBe(1);
+        });
+
+        it('persists an explicit ratio and returns it', async () => {
+            const response = await request(app.getHttpServer())
+                .post('/api/projects/project-1/monitors')
+                .send({ ...base, probeSuccessRatio: 60 })
+                .expect(201);
+
+            expect(
+                prisma.monitor.create.mock.calls[0][0].data.probeSuccessRatio,
+            ).toBe(60);
+            expect(response.body.data.probeSuccessRatio).toBe(60);
+        });
+
+        it('accepts a convertible integer string like the production pipe', async () => {
+            const response = await request(app.getHttpServer())
+                .post('/api/projects/project-1/monitors')
+                .send({ ...base, probeSuccessRatio: '100' })
+                .expect(201);
+
+            expect(
+                prisma.monitor.create.mock.calls[0][0].data.probeSuccessRatio,
+            ).toBe(100);
+            expect(response.body.data.probeSuccessRatio).toBe(100);
+        });
+
+        it.each([0, 101, -1, 1.5, null, '', 'abc'])(
+            'rejects the out-of-range value %p without persisting',
+            async (probeSuccessRatio) => {
+                await request(app.getHttpServer())
+                    .post('/api/projects/project-1/monitors')
+                    .send({ ...base, probeSuccessRatio })
+                    .expect(400);
+
+                expect(prisma.monitor.create).not.toHaveBeenCalled();
+            },
+        );
+
+        it('revises the monitor when the ratio changes through PATCH', async () => {
+            const existing = {
+                id: 'monitor-1',
+                projectId: 'project-1',
+                organizationId: 'org-1',
+                type: 'HTTP',
+                target: 'https://example.com',
+                revision: 1,
+                enabled: true,
+                interval: 60,
+                probeSuccessRatio: 1,
+                config: {},
+            };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockImplementation(({ data }) => ({
+                ...existing,
+                ...data,
+                revision: 2,
+                state: null,
+            }));
+
+            const response = await request(app.getHttpServer())
+                .patch('/api/projects/project-1/monitors/monitor-1')
+                .send({ probeSuccessRatio: 100 })
+                .expect(200);
+
+            expect(response.body.data.probeSuccessRatio).toBe(100);
+            expect(prisma.monitor.update).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        probeSuccessRatio: 100,
+                        revision: { increment: 1 },
+                    }),
+                }),
+            );
+        });
+
+        it('keeps the revision for an unchanged or omitted ratio', async () => {
+            const existing = {
+                id: 'monitor-1',
+                projectId: 'project-1',
+                organizationId: 'org-1',
+                type: 'HTTP',
+                target: 'https://example.com',
+                revision: 1,
+                enabled: true,
+                interval: 60,
+                probeSuccessRatio: 60,
+                config: {},
+            };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockImplementation(({ data }) => ({
+                ...existing,
+                ...data,
+                state: null,
+            }));
+
+            await request(app.getHttpServer())
+                .patch('/api/projects/project-1/monitors/monitor-1')
+                .send({ probeSuccessRatio: 60 })
+                .expect(200);
+            await request(app.getHttpServer())
+                .patch('/api/projects/project-1/monitors/monitor-1')
+                .send({ name: 'Renamed' })
+                .expect(200);
+
+            expect(
+                prisma.monitor.update.mock.calls[0][0].data.revision,
+            ).toBeUndefined();
+            expect(
+                prisma.monitor.update.mock.calls[1][0].data.revision,
+            ).toBeUndefined();
+        });
     });
 
     it('documents the nested HTTP config and response schema in Swagger', () => {

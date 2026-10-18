@@ -17,6 +17,7 @@ const monitor = {
     target: 'https://example.test',
     type: 'HTTP',
     failureThreshold: 3,
+    probeSuccessRatio: 1,
     availabilityEnabled: true,
     availabilityThreshold: 90,
     availabilityWindow: 10,
@@ -223,7 +224,13 @@ describe('Alert events', () => {
         });
         expect(tx.checkLog.findMany).toHaveBeenCalledWith(
             expect.objectContaining({
-                where: { monitorId: 'm', evaluated: true, revision: 2 },
+                where: {
+                    monitorId: 'm',
+                    evaluated: true,
+                    revision: 2,
+                    // Unsettled batch rows are excluded; legacy rows stay.
+                    OR: [{ appliedAt: { not: null } }, { roundId: null }],
+                },
             }),
         );
         expect(tx.alertEvent.create.mock.calls[0][0].data).toMatchObject({

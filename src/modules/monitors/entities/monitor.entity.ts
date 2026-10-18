@@ -4,6 +4,34 @@ import { MonitorType } from '../../../generated/prisma/enums';
 import type { JsonValue } from '../../../generated/prisma/internal/prismaNamespace';
 import { MONITOR_CONFIG_API_OPTIONS } from '../dto/monitor-config.schema';
 
+/** A tenant probe assigned to a monitor, as exposed by the monitor endpoints. */
+export class MonitorProbeEntity {
+    @ApiProperty({ example: 'uuid-probe' })
+    id: string;
+
+    @ApiProperty({ example: 'Tokyo probe' })
+    name: string;
+
+    @ApiProperty({ enum: ['TENCENT', 'ALIYUN', 'CUSTOM'], example: 'TENCENT' })
+    provider: string;
+
+    @ApiProperty({ example: 'ap-northeast-1' })
+    region: string;
+
+    @ApiProperty({ enum: ['ONLINE', 'OFFLINE'], example: 'ONLINE' })
+    status: string;
+
+    @ApiProperty({ example: true })
+    enabled: boolean;
+
+    @ApiPropertyOptional({ example: '2026-03-05T12:00:00.000Z' })
+    lastHeartbeat: Date | null;
+
+    constructor(partial: Partial<MonitorProbeEntity>) {
+        Object.assign(this, partial);
+    }
+}
+
 export class MonitorEntity {
     @ApiProperty({ example: 'uuid-here' })
     id: string;
@@ -57,6 +85,16 @@ export class MonitorEntity {
     failureThreshold: number;
 
     @ApiProperty({
+        example: 100,
+        minimum: 1,
+        maximum: 100,
+        default: 1,
+        description:
+            'Minimum success percentage of the currently bound tenant probes (the denominator is every effective tenant probe; the local check is only a fallback)',
+    })
+    probeSuccessRatio: number;
+
+    @ApiProperty({
         example: true,
         description: 'Whether HTTPS certificate expiry is monitored',
     })
@@ -97,6 +135,20 @@ export class MonitorEntity {
         type: [String],
     })
     notificationChannelIds: string[];
+
+    @ApiPropertyOptional({
+        type: [MonitorProbeEntity],
+        description:
+            'Tenant probes currently assigned to this monitor (reporting only; probes vote on every check). Omitted from list responses',
+    })
+    probes?: MonitorProbeEntity[];
+
+    @ApiProperty({
+        example: 10,
+        description:
+            'Maximum tenant probes the current plan allows per monitor (0 = manual assignment unavailable)',
+    })
+    maxProbes: number;
 
     // ── Runtime state (flattened from MonitorState) ─────────────────────
     @ApiProperty({

@@ -16,6 +16,7 @@ const monitorRow = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    probeSuccessRatio: 1,
     checkSsl: false,
     sslExpiryThreshold: 30,
     enabled: true,

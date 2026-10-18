@@ -11,7 +11,9 @@ export type CheckFailureKind =
     | 'TIMEOUT'
     | 'CONFIGURATION'
     | 'CAPABILITY'
-    | 'POLICY';
+    | 'POLICY'
+    /** The tenant probes voted the round down even though the local check passed. */
+    | 'AGGREGATE';
 
 export type HttpAssertionFailure =
     | 'KEYWORD'

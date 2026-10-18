@@ -66,6 +66,7 @@ const monitorSummary = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    probeSuccessRatio: 1,
     enabled: true,
     deletedAt: null,
 };
@@ -97,6 +98,7 @@ function createService() {
         },
         monitorProbe: {
             createMany: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([]),
             findUnique: jest.fn(),
             delete: jest.fn(),
         },
@@ -105,6 +107,10 @@ function createService() {
             findFirst: jest.fn(),
             findUnique: jest.fn(),
             findUniqueOrThrow: jest.fn(),
+        },
+        checkLog: {
+            findFirst: jest.fn().mockResolvedValue(null),
+            findMany: jest.fn().mockResolvedValue([]),
         },
         probeSecret: {
             findUnique: jest.fn(),
@@ -127,6 +133,7 @@ function createService() {
     const billingService = {
         assertFeatureAllowed: jest.fn().mockResolvedValue(undefined),
         assertCanCreate: jest.fn().mockResolvedValue(undefined),
+        getProbeAssignmentLimit: jest.fn().mockResolvedValue(10),
     };
     const configService = {
         get: jest.fn().mockReturnValue({ offlineAfterSeconds: 120 }),
@@ -431,6 +438,7 @@ describe('ProbesService', () => {
                     organizationId: 'org-1',
                     configRevision: 1,
                     reportId: 'report-1',
+                    roundId: expect.stringMatching(/^monitor-1:orphan:\d+$/),
                 }),
             });
             expect(
@@ -457,6 +465,104 @@ describe('ProbesService', () => {
             expect(prisma.probeResult.update).toHaveBeenCalledWith({
                 where: { id: 'raw-1' },
                 data: { appliedAt: expect.any(Date) },
+            });
+        });
+
+        it('attributes a report to the open batch of the monitor', async () => {
+            const { service, prisma } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
+            const m = {
+                ...monitorSummary,
+                organizationId: 'org-1',
+                projectId: 'project-1',
+                configRevision: 1,
+                updatedAt: new Date(0),
+            };
+            prisma.monitor.findMany.mockResolvedValue([m]);
+            prisma.monitor.findUniqueOrThrow.mockResolvedValue(m);
+            prisma.monitor.findUnique.mockResolvedValue(m);
+            prisma.monitorProbe.findUnique.mockResolvedValue({});
+            prisma.checkLog.findFirst.mockResolvedValue({
+                roundId: 'monitor-1:1700000000000',
+                checkedAt: new Date(),
+            });
+            prisma.probeResult.create.mockImplementation(({ data }) => ({
+                ...data,
+                id: 'raw-1',
+                appliedAt: null,
+            }));
+            prisma.probeResult.findUniqueOrThrow.mockImplementation(() => ({
+                ...prisma.probeResult.create.mock.calls[0][0].data,
+                id: 'raw-1',
+                appliedAt: null,
+            }));
+            prisma.probe.update.mockResolvedValue(probeRow);
+
+            await service.recordResults('secret-1', [
+                {
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    latency: 10,
+                    checkedAt: new Date().toISOString(),
+                    monitorId: m.id,
+                    reportId: 'report-2',
+                    configRevision: 1,
+                },
+            ]);
+
+            expect(prisma.probeResult.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    roundId: 'monitor-1:1700000000000',
+                }),
+            });
+        });
+
+        it('orphans a report that arrives after the attribution window', async () => {
+            const { service, prisma } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
+            const m = {
+                ...monitorSummary,
+                organizationId: 'org-1',
+                projectId: 'project-1',
+                configRevision: 1,
+                updatedAt: new Date(0),
+            };
+            prisma.monitor.findMany.mockResolvedValue([m]);
+            prisma.monitor.findUniqueOrThrow.mockResolvedValue(m);
+            prisma.monitor.findUnique.mockResolvedValue(m);
+            prisma.monitorProbe.findUnique.mockResolvedValue({});
+            prisma.checkLog.findFirst.mockResolvedValue({
+                roundId: 'monitor-1:1700000000000',
+                checkedAt: new Date(Date.now() - 10 * 60 * 1000),
+            });
+            prisma.probeResult.create.mockImplementation(({ data }) => ({
+                ...data,
+                id: 'raw-1',
+                appliedAt: null,
+            }));
+            prisma.probeResult.findUniqueOrThrow.mockImplementation(() => ({
+                ...prisma.probeResult.create.mock.calls[0][0].data,
+                id: 'raw-1',
+                appliedAt: null,
+            }));
+            prisma.probe.update.mockResolvedValue(probeRow);
+
+            await service.recordResults('secret-1', [
+                {
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    latency: 10,
+                    checkedAt: new Date().toISOString(),
+                    monitorId: m.id,
+                    reportId: 'report-3',
+                    configRevision: 1,
+                },
+            ]);
+
+            expect(prisma.probeResult.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    roundId: expect.stringMatching(/^monitor-1:orphan:\d+$/),
+                }),
             });
         });
 
@@ -648,6 +754,49 @@ describe('ProbesService', () => {
                     enabled: true,
                 },
             ]);
+        });
+
+        it('rejects a monitor that is already at the per-monitor probe limit', async () => {
+            const { service, prisma, billingService } = createService();
+            prisma.probe.findFirst.mockResolvedValue(probeRow);
+            prisma.monitor.findMany.mockResolvedValue([{ id: 'monitor-1' }]);
+            billingService.getProbeAssignmentLimit.mockResolvedValue(1);
+            prisma.monitorProbe.findMany.mockResolvedValue([
+                { monitorId: 'monitor-1', probeId: 'probe-2' },
+            ]);
+
+            await expect(
+                service.bindMonitors('org-1', 'probe-1', {
+                    monitorIds: ['monitor-1'],
+                }),
+            ).rejects.toMatchObject({
+                response: {
+                    code: 'QUOTA_EXCEEDED',
+                    resource: 'probesPerMonitor',
+                    limit: 1,
+                },
+            });
+            expect(prisma.monitorProbe.createMany).not.toHaveBeenCalled();
+        });
+
+        it('allows binding when the probe is already attached to the monitor', async () => {
+            const { service, prisma, billingService } = createService();
+            prisma.probe.findFirst
+                .mockResolvedValueOnce(probeRow)
+                .mockResolvedValueOnce({ ...probeRow, monitors: [] });
+            prisma.monitor.findMany.mockResolvedValue([{ id: 'monitor-1' }]);
+            billingService.getProbeAssignmentLimit.mockResolvedValue(1);
+            prisma.monitorProbe.findMany.mockResolvedValue([
+                { monitorId: 'monitor-1', probeId: 'probe-1' },
+            ]);
+            prisma.monitorProbe.createMany.mockResolvedValue({ count: 0 });
+
+            await expect(
+                service.bindMonitors('org-1', 'probe-1', {
+                    monitorIds: ['monitor-1'],
+                }),
+            ).resolves.toBeDefined();
+            expect(prisma.monitorProbe.createMany).toHaveBeenCalled();
         });
     });
 

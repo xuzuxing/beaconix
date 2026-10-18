@@ -14,7 +14,10 @@ import { LabelsService } from '../../src/modules/labels/labels.service';
 import { SettingsService } from '../../src/modules/settings/settings.service';
 import { AttachmentsService } from '../../src/modules/attachments/attachments.service';
 import type { StorageService } from '../../src/modules/attachments/storage/storage.service';
-import { buildObjectKey } from '../../src/modules/attachments/storage/filename.util';
+import {
+    buildPublicObjectKey,
+    buildPrivateObjectKey,
+} from '../../src/modules/attachments/storage/filename.util';
 import type { PutObjectInput } from '../../src/modules/attachments/storage/storage.types';
 import type { SqlDatabase } from './harness';
 
@@ -36,7 +39,7 @@ export function businessServices(prisma: PrismaService) {
         putObject(input: PutObjectInput) {
             return Promise.resolve({
                 provider: 'LOCAL' as const,
-                key: buildObjectKey({ ...input, objectId: randomUUID() }),
+                key: buildPublicObjectKey({ ...input, objectId: randomUUID() }),
                 url: '',
             });
         },
@@ -67,6 +70,8 @@ export function businessServices(prisma: PrismaService) {
             storageBoundary as unknown as StorageService,
             settings,
             access,
+            {} as never,
+            {} as never,
         ),
     };
 }
@@ -192,7 +197,7 @@ export async function seedAccessFixture(db: PrismaService) {
             mimeType: 'text/plain',
             size: 4,
             url: `/api/tasks/${taskB.id}/attachments/private/download`,
-            fileKey: buildObjectKey({
+            fileKey: buildPrivateObjectKey({
                 organizationId: org.id,
                 taskId: taskB.id,
                 objectId: randomUUID(),

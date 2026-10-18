@@ -1,5 +1,9 @@
 import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+    BadRequestException,
+    ForbiddenException,
+    NotFoundException,
+} from '@nestjs/common';
 import { MonitorsService } from './monitors.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import { MonitorSecretsService } from './monitor-secrets.service';
@@ -16,6 +20,7 @@ const monitorRow = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    probeSuccessRatio: 1,
     checkSsl: false,
     sslExpiryThreshold: 30,
     enabled: true,
@@ -38,6 +43,27 @@ const projectRow = {
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
     deletedAt: null,
+};
+
+/** The include clause single-monitor endpoints use (state, channels, probes). */
+const MONITOR_INCLUDE_WITH_PROBES = {
+    state: true,
+    notificationChannels: true,
+    probes: {
+        include: {
+            probe: {
+                select: {
+                    id: true,
+                    name: true,
+                    provider: true,
+                    region: true,
+                    status: true,
+                    enabled: true,
+                    lastHeartbeat: true,
+                },
+            },
+        },
+    },
 };
 
 const stateRow = {
@@ -63,8 +89,15 @@ function createService() {
             create: jest.fn(),
             findMany: jest.fn(),
             findFirst: jest.fn(),
+            findFirstOrThrow: jest.fn(),
             update: jest.fn(),
         },
+        monitorProbe: {
+            createMany: jest.fn(),
+            deleteMany: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([]),
+        },
+        probe: { count: jest.fn().mockResolvedValue(0) },
         project: { findFirst: jest.fn().mockResolvedValue(projectRow) },
         notificationChannel: { count: jest.fn().mockResolvedValue(0) },
         checkLog: { findMany: jest.fn() },
@@ -74,12 +107,16 @@ function createService() {
         assertCanCreate: jest.fn().mockResolvedValue(undefined),
         assertIntervalAllowed: jest.fn().mockResolvedValue(undefined),
         assertMonitorTypeAllowed: jest.fn().mockResolvedValue(undefined),
+        assertProbesAssignable: jest.fn().mockResolvedValue(undefined),
+        getProbeAssignmentLimit: jest.fn().mockResolvedValue(10),
         monitorEligibility: jest
             .fn()
             .mockResolvedValue({ eligible: true, reason: null }),
         getMonitorPolicy: jest.fn().mockResolvedValue({
             allowedMonitorTypes: ['HTTP', 'TCP', 'PING', 'DNS'],
             minInterval: 10,
+            maxProbes: 10,
+            maxProbesPerMonitor: 10,
         }),
     };
 
@@ -274,7 +311,7 @@ describe('MonitorsService', () => {
                     configVersion: 1,
                     state: { create: {} },
                 },
-                include: { state: true, notificationChannels: true },
+                include: MONITOR_INCLUDE_WITH_PROBES,
             });
             expect(result.status).toBe('UP');
             expect(result.lastLatency).toBe(128);
@@ -362,7 +399,7 @@ describe('MonitorsService', () => {
                         create: [{ channelId: 'channel-1' }],
                     },
                 }),
-                include: { state: true, notificationChannels: true },
+                include: MONITOR_INCLUDE_WITH_PROBES,
             });
             expect(result.notificationChannelIds).toEqual(['channel-1']);
         });
@@ -457,6 +494,94 @@ describe('MonitorsService', () => {
             },
         );
 
+        it('revises and resets state when the probe success ratio changes', async () => {
+            const { service, prisma } = createService();
+            const existing = {
+                ...monitorRow,
+                probeSuccessRatio: 1,
+                state: stateRow,
+            };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue(existing);
+
+            await service.update(
+                'project-1',
+                'monitor-1',
+                { probeSuccessRatio: 60 },
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(prisma.monitor.update).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        probeSuccessRatio: 60,
+                        revision: { increment: 1 },
+                        state: expect.objectContaining({
+                            upsert: expect.objectContaining({
+                                update: expect.objectContaining({
+                                    status: 'UNKNOWN',
+                                    failCount: 0,
+                                }),
+                            }),
+                        }),
+                    }),
+                }),
+            );
+        });
+
+        it('keeps the revision and state for the same or an omitted ratio', async () => {
+            const { service, prisma } = createService();
+            const existing = {
+                ...monitorRow,
+                probeSuccessRatio: 60,
+                state: stateRow,
+            };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue(existing);
+
+            await service.update(
+                'project-1',
+                'monitor-1',
+                { probeSuccessRatio: 60 },
+                { type: 'USER', userId: 'user-1' },
+            );
+            await service.update(
+                'project-1',
+                'monitor-1',
+                { name: 'Renamed' },
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            for (const call of prisma.monitor.update.mock.calls) {
+                expect(call[0].data.revision).toBeUndefined();
+                expect(call[0].data.state).toBeUndefined();
+            }
+        });
+
+        it('keeps a paused monitor paused when the ratio changes', async () => {
+            const { service, prisma } = createService();
+            const existing = {
+                ...monitorRow,
+                enabled: false,
+                probeSuccessRatio: 1,
+                state: { ...stateRow, status: 'PAUSED' },
+            };
+            prisma.monitor.findFirst.mockResolvedValue(existing);
+            prisma.monitor.update.mockResolvedValue(existing);
+
+            await service.update(
+                'project-1',
+                'monitor-1',
+                { probeSuccessRatio: 100 },
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(
+                prisma.monitor.update.mock.calls[0][0].data.state.upsert.update
+                    .status,
+            ).toBe('PAUSED');
+        });
+
         it('does not change revision for reordered but semantically identical DNS config', async () => {
             const { service, prisma } = createService();
             const existing = {
@@ -535,7 +660,7 @@ describe('MonitorsService', () => {
                         }),
                     }),
                 }),
-                include: { state: true, notificationChannels: true },
+                include: MONITOR_INCLUDE_WITH_PROBES,
             });
         });
 
@@ -651,7 +776,7 @@ describe('MonitorsService', () => {
                         },
                     },
                 },
-                include: { state: true, notificationChannels: true },
+                include: MONITOR_INCLUDE_WITH_PROBES,
             });
         });
 
@@ -689,7 +814,7 @@ describe('MonitorsService', () => {
                     config: {},
                     state: undefined,
                 },
-                include: { state: true, notificationChannels: true },
+                include: MONITOR_INCLUDE_WITH_PROBES,
             });
         });
     });
@@ -756,7 +881,7 @@ describe('MonitorsService', () => {
                         },
                     },
                 },
-                include: { state: true, notificationChannels: true },
+                include: MONITOR_INCLUDE_WITH_PROBES,
             });
             expect(result.enabled).toBe(false);
             expect(result.status).toBe('PAUSED');
@@ -823,7 +948,7 @@ describe('MonitorsService', () => {
                         },
                     },
                 },
-                include: { state: true, notificationChannels: true },
+                include: MONITOR_INCLUDE_WITH_PROBES,
             });
             expect(result.enabled).toBe(true);
         });
@@ -945,6 +1070,125 @@ describe('MonitorsService', () => {
             expect(
                 notifierService.notifyAvailabilityAlert,
             ).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('probe assignment', () => {
+        const monitorWithProbes = {
+            ...monitorRow,
+            state: stateRow,
+            notificationChannels: [],
+            probes: [
+                {
+                    probe: {
+                        id: 'probe-1',
+                        name: 'Tokyo probe',
+                        provider: 'TENCENT',
+                        region: 'ap-northeast-1',
+                        status: 'ONLINE',
+                        enabled: true,
+                        lastHeartbeat: null,
+                    },
+                },
+            ],
+        };
+
+        it('replaces the probe set and rebalances the scheduler', async () => {
+            const { service, prisma, quotaService, systemProbeScheduler } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.count.mockResolvedValue(2);
+            prisma.monitor.findFirstOrThrow.mockResolvedValue(
+                monitorWithProbes,
+            );
+
+            const result = await service.setProbes(
+                'project-1',
+                'monitor-1',
+                { probeIds: ['probe-1', 'probe-2', 'probe-1'] },
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(quotaService.assertProbesAssignable).toHaveBeenCalledWith(
+                'org-1',
+                2,
+            );
+            expect(prisma.monitorProbe.deleteMany).toHaveBeenCalledWith({
+                where: { monitorId: 'monitor-1' },
+            });
+            expect(prisma.monitorProbe.createMany).toHaveBeenCalledWith({
+                data: [
+                    { monitorId: 'monitor-1', probeId: 'probe-1' },
+                    { monitorId: 'monitor-1', probeId: 'probe-2' },
+                ],
+                skipDuplicates: true,
+            });
+            expect(systemProbeScheduler.rebalance).toHaveBeenCalledTimes(1);
+            expect(result.probes?.map((probe) => probe.id)).toEqual([
+                'probe-1',
+            ]);
+            expect(result.maxProbes).toBe(10);
+        });
+
+        it('clears every assignment for an empty set', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.monitor.findFirstOrThrow.mockResolvedValue({
+                ...monitorWithProbes,
+                probes: [],
+            });
+
+            await service.setProbes(
+                'project-1',
+                'monitor-1',
+                { probeIds: [] },
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(prisma.probe.count).not.toHaveBeenCalled();
+            expect(prisma.monitorProbe.deleteMany).toHaveBeenCalled();
+            expect(prisma.monitorProbe.createMany).not.toHaveBeenCalled();
+        });
+
+        it('rejects probes from another organization before writing', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.count.mockResolvedValue(0);
+
+            await expect(
+                service.setProbes(
+                    'project-1',
+                    'monitor-1',
+                    { probeIds: ['probe-x'] },
+                    { type: 'USER', userId: 'user-1' },
+                ),
+            ).rejects.toThrow(BadRequestException);
+            expect(prisma.monitorProbe.deleteMany).not.toHaveBeenCalled();
+        });
+
+        it('propagates the plan limit rejection', async () => {
+            const { service, prisma, quotaService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.count.mockResolvedValue(1);
+            quotaService.assertProbesAssignable.mockRejectedValueOnce(
+                new ForbiddenException({
+                    code: 'QUOTA_EXCEEDED',
+                    resource: 'probesPerMonitor',
+                    limit: 0,
+                }),
+            );
+
+            await expect(
+                service.setProbes(
+                    'project-1',
+                    'monitor-1',
+                    { probeIds: ['probe-1'] },
+                    { type: 'USER', userId: 'user-1' },
+                ),
+            ).rejects.toMatchObject({
+                response: { code: 'QUOTA_EXCEEDED' },
+            });
+            expect(prisma.monitorProbe.deleteMany).not.toHaveBeenCalled();
         });
     });
 });

@@ -19,10 +19,17 @@
 2. 插入既有 HTTP/TCP、暂停/软删状态、历史记录、FREE/PRO/TEAM/CUSTOM 套餐及订阅样本。
 3. 分两条迁移升级，核对所有既有字段不变、新字段默认值、PRO/TEAM DNS 回填和自定义套餐默认权限。
 4. 重复部署，确认已应用迁移不重放，并确认非空库防护拒绝复用该库。
-5. 通过真实 Prisma Client 验证 DNS/PING 枚举、JSON 元数据及新建套餐默认值。
-6. 并发结果折叠不丢失失败计数；观察 PostgreSQL 锁等待，确认定义修改提交后旧 revision 结果被拒绝。
-7. 暂停、软删、过期 revision 和乱序结果拒绝落库；执行能力受阻不改变真实状态或参与可用率/延迟聚合。
-8. 告警 pending ID 在重新实例化服务后仍可重试，错误 token/revision 的确认不能清除 pending。
+5. 再以独立阶段升级到探针成功率版本：仅新增 `probeSuccessRatio=1`、`roundId`/`appliedAt` 为 null，
+   既有字段、`configRevision`、状态与日志数据不变，重复 deploy 不重放。
+6. 通过真实 Prisma Client 验证 DNS/PING 枚举、JSON 元数据及新建套餐默认值。
+7. 并发结果折叠不丢失失败计数；观察 PostgreSQL 锁等待，确认定义修改提交后旧 revision 结果被拒绝。
+8. 暂停、软删、过期 revision 和乱序结果拒绝落库；执行能力受阻不改变真实状态或参与可用率/延迟聚合。
+9. 探针成功率：`1..100` 的 CHECK 约束、改值推进 `configRevision` 且同值不推进、
+   旧 `configRevision` 的在途结果被拒绝。
+10. 批次幂等：`(monitorId, roundId)` 唯一索引阻止同批二次结算，`roundId=null` 的旧行不受约束。
+11. 真实 Checker + StateService：相同 target 的不同 monitor、旧 `configRevision`、
+    上一批/本批 `roundId`、SYSTEM 探针与解绑探针的样本归属与分母集合。
+12. 告警 pending ID 在重新实例化服务后仍可重试，错误 token/revision 的确认不能清除 pending。
 
 本入口不代替生产容量、真实网络、备份恢复、所有 API 的数据库端到端验收，也不新增任何数据库监控协议。
 
@@ -70,3 +77,10 @@ MONITOR_TEST_DATABASE_URL='postgresql://monitor_test:monitor_test@127.0.0.1:5543
 
 2026-10-10 本机没有 PostgreSQL/Docker 可执行文件，也没有可用 WSL 发行版。已验证安全测试和缺少专用 URL 时提前拒绝；
 真实 PostgreSQL 回放与 Linux runner 验收已提供可执行入口，但尚未在本机或远程 CI 实跑，不能记为通过。
+
+2026-10-18 使用本机 PostgreSQL 的一次性库 `beacon_monitor_test_ratio`（验收后已删除）实跑：
+探针成功率迁移阶段、CHECK、唯一索引、触发器推进 `configRevision`、批次二次结算拒绝、
+真实 Checker/StateService 的样本归属与分母集合用例全部通过。
+`concurrent folds do not lose failure increments` 与
+`definition edit commits before a blocked old result is folded` 两条既有用例失败，
+且在本次改动前的 `71aa056` 上用独立 worktree 同样失败，属既有基线问题，不在本方案处理范围。

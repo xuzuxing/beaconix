@@ -12,6 +12,7 @@ import { DnsChecker } from './checkers/dns.checker';
 import { PingChecker, PingRunner } from './checkers/ping.checker';
 import { CheckerRegistry } from './checker.registry';
 import { MonitorCheckProcessor } from './monitor-check.processor';
+import { MonitorSettleProcessor } from './monitor-settle.processor';
 import { MonitorScanProcessor } from './monitor-scan.processor';
 import { MonitorSecurityModule } from '../monitors/monitor-security.module';
 import {
@@ -43,6 +44,7 @@ import { AuthorizationModule } from '../../common/authorization/authorization.mo
         CheckerScheduler,
         MonitorScanProcessor,
         MonitorCheckProcessor,
+        MonitorSettleProcessor,
         HttpChecker,
         TcpChecker,
         DnsChecker,
