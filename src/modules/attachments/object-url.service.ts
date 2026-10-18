@@ -67,7 +67,10 @@ export class AttachmentObjectUrlService {
     async sign(key: string): Promise<string> {
         const exp = Math.floor(Date.now() / 1000) + (await this.ttlSeconds());
         const sig = this.digest(key, exp);
-        return `${await this.publicUrl(key)}${PUBLIC_OBJECT_PATH}?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sig}`;
+        // Add the public base prefix.
+        return await this.publicUrl(
+            `${PUBLIC_OBJECT_PATH}?key=${encodeURIComponent(key)}&exp=${exp}&sig=${sig}`,
+        );
     }
 
     /** True when `sig` was issued for exactly this key and has not expired. */
