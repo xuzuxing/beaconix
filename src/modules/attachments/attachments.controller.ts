@@ -148,6 +148,9 @@ export class AttachmentsController {
                 userId: user.sub,
             });
         res.setHeader('cache-control', 'private, no-store');
+        // Task attachments are previewed from another origin too; helmet's
+        // default resource policy would block the cross-origin read.
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
         if (download.type === 'redirect') {
             res.redirect(download.url);

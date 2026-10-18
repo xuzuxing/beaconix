@@ -59,6 +59,9 @@ async function bootstrap() {
     const storageConfig = configService.get<StorageConfig>('storage')!;
     app.useStaticAssets(resolve(storageConfig.publicRoot), {
         prefix: `${PUBLIC_STATIC_PREFIX}/`,
+        setHeaders: (res) => {
+            res.setHeader('Access-Control-Allow-Origin', '*');
+        },
     });
 
     // 全局异常过滤器改为 APP_FILTER 注册（见 app.module.ts），

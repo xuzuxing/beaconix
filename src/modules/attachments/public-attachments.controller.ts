@@ -57,6 +57,12 @@ export class PublicAttachmentsController {
         @Req() request: Request,
         @Res({ passthrough: true }) res: Response,
     ): Promise<StreamableFile | void> {
+        // A signed link is opened by another origin (a separate frontend host),
+        // so helmet's default `Cross-Origin-Resource-Policy: same-origin` would
+        // turn this 200 into ERR_BLOCKED_BY_RESPONSE.NotSameOrigin. Access is
+        // still gated by the signature or the Bearer token below.
+        res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+
         const { filename, mimeType, download } =
             await this.attachmentsService.getPublicObjectDownload(
                 query,
