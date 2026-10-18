@@ -1,8 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
-import type { ConfigService } from '@nestjs/config';
 import type { PrismaService } from '../../../infra/database/prisma.service';
 import type { RedisService } from '../../../infra/redis/redis.service';
 import type { MiniprogramClient } from '../../../infra/wechat/miniprogram';
+import type { WechatRuntimeConfigService } from '../../../infra/wechat/wechat-runtime-config.service';
 import type { AuthService } from '../auth.service';
 import type { WechatAuthService } from './wechat-auth.service';
 import {
@@ -22,16 +22,17 @@ function createService() {
         del: jest.fn().mockResolvedValue(undefined),
         consumeJson: jest.fn(),
     };
-    const configService = {
-        get: jest.fn().mockReturnValue({
-            miniprogram: { appId: 'wx-mp', appSecret: 'mp-secret' },
-            scanLogin: {
-                qrPage: '',
-                qrEnvVersion: 'release',
-                ttlSeconds: 300,
-                pollTimeoutMs: 25000,
-            },
-        }),
+    const miniprogram = { appId: 'wx-mp', appSecret: 'mp-secret' };
+    const scanLogin = {
+        qrPage: '',
+        qrEnvVersion: 'release',
+        ttlSeconds: 300,
+        pollTimeoutMs: 25000,
+    };
+    const runtimeConfig = {
+        config: jest.fn().mockResolvedValue({ miniprogram, scanLogin }),
+        miniprogram: jest.fn().mockResolvedValue(miniprogram),
+        scanLogin: jest.fn().mockResolvedValue(scanLogin),
     };
     const miniprogramClient = {
         getUnlimitedQrCode: jest.fn(),
@@ -47,7 +48,7 @@ function createService() {
     const service = new WechatScanLoginService(
         prisma as unknown as PrismaService,
         redis as unknown as RedisService,
-        configService as unknown as ConfigService,
+        runtimeConfig as unknown as WechatRuntimeConfigService,
         miniprogramClient as unknown as MiniprogramClient,
         wechatAuthService as unknown as WechatAuthService,
         authService as unknown as AuthService,

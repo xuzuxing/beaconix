@@ -1,5 +1,5 @@
 import { createCipheriv, generateKeyPairSync, randomBytes } from 'node:crypto';
-import type { ConfigService } from '@nestjs/config';
+import type { WechatRuntimeConfigService } from '../wechat-runtime-config.service';
 import type { WechatPayConfig } from '../../../config';
 import type { WechatHttpClient } from '../clients/wechat-http.client';
 import { WechatApiError, WechatConfigurationError } from '../wechat.types';
@@ -70,17 +70,17 @@ function createClient(overrides: Partial<WechatPayConfig> = {}) {
         getVerifier: jest.fn().mockResolvedValue(publicKeyPem),
         refreshPlatformCertificates: jest.fn(),
     };
-    const configService = {
-        get: jest.fn().mockReturnValue({ pay }),
+    const runtimeConfig = {
+        pay: jest.fn().mockResolvedValue(pay),
     };
 
     const client = new WechatPayClient(
         http as unknown as WechatHttpClient,
         certificates as unknown as WechatPayCertificateService,
-        configService as unknown as ConfigService,
+        runtimeConfig as unknown as WechatRuntimeConfigService,
     );
 
-    return { client, http, certificates, configService, pay };
+    return { client, http, certificates, runtimeConfig, pay };
 }
 
 function buildNotification(transaction: unknown): {
@@ -186,10 +186,10 @@ describe('WechatPayClient', () => {
     });
 
     describe('buildJsapiPayParams', () => {
-        it('returns wx.requestPayment params signed with the merchant key', () => {
+        it('returns wx.requestPayment params signed with the merchant key', async () => {
             const { client } = createClient();
 
-            const params = client.buildJsapiPayParams('prepay-1');
+            const params = await client.buildJsapiPayParams('prepay-1');
 
             expect(params.package).toBe('prepay_id=prepay-1');
             expect(params.signType).toBe('RSA');

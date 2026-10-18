@@ -4,21 +4,17 @@ import {
     Logger,
     ServiceUnavailableException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { OrganizationsService } from '../../organizations/organizations.service';
 import { MiniprogramClient } from '../../../infra/wechat/miniprogram';
 import { OfficialAccountClient } from '../../../infra/wechat/official-account';
+import { WechatRuntimeConfigService } from '../../../infra/wechat/wechat-runtime-config.service';
 import type { UserModel } from '../../../generated/prisma/models';
 import { Prisma } from '../../../generated/prisma/client';
 import { IdentityProvider } from '../../../generated/prisma/enums';
-import {
-    WechatConfig,
-    WechatMiniProgramConfig,
-    WechatWebsiteConfig,
-} from '../../../config';
+import { WechatMiniProgramConfig, WechatWebsiteConfig } from '../../../config';
 import {
     WechatAuthorizeUrlDto,
     WechatWebLoginDto,
@@ -33,7 +29,7 @@ export class WechatAuthService {
 
     constructor(
         private readonly prisma: PrismaService,
-        private readonly configService: ConfigService,
+        private readonly runtimeConfig: WechatRuntimeConfigService,
         private readonly organizationsService: OrganizationsService,
         private readonly miniprogramClient: MiniprogramClient,
         private readonly officialAccountClient: OfficialAccountClient,
@@ -41,9 +37,9 @@ export class WechatAuthService {
     ) {}
 
     /** Builds the Open Platform QR-connect URL for web scan-to-login. */
-    getWebAuthorizeUrl(dto: WechatAuthorizeUrlDto) {
+    async getWebAuthorizeUrl(dto: WechatAuthorizeUrlDto) {
         return {
-            url: this.officialAccountClient.buildQrConnectUrl({
+            url: await this.officialAccountClient.buildQrConnectUrl({
                 redirectUri: dto.redirectUri,
                 state: dto.state,
             }),
@@ -56,7 +52,7 @@ export class WechatAuthService {
      * fetches the WeChat profile (snsapi_login scope).
      */
     async webLogin(dto: WechatWebLoginDto, meta: RequestMeta) {
-        const config = this.websiteConfig;
+        const config = await this.websiteConfig();
 
         const token = await this.officialAccountClient.exchangeCodeForToken({
             code: dto.code,
@@ -93,7 +89,7 @@ export class WechatAuthService {
      * whether the second factor is required.
      */
     async resolveMiniProgramUser(dto: WechatMiniProgramLoginDto) {
-        const config = this.miniprogramConfig;
+        const config = await this.miniprogramConfig();
 
         const session = await this.miniprogramClient.code2Session({
             appId: config.appId,
@@ -112,10 +108,10 @@ export class WechatAuthService {
 
     // ─── Config ───────────────────────────────────────────────────────
 
-    private get miniprogramConfig(): WechatMiniProgramConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
+    private async miniprogramConfig(): Promise<WechatMiniProgramConfig> {
+        const wechat = await this.runtimeConfig.config();
 
-        if (!wechat?.miniprogram.appId || !wechat?.miniprogram.appSecret) {
+        if (!wechat.miniprogram.appId || !wechat.miniprogram.appSecret) {
             throw new ServiceUnavailableException(
                 'WeChat mini program login is not configured (WECHAT_MINI_APPID / WECHAT_MINI_APPSECRET)',
             );
@@ -124,10 +120,10 @@ export class WechatAuthService {
         return wechat.miniprogram;
     }
 
-    private get websiteConfig(): WechatWebsiteConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
+    private async websiteConfig(): Promise<WechatWebsiteConfig> {
+        const wechat = await this.runtimeConfig.config();
 
-        if (!wechat?.website.appId || !wechat?.website.appSecret) {
+        if (!wechat.website.appId || !wechat.website.appSecret) {
             throw new ServiceUnavailableException(
                 'WeChat website login is not configured (WECHAT_WEB_APPID / WECHAT_WEB_APPSECRET)',
             );

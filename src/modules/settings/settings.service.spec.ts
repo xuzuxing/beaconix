@@ -79,6 +79,62 @@ describe('SettingsService', () => {
         expect(settings.every((item) => Boolean(item.group))).toBe(true);
     });
 
+    it('serves the tab sub-section metadata', async () => {
+        prisma.setting.findMany.mockResolvedValue([]);
+
+        const settings = await service.findAll();
+        const byKey = new Map(settings.map((item) => [item.key, item]));
+
+        // 项数多的 tab 靠 section 切成若干块；未声明的项直接挂在 tab 顶层
+        expect(byKey.get('wechat.pay.mchId')?.section).toBe('pay');
+        expect(byKey.get('wechat.scanLogin.page')?.section).toBe('scanLogin');
+        expect(byKey.get('storage.driver')?.section).toBeUndefined();
+
+        const wechat = settings.filter((item) => item.group === 'wechat');
+        expect(wechat).toHaveLength(26);
+        // section 是稳定英文标识，顺序即定义顺序，展示文案由前端按 key 做 i18n
+        expect([...new Set(wechat.map((item) => item.section))]).toEqual([
+            'pay',
+            'miniProgram',
+            'website',
+            'scanLogin',
+            'officialAccount',
+            'work',
+            'http',
+        ]);
+    });
+
+    it('reports only the values the admin page actually overrode', async () => {
+        prisma.setting.findUnique.mockImplementation(
+            (args: { where: { key: string } }) => {
+                if (args.where.key === 'wechat.pay.mchId') {
+                    return Promise.resolve({
+                        value: 'mch-db',
+                        overridden: true,
+                    });
+                }
+                if (args.where.key === 'wechat.miniprogram.appId') {
+                    // seed 写入的内置行：存在但没被改过，必须继续回退 env
+                    return Promise.resolve({
+                        value: 'wx-seed',
+                        overridden: false,
+                    });
+                }
+                return Promise.resolve(null);
+            },
+        );
+
+        await expect(
+            service.getOverriddenValue('wechat.pay.mchId'),
+        ).resolves.toBe('mch-db');
+        await expect(
+            service.getOverriddenValue('wechat.miniprogram.appId'),
+        ).resolves.toBeUndefined();
+        await expect(
+            service.getOverriddenValue('wechat.website.appId'),
+        ).resolves.toBeUndefined();
+    });
+
     it('publishes enum candidates and numeric bounds as options', async () => {
         prisma.setting.findMany.mockResolvedValue([]);
 
@@ -141,6 +197,7 @@ describe('SettingsService', () => {
             'develop',
             'storage',
             'attachments',
+            'wechat',
         ]);
     });
 
@@ -204,6 +261,9 @@ describe('SettingsService', () => {
             'attachments.maxImageSizeMb',
             'develop.configGroup',
             'develop.debugMode',
+            'wechat.pay.mchId',
+            'wechat.miniprogram.appSecret',
+            'wechat.scanLogin.ttlSeconds',
         ]) {
             expect(snapshot).not.toHaveProperty(key);
         }
@@ -382,7 +442,14 @@ describe('SettingsService', () => {
         await expect(
             service.findOne('develop.configGroup'),
         ).resolves.toMatchObject({
-            value: ['system', 'smtp', 'develop', 'storage', 'attachments'],
+            value: [
+                'system',
+                'smtp',
+                'develop',
+                'storage',
+                'attachments',
+                'wechat',
+            ],
         });
         expect(warnSpy).toHaveBeenCalled();
     });

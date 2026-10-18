@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import type { WechatConfig, WechatPayConfig } from '../../../config';
+import type { WechatPayConfig } from '../../../config';
 import {
     WECHAT_PAY_BASE_URL,
     WechatHttpClient,
 } from '../clients/wechat-http.client';
+import { WechatRuntimeConfigService } from '../wechat-runtime-config.service';
 import { WechatApiError, WechatConfigurationError } from '../wechat.types';
 import { WechatPayCertificateService } from './wechat-pay-certificate.service';
 import {
@@ -63,14 +63,14 @@ export class WechatPayClient {
     constructor(
         private readonly http: WechatHttpClient,
         private readonly certificates: WechatPayCertificateService,
-        private readonly configService: ConfigService,
+        private readonly runtimeConfig: WechatRuntimeConfigService,
     ) {}
 
     /** Creates a JSAPI transaction and returns its `prepay_id`. */
     async createJsapiTransaction(
         input: CreateJsapiTransactionInput,
     ): Promise<{ prepayId: string }> {
-        const config = this.requireCredentials();
+        const config = await this.requireCredentials();
         const notifyUrl = input.notifyUrl ?? config.notifyUrl;
 
         if (!notifyUrl) {
@@ -107,15 +107,15 @@ export class WechatPayClient {
     }
 
     /** Builds the `wx.requestPayment` params from a `prepay_id`. */
-    buildJsapiPayParams(prepayId: string): WechatJsapiPayParams {
-        const config = this.requireCredentials();
+    async buildJsapiPayParams(prepayId: string): Promise<WechatJsapiPayParams> {
+        const config = await this.requireCredentials();
         const timeStamp = currentTimestamp();
         const nonceStr = generateNonce();
         const packageStr = `prepay_id=${prepayId}`;
 
         const paySign = signMessage(
             `${config.appId}\n${timeStamp}\n${nonceStr}\n${packageStr}\n`,
-            this.getPrivateKey(),
+            await this.getPrivateKey(),
         );
 
         return {
@@ -128,7 +128,7 @@ export class WechatPayClient {
     }
 
     async queryTransaction(outTradeNo: string): Promise<WechatPayTransaction> {
-        const config = this.requireCredentials();
+        const config = await this.requireCredentials();
 
         return this.signedRequest<WechatPayTransaction>(
             'GET',
@@ -137,7 +137,7 @@ export class WechatPayClient {
     }
 
     async closeTransaction(outTradeNo: string): Promise<void> {
-        const config = this.requireCredentials();
+        const config = await this.requireCredentials();
 
         await this.signedRequest<Record<string, never>>(
             'POST',
@@ -147,7 +147,7 @@ export class WechatPayClient {
     }
 
     async createRefund(input: CreateRefundInput): Promise<WechatPayRefund> {
-        const config = this.requireCredentials();
+        const config = await this.requireCredentials();
         const notifyUrl = input.notifyUrl ?? config.notifyUrl;
 
         return this.signedRequest<WechatPayRefund>('POST', REFUNDS_PATH, {
@@ -225,10 +225,8 @@ export class WechatPayClient {
         }
 
         const envelope = this.parseEnvelope(rawBody, endpoint);
-        const plaintext = decryptResource(
-            this.payConfig.apiV3Key,
-            envelope.resource,
-        );
+        const { apiV3Key } = await this.runtimeConfig.pay();
+        const plaintext = decryptResource(apiV3Key, envelope.resource);
 
         return JSON.parse(plaintext) as WechatPayTransaction;
     }
@@ -267,7 +265,7 @@ export class WechatPayClient {
         urlPath: string,
         body?: unknown,
     ): Promise<T> {
-        const config = this.requireCredentials();
+        const config = await this.requireCredentials();
         const timestamp = currentTimestamp();
         const nonce = generateNonce();
         const bodyText = body === undefined ? undefined : JSON.stringify(body);
@@ -275,7 +273,7 @@ export class WechatPayClient {
         const authorization = buildAuthorizationHeader({
             mchId: config.mchId,
             serialNo: config.serialNo,
-            privateKeyPem: this.getPrivateKey(),
+            privateKeyPem: await this.getPrivateKey(),
             method,
             urlPath,
             body: bodyText,
@@ -295,10 +293,11 @@ export class WechatPayClient {
         );
     }
 
-    private getPrivateKey(): string {
+    private async getPrivateKey(): Promise<string> {
         if (!this.privateKeyPem) {
+            const { privateKey } = await this.requireCredentials();
             this.privateKeyPem = resolvePem(
-                this.requireCredentials().privateKey,
+                privateKey,
                 'WECHAT_PAY_PRIVATE_KEY',
             );
         }
@@ -306,8 +305,8 @@ export class WechatPayClient {
         return this.privateKeyPem;
     }
 
-    private requireCredentials(): WechatPayConfig {
-        const config = this.payConfig;
+    private async requireCredentials(): Promise<WechatPayConfig> {
+        const config = await this.runtimeConfig.pay();
         const missing = (
             ['mchId', 'appId', 'serialNo', 'privateKey', 'apiV3Key'] as const
         ).filter((key) => !config[key]);
@@ -319,17 +318,5 @@ export class WechatPayClient {
         }
 
         return config;
-    }
-
-    private get payConfig(): WechatPayConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
-
-        if (!wechat) {
-            throw new WechatConfigurationError(
-                'WeChat config is not registered',
-            );
-        }
-
-        return wechat.pay;
     }
 }

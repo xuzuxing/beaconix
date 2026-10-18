@@ -50,6 +50,8 @@ const CACHE_TTL_MS = 30_000;
 export class SettingsService {
     private readonly logger = new Logger(SettingsService.name);
     private readonly valueCache = new Map<string, CacheEntry>();
+    /** `getOverriddenValue` 的缓存键与 `valueCache` 分开，语义不同不能混用 */
+    private readonly overrideCache = new Map<string, CacheEntry>();
 
     constructor(private readonly prisma: PrismaService) {}
 
@@ -148,6 +150,7 @@ export class SettingsService {
         });
 
         this.valueCache.delete(key);
+        this.overrideCache.delete(key);
         return this.entityFromRow(row, definition);
     }
 
@@ -229,6 +232,35 @@ export class SettingsService {
         return value;
     }
 
+    /**
+     * 只读「管理页是否覆盖过」的值：DB 行存在且 `overridden` 为 true 时返回
+     * 该值，否则返回 undefined。
+     *
+     * 与 `getString` / `getNumber` 等读取方法的区别是**不做内置默认兜底**。
+     * 调用方要判断「用户从未在管理页改过这一项」并回退到自己的环境变量时，
+     * 只能靠 undefined：若走 `getString`，DB 无行或 seed 行返回的是内置默认值，
+     * 反而会把 .env 里的既有配置盖掉。
+     */
+    async getOverriddenValue(key: string): Promise<unknown> {
+        const cached = this.overrideCache.get(key);
+        if (cached && cached.expiresAt > Date.now()) {
+            return cached.value;
+        }
+
+        const row = await this.prisma.setting.findUnique({
+            where: { key },
+            select: { value: true, overridden: true },
+        });
+        const value = row?.overridden ? row.value : undefined;
+
+        this.overrideCache.set(key, {
+            value,
+            expiresAt: Date.now() + CACHE_TTL_MS,
+        });
+
+        return value;
+    }
+
     private entityFromRow(
         row: SettingRow,
         definition: SettingDefinition | undefined,
@@ -239,6 +271,7 @@ export class SettingsService {
         return new SettingEntity({
             ...rest,
             group: definition?.group ?? CUSTOM_SETTING_GROUP,
+            section: definition?.section,
             value: isSecret
                 ? null
                 : this.presentValue(row.key, row.value, definition),
@@ -254,6 +287,7 @@ export class SettingsService {
             key: definition.key,
             name: definition.name,
             group: definition.group,
+            section: definition.section,
             value: this.presentValue(
                 definition.key,
                 definition.value,

@@ -1,8 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'node:crypto';
 import type {
-    WechatConfig,
     WechatOfficialAccountConfig,
     WechatWebsiteConfig,
 } from '../../../config';
@@ -18,6 +16,7 @@ import {
     WechatTokenService,
     withAccessToken,
 } from '../clients/wechat-token.service';
+import { WechatRuntimeConfigService } from '../wechat-runtime-config.service';
 import { WechatApiError, WechatConfigurationError } from '../wechat.types';
 import type {
     BuildOAuthUrlInput,
@@ -97,15 +96,15 @@ export class OfficialAccountClient {
     constructor(
         private readonly http: WechatHttpClient,
         private readonly tokens: WechatTokenService,
-        private readonly configService: ConfigService,
+        private readonly runtimeConfig: WechatRuntimeConfigService,
     ) {}
 
     /**
      * Builds the `snsapi_base` / `snsapi_userinfo` authorisation URL the user
      * must be redirected to.
      */
-    buildOAuthUrl(input: BuildOAuthUrlInput): string {
-        const appId = input.appId ?? this.officialAccountConfig.appId;
+    async buildOAuthUrl(input: BuildOAuthUrlInput): Promise<string> {
+        const appId = input.appId ?? (await this.officialAccountConfig()).appId;
 
         if (!appId) {
             throw new WechatConfigurationError(
@@ -129,8 +128,8 @@ export class OfficialAccountClient {
      * scan-to-login. Unlike `buildOAuthUrl`, this targets the Open Platform
      * website app and renders the QR code page directly.
      */
-    buildQrConnectUrl(input: BuildQrConnectUrlInput): string {
-        const appId = input.appId ?? this.websiteConfig.appId;
+    async buildQrConnectUrl(input: BuildQrConnectUrlInput): Promise<string> {
+        const appId = input.appId ?? (await this.websiteConfig()).appId;
 
         if (!appId) {
             throw new WechatConfigurationError(
@@ -153,7 +152,7 @@ export class OfficialAccountClient {
     async exchangeCodeForToken(
         input: ExchangeCodeInput,
     ): Promise<OAuthTokenResult> {
-        const { appId, appSecret } = this.resolveCredentials(input);
+        const { appId, appSecret } = await this.resolveCredentials(input);
 
         const response = await this.http.getJson<OAuthTokenResponse>(
             OAUTH_TOKEN_PATH,
@@ -175,7 +174,7 @@ export class OfficialAccountClient {
     async refreshOAuthToken(
         input: RefreshOAuthTokenInput,
     ): Promise<OAuthTokenResult> {
-        const { appId } = this.resolveCredentials(input);
+        const { appId } = await this.resolveCredentials(input);
 
         const response = await this.http.getJson<OAuthTokenResponse>(
             OAUTH_REFRESH_PATH,
@@ -234,7 +233,7 @@ export class OfficialAccountClient {
     async sendTemplateMessage(
         input: SendTemplateMessageInput,
     ): Promise<{ msgId: string }> {
-        const { appId, appSecret } = this.resolveCredentials(input);
+        const { appId, appSecret } = await this.resolveCredentials(input);
 
         const response = await withAccessToken(
             this.tokens,
@@ -261,7 +260,7 @@ export class OfficialAccountClient {
     async sendCustomTextMessage(
         input: SendCustomTextMessageInput,
     ): Promise<void> {
-        const { appId, appSecret } = this.resolveCredentials(input);
+        const { appId, appSecret } = await this.resolveCredentials(input);
 
         await withAccessToken(
             this.tokens,
@@ -281,8 +280,8 @@ export class OfficialAccountClient {
     }
 
     /** Verifies the `signature` of the server-configuration GET request. */
-    verifyServerSignature(input: ServerSignatureInput): boolean {
-        const token = input.token ?? this.officialAccountConfig.token;
+    async verifyServerSignature(input: ServerSignatureInput): Promise<boolean> {
+        const token = input.token ?? (await this.officialAccountConfig()).token;
 
         if (!token) {
             throw new WechatConfigurationError(
@@ -302,8 +301,8 @@ export class OfficialAccountClient {
      * Verifies and decrypts a "safe mode" callback body.
      * Returns the plaintext XML/JSON WeChat sent.
      */
-    parseServerMessage(input: ParseServerMessageInput): string {
-        const { token, aesKey, appId } = this.resolveCrypto(input);
+    async parseServerMessage(input: ParseServerMessageInput): Promise<string> {
+        const { token, aesKey, appId } = await this.resolveCrypto(input);
 
         if (
             !checkMsgSignature(
@@ -325,11 +324,11 @@ export class OfficialAccountClient {
     }
 
     /** Encrypts a reply and signs it the way WeChat expects. */
-    buildEncryptedReply(
+    async buildEncryptedReply(
         message: string,
         overrides: { token?: string; aesKey?: string; appId?: string } = {},
-    ): EncryptedReply {
-        const { token, aesKey, appId } = this.resolveCrypto(overrides);
+    ): Promise<EncryptedReply> {
+        const { token, aesKey, appId } = await this.resolveCrypto(overrides);
 
         const timestamp = nowSeconds();
         const nonce = randomNonce();
@@ -345,11 +344,11 @@ export class OfficialAccountClient {
 
     // -- Helpers ---------------------------------------------------------
 
-    private resolveCredentials(input: { appId?: string; appSecret?: string }): {
-        appId: string;
-        appSecret: string;
-    } {
-        const config = this.officialAccountConfig;
+    private async resolveCredentials(input: {
+        appId?: string;
+        appSecret?: string;
+    }): Promise<{ appId: string; appSecret: string }> {
+        const config = await this.officialAccountConfig();
         const appId = input.appId ?? config.appId;
         const appSecret = input.appSecret ?? config.appSecret;
 
@@ -362,12 +361,12 @@ export class OfficialAccountClient {
         return { appId, appSecret };
     }
 
-    private resolveCrypto(overrides: {
+    private async resolveCrypto(overrides: {
         token?: string;
         aesKey?: string;
         appId?: string;
-    }): { token: string; aesKey: string; appId: string } {
-        const config = this.officialAccountConfig;
+    }): Promise<{ token: string; aesKey: string; appId: string }> {
+        const config = await this.officialAccountConfig();
         const token = overrides.token ?? config.token;
         const aesKey = overrides.aesKey ?? config.aesKey;
         const appId = overrides.appId ?? config.appId;
@@ -415,27 +414,11 @@ export class OfficialAccountClient {
         };
     }
 
-    private get officialAccountConfig(): WechatOfficialAccountConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
-
-        if (!wechat) {
-            throw new WechatConfigurationError(
-                'WeChat config is not registered',
-            );
-        }
-
-        return wechat.officialAccount;
+    private officialAccountConfig(): Promise<WechatOfficialAccountConfig> {
+        return this.runtimeConfig.officialAccount();
     }
 
-    private get websiteConfig(): WechatWebsiteConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
-
-        if (!wechat) {
-            throw new WechatConfigurationError(
-                'WeChat config is not registered',
-            );
-        }
-
-        return wechat.website;
+    private websiteConfig(): Promise<WechatWebsiteConfig> {
+        return this.runtimeConfig.website();
     }
 }

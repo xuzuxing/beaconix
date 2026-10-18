@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import type { WechatConfig, WechatPayConfig } from '../../../config';
+import type { WechatPayConfig } from '../../../config';
 import {
     WECHAT_PAY_BASE_URL,
     WechatHttpClient,
 } from '../clients/wechat-http.client';
+import { WechatRuntimeConfigService } from '../wechat-runtime-config.service';
 import { WechatConfigurationError } from '../wechat.types';
 import {
     buildAuthorizationHeader,
@@ -37,12 +37,12 @@ export class WechatPayCertificateService {
 
     constructor(
         private readonly http: WechatHttpClient,
-        private readonly configService: ConfigService,
+        private readonly runtimeConfig: WechatRuntimeConfigService,
     ) {}
 
     /** Public key (PEM) able to verify a signature carrying `serial`. */
     async getVerifier(serial: string): Promise<string> {
-        const config = this.payConfig;
+        const config = await this.runtimeConfig.pay();
 
         if (config.publicKey) {
             if (config.publicKeyId && config.publicKeyId !== serial) {
@@ -94,7 +94,7 @@ export class WechatPayCertificateService {
     }
 
     private async downloadPlatformCertificates(): Promise<Map<string, string>> {
-        const config = this.requireSigningConfig();
+        const config = await this.requireSigningConfig();
         const timestamp = currentTimestamp();
         const nonce = generateNonce();
 
@@ -136,8 +136,8 @@ export class WechatPayCertificateService {
         return certificates;
     }
 
-    private requireSigningConfig(): WechatPayConfig {
-        const config = this.payConfig;
+    private async requireSigningConfig(): Promise<WechatPayConfig> {
+        const config = await this.runtimeConfig.pay();
         const missing = (
             ['mchId', 'serialNo', 'privateKey', 'apiV3Key'] as const
         ).filter((key) => !config[key]);
@@ -149,17 +149,5 @@ export class WechatPayCertificateService {
         }
 
         return config;
-    }
-
-    private get payConfig(): WechatPayConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
-
-        if (!wechat) {
-            throw new WechatConfigurationError(
-                'WeChat config is not registered',
-            );
-        }
-
-        return wechat.pay;
     }
 }

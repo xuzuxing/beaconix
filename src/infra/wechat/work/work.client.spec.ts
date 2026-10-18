@@ -1,4 +1,4 @@
-import type { ConfigService } from '@nestjs/config';
+import type { WechatRuntimeConfigService } from '../wechat-runtime-config.service';
 import type { WechatHttpClient } from '../clients/wechat-http.client';
 import type { WechatTokenService } from '../clients/wechat-token.service';
 import { WechatApiError, WechatConfigurationError } from '../wechat.types';
@@ -20,14 +20,14 @@ function createClient(overrides: Partial<typeof WORK_CONFIG> = {}) {
         getWorkAccessToken: jest.fn().mockResolvedValue('work-token'),
         invalidate: jest.fn().mockResolvedValue(undefined),
     };
-    const configService = {
-        get: jest.fn().mockReturnValue({ work: config }),
+    const runtimeConfig = {
+        work: jest.fn().mockResolvedValue(config),
     };
 
     const client = new WorkClient(
         http as unknown as WechatHttpClient,
         tokens as unknown as WechatTokenService,
-        configService as unknown as ConfigService,
+        runtimeConfig as unknown as WechatRuntimeConfigService,
     );
 
     return { client, http, tokens, config };

@@ -26,6 +26,19 @@ describe('settings seed rows', () => {
         });
     });
 
+    it('seeds every wechat key without leaking tab metadata into the table', () => {
+        const wechat = settingSeedRows().filter((row) =>
+            row.key.startsWith('wechat.'),
+        );
+
+        expect(wechat).toHaveLength(26);
+        // group / section 都是代码侧元数据，seed 不写表
+        expect(wechat.every((row) => !('section' in row))).toBe(true);
+        // 支付私钥、APIv3 密钥、三套 appSecret、公众号 token/aesKey、企业微信 corpSecret
+        expect(wechat.filter((row) => row.isSecret)).toHaveLength(8);
+        expect(wechat.every((row) => row.overridden === false)).toBe(true);
+    });
+
     it('adds every row to an empty table', () => {
         expect(missingSettingSeedRows([])).toHaveLength(
             SETTING_DEFINITIONS.length,

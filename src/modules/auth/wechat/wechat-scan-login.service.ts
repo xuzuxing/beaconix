@@ -4,15 +4,14 @@ import {
     Logger,
     ServiceUnavailableException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { toIsoString } from '../../../common/utils/date.util';
 import * as crypto from 'crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { RedisService } from '../../../infra/redis/redis.service';
 import { MiniprogramClient } from '../../../infra/wechat/miniprogram';
+import { WechatRuntimeConfigService } from '../../../infra/wechat/wechat-runtime-config.service';
 import type { WechatMiniProgramEnvVersion } from '../../../infra/wechat/miniprogram';
 import {
-    WechatConfig,
     WechatMiniProgramConfig,
     WechatScanLoginConfig,
 } from '../../../config';
@@ -45,7 +44,7 @@ export class WechatScanLoginService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly redis: RedisService,
-        private readonly configService: ConfigService,
+        private readonly runtimeConfig: WechatRuntimeConfigService,
         private readonly miniprogramClient: MiniprogramClient,
         private readonly wechatAuthService: WechatAuthService,
         private readonly authService: AuthService,
@@ -53,8 +52,8 @@ export class WechatScanLoginService {
 
     /** Creates the Redis login ticket and its unlimited mini-program QR code. */
     async createQrCode(dto: CreateWechatScanLoginDto) {
-        const config = this.scanLoginConfig;
-        const mini = this.miniprogramConfig;
+        const config = await this.scanLoginConfig();
+        const mini = await this.miniprogramConfig();
 
         const ticket = crypto.randomBytes(16).toString('hex');
         const expiresAt = new Date(Date.now() + config.ttlSeconds * 1000);
@@ -151,7 +150,7 @@ export class WechatScanLoginService {
 
     /** Web long-poll endpoint: waits until the ticket leaves PENDING/SCANNED. */
     async pollStatus(dto: QueryWechatScanLoginStatusDto, meta: RequestMeta) {
-        const config = this.scanLoginConfig;
+        const config = await this.scanLoginConfig();
         const timeoutMs = Math.min(
             Math.max(dto.timeoutMs ?? config.pollTimeoutMs, 1000),
             30000,
@@ -204,10 +203,10 @@ export class WechatScanLoginService {
         };
     }
 
-    private get miniprogramConfig(): WechatMiniProgramConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
+    private async miniprogramConfig(): Promise<WechatMiniProgramConfig> {
+        const wechat = await this.runtimeConfig.config();
 
-        if (!wechat?.miniprogram.appId || !wechat?.miniprogram.appSecret) {
+        if (!wechat.miniprogram.appId || !wechat.miniprogram.appSecret) {
             throw new ServiceUnavailableException(
                 'WeChat mini program is not configured (WECHAT_MINI_APPID / WECHAT_MINI_APPSECRET)',
             );
@@ -216,16 +215,8 @@ export class WechatScanLoginService {
         return wechat.miniprogram;
     }
 
-    private get scanLoginConfig(): WechatScanLoginConfig {
-        const wechat = this.configService.get<WechatConfig>('wechat');
-
-        if (!wechat) {
-            throw new ServiceUnavailableException(
-                'WeChat config is not registered',
-            );
-        }
-
-        return wechat.scanLogin;
+    private scanLoginConfig(): Promise<WechatScanLoginConfig> {
+        return this.runtimeConfig.scanLogin();
     }
 
     private ticketKey(ticket: string): string {

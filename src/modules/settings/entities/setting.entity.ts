@@ -27,6 +27,13 @@ export class SettingEntity {
     })
     group: string;
 
+    @ApiPropertyOptional({
+        type: String,
+        description:
+            'tab 内的二级分组（小标题/折叠面板），由后端内置定义给出，不入库；缺省表示直接挂在 tab 顶层',
+    })
+    section?: string;
+
     @ApiProperty({
         oneOf: [
             { type: 'string' },
