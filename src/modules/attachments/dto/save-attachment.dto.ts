@@ -8,6 +8,7 @@ import {
     IsUrl,
     MaxLength,
 } from 'class-validator';
+import { BROWSER_URL_OPTIONS } from '../../../common/utils';
 
 export class SaveAttachmentDto {
     @ApiProperty({ example: 'design-spec.pdf' })
@@ -29,7 +30,7 @@ export class SaveAttachmentDto {
         example: '/api/tasks/task_xxx/attachments/att_xxx/download',
     })
     @IsNotEmpty()
-    @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
+    @IsUrl(BROWSER_URL_OPTIONS)
     url: string;
 
     @ApiPropertyOptional({

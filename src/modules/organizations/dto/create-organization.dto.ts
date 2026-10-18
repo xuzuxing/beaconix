@@ -7,6 +7,7 @@ import {
     Matches,
     MaxLength,
 } from 'class-validator';
+import { BROWSER_URL_OPTIONS } from '../../../common/utils';
 
 export class CreateOrganizationDto {
     @ApiProperty({ example: 'Acme Corporation' })
@@ -36,11 +37,11 @@ export class CreateOrganizationDto {
 
     @ApiPropertyOptional({ example: 'https://acme.com/logo.png' })
     @IsOptional()
-    @IsUrl()
+    @IsUrl(BROWSER_URL_OPTIONS)
     logoUrl?: string;
 
     @ApiPropertyOptional({ example: 'https://acme.com' })
     @IsOptional()
-    @IsUrl()
+    @IsUrl(BROWSER_URL_OPTIONS)
     website?: string;
 }
