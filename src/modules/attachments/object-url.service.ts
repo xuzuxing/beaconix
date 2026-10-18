@@ -39,15 +39,21 @@ export class AttachmentObjectUrlService {
         this.secret = configService.get<JwtConfig>('jwt')!.secret;
     }
 
-    private async publicUrl(key: string): Promise<string> {
+    /** Prefixes an API-absolute path (`/api/...`) with the configured base. */
+    private async publicUrl(path: string): Promise<string> {
         const base = (
             await this.settings.getString('storage.publicBaseUrl', '')
         ).replace(/\/$/, '');
-        return base ? `${base}/${key}` : '';
+        // With no configured base the API is the host itself, so the link has
+        // to stay relative — returning an empty string here used to hand out
+        // blank URLs to every caller (`storage.publicBaseUrl` defaults to '').
+        // `path` is always absolute, so it is appended as-is: a `${base}/${path}`
+        // join would double the slash.
+        return base ? `${base}${path}` : path;
     }
 
     /**
-     * Direct link for a stored object.
+     * Time-limited link for a stored object that needs a permission check.
      *
      * Only a remote provider is trusted to own a public URL (OSS / CDN). A LOCAL
      * object lives on this server's disk, while `storage.publicBaseUrl` often
@@ -62,6 +68,31 @@ export class AttachmentObjectUrlService {
     ): Promise<string> {
         if (provider === 'OSS' && storedUrl) return storedUrl;
         return this.sign(key);
+    }
+
+    /**
+     * Permanent link for an object that is public by design (avatars, brand
+     * images).
+     *
+     * Such a URL is persisted by the caller — `User.avatarUrl` and friends — and
+     * rendered long after any TTL would have lapsed, so signing it only buys a
+     * link that rots into a 401 a day later. The key itself carries no
+     * authority here: the object sits in the public storage root and the object
+     * endpoint already serves those keys anonymously (see
+     * `AttachmentsService.getPublicObjectDownload`). Ticket uploads are not
+     * public by design and keep using `toObjectUrl`.
+     *
+     * A provider that produced a public URL owns it: OSS hands back its CDN
+     * address and LOCAL its configured `storage.publicBaseUrl`, which is exactly
+     * the static host serving the public root. Only when neither exists does the
+     * link come back to the API — the same relative form the rest of the API
+     * uses for stored files (compare the task attachment download URL).
+     */
+    async toPublicUrl(key: string, storedUrl?: string | null): Promise<string> {
+        if (storedUrl) return storedUrl;
+        return this.publicUrl(
+            `${PUBLIC_OBJECT_PATH}?key=${encodeURIComponent(key)}`,
+        );
     }
 
     async sign(key: string): Promise<string> {

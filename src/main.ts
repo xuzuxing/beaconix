@@ -10,8 +10,9 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import helmet from 'helmet';
+import { resolve } from 'node:path';
 import { AppModule } from './app.module';
-import { AppConfig } from './config';
+import { AppConfig, PUBLIC_STATIC_PREFIX, StorageConfig } from './config';
 import { TransformInterceptor } from './common/interceptors';
 
 async function bootstrap() {
@@ -51,6 +52,14 @@ async function bootstrap() {
         new TransformInterceptor(),
         new ClassSerializerInterceptor(app.get(Reflector)),
     );
+
+    // Serve the public attachment root. The URL path is fixed — public links are
+    // built from PUBLIC_STATIC_PREFIX — while the directory follows
+    // STORAGE_PUBLIC_ROOT, so a link always resolves to the file it names.
+    const storageConfig = configService.get<StorageConfig>('storage')!;
+    app.useStaticAssets(resolve(storageConfig.publicRoot), {
+        prefix: `${PUBLIC_STATIC_PREFIX}/`,
+    });
 
     // 全局异常过滤器改为 APP_FILTER 注册（见 app.module.ts），
     // 以便注入 SettingsService 读取 develop.debugMode。

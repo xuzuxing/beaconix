@@ -2,6 +2,7 @@ import {
     ConflictException,
     ForbiddenException,
     NotFoundException,
+    UnauthorizedException,
 } from '@nestjs/common';
 import { AttachmentsService } from './attachments.service';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
@@ -18,7 +19,7 @@ function fixture(role = 'ADMIN', uploadedById = 'other') {
         source: 'UPLOAD',
         storageProvider: 'LOCAL',
         bucket: null,
-        fileKey: 'organizations/org/tasks/task/2026/10/report.txt',
+        fileKey: 'attachments/org/task/2026/10/report.txt',
         url: '/api/tasks/task/attachments/attachment/download',
     };
     const db = {
@@ -76,7 +77,14 @@ function fixture(role = 'ADMIN', uploadedById = 'other') {
         getDownload: jest
             .fn()
             .mockResolvedValue({ type: 'redirect', url: 'private-signed' }),
+        activeProviderName: jest.fn().mockResolvedValue('LOCAL'),
     };
+    const objectUrls = {
+        toObjectUrl: jest.fn().mockResolvedValue('signed-url'),
+        toPublicUrl: jest.fn().mockResolvedValue('public-url'),
+        verify: jest.fn().mockReturnValue(false),
+    };
+    const jwtService = { verifyAsync: jest.fn() };
     const settings = {
         getAttachmentSettings: jest.fn().mockResolvedValue({
             maxBlobSizeMb: 10,
@@ -88,16 +96,15 @@ function fixture(role = 'ADMIN', uploadedById = 'other') {
         db,
         storage,
         attachment,
+        objectUrls,
+        jwtService,
         service: new AttachmentsService(
             db as never,
             storage as never,
             settings as never,
             new ProjectAccessService(db as never),
-            { verifyAsync: jest.fn() } as never,
-            {
-                toObjectUrl: jest.fn().mockResolvedValue('signed-url'),
-                verify: jest.fn().mockReturnValue(false),
-            } as never,
+            jwtService as never,
+            objectUrls as never,
         ),
         file: {
             buffer: Buffer.from('bytes'),
@@ -114,7 +121,7 @@ describe('Attachments authorization lifecycle', () => {
         storage.putObject.mockImplementation(() => {
             db.projectMembership.findUnique.mockResolvedValue(null);
             return Promise.resolve({
-                key: 'organizations/org/tasks/task/object',
+                key: 'attachments/org/task/object',
                 provider: 'LOCAL',
                 url: '',
                 bucket: null,
@@ -126,7 +133,7 @@ describe('Attachments authorization lifecycle', () => {
         expect(db.attachment.create).not.toHaveBeenCalled();
         expect(storage.deleteObject).toHaveBeenCalledWith(
             'LOCAL',
-            'organizations/org/tasks/task/object',
+            'attachments/org/task/object',
             null,
         );
     });
@@ -186,10 +193,12 @@ describe('Attachments authorization lifecycle', () => {
     });
 
     it.each([
-        'organizations/org/tasks/task/../../other/object',
-        'organizations/org/tasks/task/%2e%2e/object',
-        'organizations/org/tasks/other/object',
-        'users/user/public/object',
+        'attachments/org/task/../../other/object',
+        'attachments/org/task/%2e%2e/object',
+        'attachments/org/other/object',
+        'avatars/2026/10/public-object',
+        // Keys written before the split no longer resolve to a task.
+        'organizations/org/tasks/task/2026/10/legacy-object',
     ])('rejects untrusted private locator %s', async (fileKey) => {
         const { service, storage, attachment } = fixture();
         attachment.fileKey = fileKey;
@@ -391,5 +400,183 @@ describe('AttachmentsService.claimForTicket', () => {
                 uploader,
             ),
         ).rejects.toThrow('Unsupported');
+    });
+});
+
+describe('AttachmentsService public uploads', () => {
+    const file = {
+        buffer: Buffer.from('png'),
+        originalname: 'avatar.png',
+        mimetype: 'image/png',
+        size: 3,
+    } as Express.Multer.File;
+
+    it('hands out a permanent unsigned link for an avatar upload', async () => {
+        const { service, storage, objectUrls } = fixture();
+        storage.putObject.mockResolvedValue({
+            key: 'avatars/2026/10/avatar.png',
+            provider: 'LOCAL',
+            url: '',
+            bucket: null,
+        });
+
+        const result = await service.uploadPublic(file, 'user', 'avatars');
+
+        // A stored avatar URL outlives any signature TTL, so it must not carry
+        // exp/sig at all.
+        expect(objectUrls.toObjectUrl).not.toHaveBeenCalled();
+        expect(objectUrls.toPublicUrl).toHaveBeenCalledWith(
+            'avatars/2026/10/avatar.png',
+            '',
+        );
+        expect(result.url).toBe('public-url');
+        expect(storage.putObject.mock.calls[0][0]).toMatchObject({
+            directory: 'avatars',
+            visibility: 'PUBLIC',
+        });
+    });
+
+    it('passes the storage public URL through so a static host serves it', async () => {
+        const { service, storage, objectUrls } = fixture();
+        storage.putObject.mockResolvedValue({
+            key: 'avatars/2026/10/avatar.png',
+            provider: 'LOCAL',
+            url: 'https://static.test/avatars/2026/10/avatar.png',
+            bucket: null,
+        });
+
+        await service.uploadPublic(file, 'user', 'avatars');
+
+        expect(objectUrls.toPublicUrl).toHaveBeenCalledWith(
+            'avatars/2026/10/avatar.png',
+            'https://static.test/avatars/2026/10/avatar.png',
+        );
+    });
+
+    it('defaults a general upload to the uploads directory', async () => {
+        const { service, storage } = fixture();
+        storage.putObject.mockResolvedValue({
+            key: 'uploads/2026/10/avatar.png',
+            provider: 'LOCAL',
+            url: '',
+            bucket: null,
+        });
+
+        await service.uploadPublic(file, 'user');
+
+        expect(storage.putObject.mock.calls[0][0]).toMatchObject({
+            directory: 'uploads',
+            visibility: 'PUBLIC',
+        });
+    });
+
+    it('keeps signing ticket uploads and files them privately', async () => {
+        const { service, storage, objectUrls } = fixture();
+        storage.putObject.mockResolvedValue({
+            key: 'tickets/2026/10/log.txt',
+            provider: 'LOCAL',
+            url: '',
+            bucket: null,
+        });
+
+        await service.uploadPublic(file, 'user', 'tickets');
+
+        expect(storage.putObject.mock.calls[0][0]).toMatchObject({
+            directory: 'tickets',
+            visibility: 'PRIVATE',
+        });
+        expect(objectUrls.toPublicUrl).not.toHaveBeenCalled();
+        expect(objectUrls.toObjectUrl).toHaveBeenCalledWith(
+            'tickets/2026/10/log.txt',
+            'LOCAL',
+            null,
+        );
+    });
+
+    it.each(['attachments', 'attachments/org/task', 'temp', 'organizations'])(
+        'refuses to write the reserved private directory %s as a public upload',
+        async (directory) => {
+            const { service, storage } = fixture();
+
+            await expect(
+                service.uploadPublic(file, 'user', directory),
+            ).rejects.toThrow('Reserved attachment directory');
+            expect(storage.putObject).not.toHaveBeenCalled();
+        },
+    );
+});
+
+describe('AttachmentsService.getPublicObjectDownload', () => {
+    it('serves a public key to an anonymous request', async () => {
+        const { service, storage, jwtService, db } = fixture();
+        storage.getDownload.mockResolvedValue({
+            type: 'redirect',
+            url: 'https://cdn.test/avatars/2026/10/avatar.png',
+        });
+
+        const result = await service.getPublicObjectDownload({
+            key: 'avatars/2026/10/avatar.png',
+        });
+
+        expect(result.download).toEqual({
+            type: 'redirect',
+            url: 'https://cdn.test/avatars/2026/10/avatar.png',
+        });
+        expect(jwtService.verifyAsync).not.toHaveBeenCalled();
+        expect(db.attachment.findFirst).not.toHaveBeenCalled();
+        // Nothing is being vouched for, so a configured public base URL may
+        // serve the object directly.
+        expect(storage.getDownload).toHaveBeenCalledWith(
+            'LOCAL',
+            'avatars/2026/10/avatar.png',
+            undefined,
+            'PUBLIC',
+            { followPublicUrl: true },
+        );
+    });
+
+    it('still requires a token for an unsigned ticket key', async () => {
+        const { service, jwtService } = fixture();
+
+        await expect(
+            service.getPublicObjectDownload({ key: 'tickets/2026/10/x.png' }),
+        ).rejects.toThrow(UnauthorizedException);
+        expect(jwtService.verifyAsync).not.toHaveBeenCalled();
+    });
+
+    it('requires a token for an unsigned task attachment key', async () => {
+        const { service, jwtService } = fixture();
+
+        await expect(
+            service.getPublicObjectDownload({
+                key: 'attachments/org/task/2026/10/x.png',
+            }),
+        ).rejects.toThrow(UnauthorizedException);
+        expect(jwtService.verifyAsync).not.toHaveBeenCalled();
+    });
+
+    it('streams a signed private link from the private space', async () => {
+        const { service, storage, objectUrls } = fixture();
+        objectUrls.verify.mockReturnValue(true);
+        storage.getDownload.mockResolvedValue({
+            type: 'redirect',
+            url: 'https://cdn.test/tickets/2026/10/x.png',
+        });
+
+        await service.getPublicObjectDownload({
+            key: 'tickets/2026/10/x.png',
+            exp: Math.floor(Date.now() / 1000) + 60,
+            sig: 'a'.repeat(64),
+        });
+
+        expect(storage.getDownload).toHaveBeenCalledWith(
+            'LOCAL',
+            'tickets/2026/10/x.png',
+            undefined,
+            // The key decides the space: a ticket object is private even though
+            // this endpoint also serves public avatars.
+            'PRIVATE',
+            { followPublicUrl: false },
+        );
     });
 });

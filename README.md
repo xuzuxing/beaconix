@@ -693,7 +693,7 @@ All endpoints are prefixed with `/api`. Protected endpoints require a `Bearer` t
 | `GET` | `/api/tasks/:taskId/attachments/:id/download` | Download or redirect to an attachment object | MEMBER |
 | `DELETE` | `/api/tasks/:taskId/attachments/:id` | Remove an attachment | MEMBER |
 
-General uploads accept multipart fields `file` and optional `directory`. Empty `directory` stores objects under `users/<userId>/yyyy/mm/`; a provided directory is sanitized and stored under `<directory>/yyyy/mm/`, relative to `STORAGE_LOCAL_ROOT` (default `storage/uploads`). The object preview endpoint refuses protected `organizations/` keys; task attachments must still use the task attachment download API.
+General uploads accept multipart fields `file` and optional `directory`. Empty `directory` stores objects under `uploads/yyyy/mm/`; a provided directory is sanitized and stored under `<directory>/yyyy/mm/`, relative to `STORAGE_PUBLIC_ROOT` (default `storage/public`). Files uploaded with `directory=tickets` are the exception: they land in the private root (`storage/private/tickets/yyyy/mm/`) and are only readable through a signed link or as a signed-in participant. Task attachments and ticket files must still use their download APIs. The app serves the public root itself at `/storage/public/<key>`, so a public upload comes back as `<storage.publicBaseUrl>/storage/public/<key>` (relative `/storage/public/<key>` when that setting is empty).
 
 ### Labels Endpoints
 
@@ -1127,7 +1127,8 @@ cp .env.example .env
 | `JWT_REFRESH_EXPIRES_IN` | No | Refresh token TTL (default: `7d`) |
 | `THROTTLE_TTL` | No | Rate limit window in seconds (default: `60`) |
 | `THROTTLE_LIMIT` | No | Max requests per window (default: `10`) |
-| `STORAGE_LOCAL_ROOT` | No | Local upload directory (default: `storage/uploads`) |
+| `STORAGE_PUBLIC_ROOT` | No | Public attachment directory (default: `storage/public`); `STORAGE_LOCAL_ROOT` is accepted as a fallback |
+| `STORAGE_PRIVATE_ROOT` | No | Private attachment directory (default: `storage/private`), must not overlap the public root |
 | `STORAGE_OSS_ENDPOINT` | Fallback | S3-compatible endpoint; the `storage.oss.endpoint` setting wins when set |
 | `STORAGE_OSS_REGION` | Fallback | OSS region (default: `auto`) |
 | `STORAGE_OSS_BUCKET` | Fallback | Public attachment bucket; the `storage.oss.bucket` setting wins |
@@ -1177,7 +1178,7 @@ Runtime-tunable platform settings live in the `settings` table and can be manage
 | storage | `storage.oss.accessKeyId` | empty (secret) | OSS access key ID; falls back to `STORAGE_OSS_ACCESS_KEY_ID` |
 | storage | `storage.oss.accessKeySecret` | empty (secret) | OSS access key secret; falls back to `STORAGE_OSS_ACCESS_KEY_SECRET` |
 | storage | `storage.oss.forcePathStyle` | `false` | Path-style object URLs for MinIO/S3-compatible providers |
-| storage | `storage.publicBaseUrl` | empty | Optional public base URL for local/static serving |
+| storage | `storage.publicBaseUrl` | empty | Optional site root (e.g. `https://api.example.com`). Public links are `<siteRoot>/storage/public/<key>`; empty returns the relative `/storage/public/<key>` |
 | storage | `storage.oss.publicBaseUrl` | empty | Optional public/CDN base URL for OSS objects |
 | storage | `storage.oss.signedUrlTtlSeconds` | `300` | Signed OSS download URL TTL |
 | attachments | `attachments.maxImageSizeMb` | `8` | Image upload limit |
@@ -1284,7 +1285,7 @@ docker run -p 3000:3000 \
   -e JWT_SECRET="your-secret" \
   -e JWT_REFRESH_SECRET="your-refresh-secret" \
   -e RESEND_API_KEY="your-resend-key" \
-  -e STORAGE_LOCAL_ROOT="storage/uploads" \
+  -e STORAGE_PUBLIC_ROOT="storage/public" \
   Beacon
 ```
 

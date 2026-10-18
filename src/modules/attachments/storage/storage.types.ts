@@ -8,11 +8,22 @@ export interface PutObjectInput {
     filename: string;
     mimeType: string;
     size: number;
-    organizationId: string;
-    taskId: string;
+    /** Tenant of a task attachment; absent for ticket uploads. */
+    organizationId?: string;
+    /** Task of a task attachment; absent for ticket uploads. */
+    taskId?: string;
     uploadedById?: string;
+    /**
+     * Public uploads: the target directory under the public root (`avatars`,
+     * `uploads`, …). Private uploads without a task: the directory under the
+     * private root (currently `tickets`).
+     */
     directory?: string;
-    publicUpload?: boolean;
+    /**
+     * Decides both the key space and the root: `PUBLIC` writes to the public
+     * root with a publishable key, `PRIVATE` to the private root. Defaults to
+     * PRIVATE.
+     */
     visibility?: StorageVisibility;
 }
 

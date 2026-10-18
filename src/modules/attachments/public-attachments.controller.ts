@@ -42,9 +42,10 @@ export class PublicAttachmentsController {
     @ApiOperation({
         summary: 'Preview or download an uploaded object',
         description:
-            'Accepts either a signed link (exp + sig, issued by the API for ' +
-            'attachments the caller may read) or a Bearer token. Images and ' +
-            'downloads rendered by a browser rely on the signed form.',
+            'Uploads land in one of two spaces. Public ones (`avatars`, ' +
+            '`uploads`, custom directories) are served to anyone holding the ' +
+            'unsigned link the upload returned; `tickets` uploads are private ' +
+            'and need a signed link (exp + sig) or a Bearer token.',
     })
     @ApiOkResponse({ description: 'Object stream or redirect' })
     @ApiUnauthorizedResponse({

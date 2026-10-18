@@ -56,6 +56,9 @@ pids
 *.seed
 *.pid.lock
 
+# Local attachment storage (public/private roots, see STORAGE_PUBLIC_ROOT)
+/storage/
+
 # Probe agent: local credentials written by `login` (never commit secrets)
 scripts/probe.json
 .beaconix/

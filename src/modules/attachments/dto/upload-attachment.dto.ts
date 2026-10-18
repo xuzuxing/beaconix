@@ -15,7 +15,9 @@ export class UploadAttachmentDto {
     @ApiPropertyOptional({
         example: 'avatars',
         description:
-            'Optional directory for general uploads. Empty defaults to users/<currentUserId>.',
+            'Optional directory for general uploads (`avatars`, `uploads`, …). ' +
+            'Empty defaults to `uploads`. `tickets` is the one private ' +
+            'directory this endpoint accepts.',
     })
     @IsOptional()
     @IsString()

@@ -1,4 +1,5 @@
 import { extname } from 'node:path';
+import { TICKETS_DIRECTORY } from './storage/filename.util';
 
 /**
  * Limits shared by the ticket attachment flow: the upload endpoint, the ticket
@@ -39,8 +40,8 @@ export interface TicketAttachmentRef {
     fileKey: string;
 }
 
-/** The storage directory ticket uploads are filed under. */
-export const TICKET_UPLOAD_DIRECTORY = 'tickets';
+/** The storage directory ticket uploads are filed under (private root). */
+export const TICKET_UPLOAD_DIRECTORY = TICKETS_DIRECTORY;
 
 export function isAllowedTicketAttachment(
     mimeType: string,

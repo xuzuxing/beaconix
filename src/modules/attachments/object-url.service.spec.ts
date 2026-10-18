@@ -2,12 +2,13 @@ import type { ConfigService } from '@nestjs/config';
 import { AttachmentObjectUrlService } from './object-url.service';
 import type { SettingsService } from '../settings';
 
-function createService(ttlSeconds = 300) {
+function createService(ttlSeconds = 300, publicBaseUrl = '') {
     const config = {
         get: jest.fn().mockReturnValue({ secret: 'unit-test-secret' }),
     } as unknown as ConfigService;
     const settings = {
         getNumber: jest.fn().mockResolvedValue(ttlSeconds),
+        getString: jest.fn().mockResolvedValue(publicBaseUrl),
     } as unknown as SettingsService;
 
     return { service: new AttachmentObjectUrlService(config, settings) };
@@ -79,5 +80,38 @@ describe('AttachmentObjectUrlService', () => {
         await expect(
             service.toObjectUrl('tickets/a.png', 'LOCAL', ''),
         ).resolves.toMatch(/^\/api\/attachments\/object\?/);
+    });
+
+    it('returns a permanent unsigned link for a public object', async () => {
+        const { service } = createService();
+
+        // A provider that produced a public URL owns it: OSS's CDN address…
+        await expect(
+            service.toPublicUrl('users/u/a.png', 'https://cdn.test/a.png'),
+        ).resolves.toBe('https://cdn.test/a.png');
+
+        // …or LOCAL's configured storage.publicBaseUrl, which already hosts the
+        // public root.
+        await expect(
+            service.toPublicUrl('users/u/a.png', 'https://static.test/a.png'),
+        ).resolves.toBe('https://static.test/a.png');
+
+        // Only without either does the link fall back to the API, still without
+        // exp/sig: the URL is persisted and rendered long after a signature
+        // would have expired.
+        await expect(service.toPublicUrl('users/u/a.png', '')).resolves.toBe(
+            '/api/attachments/object?key=users%2Fu%2Fa.png',
+        );
+        await expect(service.toPublicUrl('users/u/a.png')).resolves.toBe(
+            '/api/attachments/object?key=users%2Fu%2Fa.png',
+        );
+    });
+
+    it('prefixes the fallback link with a configured public base', async () => {
+        const { service } = createService(300, 'https://api.test');
+
+        await expect(service.toPublicUrl('users/u/a.png', '')).resolves.toBe(
+            'https://api.test/api/attachments/object?key=users%2Fu%2Fa.png',
+        );
     });
 });

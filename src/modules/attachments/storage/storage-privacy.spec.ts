@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { BadRequestException } from '@nestjs/common';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { resolve } from 'node:path';
 import {
@@ -37,7 +37,7 @@ jest.mock('@aws-sdk/s3-request-presigner', () => ({
 function fixture(options = {}, settingValues: Record<string, unknown> = {}) {
     const config = new ConfigService({
         storage: {
-            localRoot: 'storage/test-public',
+            publicRoot: 'storage/test-public',
             privateRoot: 'storage/test-private',
             oss: {
                 bucket: 'public',
@@ -93,7 +93,7 @@ describe('Attachment physical storage isolation', () => {
         const provider = new LocalStorageProvider(config, settings as never);
         const stored = await provider.putObject(input);
         expect(stored.url).toBe('');
-        expect(stored.key).toMatch(/^organizations\/org\/tasks\/task\//);
+        expect(stored.key).toMatch(/^attachments\/org\/task\//);
         expect(mkdir).toHaveBeenCalled();
         expect(writeFile).toHaveBeenCalledWith(
             resolve('storage/test-private', stored.key),
@@ -112,22 +112,117 @@ describe('Attachment physical storage isolation', () => {
         expect(settings.getString).not.toHaveBeenCalled();
     });
 
+    it('files ticket uploads in the private root, never the public one', async () => {
+        const { config, settings, input } = fixture();
+        const provider = new LocalStorageProvider(config, settings as never);
+
+        const stored = await provider.putObject({
+            ...input,
+            organizationId: undefined,
+            taskId: undefined,
+            directory: 'tickets',
+        });
+
+        expect(stored.key).toMatch(/^tickets\//);
+        expect(stored.url).toBe('');
+        expect(writeFile).toHaveBeenCalledWith(
+            resolve('storage/test-private', stored.key),
+            input.buffer,
+        );
+    });
+
     it('keeps ordinary public local uploads and URLs working', async () => {
         const { config, settings, input } = fixture();
         const provider = new LocalStorageProvider(config, settings as never);
         const stored = await provider.putObject({
             ...input,
             visibility: 'PUBLIC',
-            publicUpload: true,
+            directory: 'avatars',
         });
+        expect(stored.key).toMatch(/^avatars\//);
         expect(writeFile).toHaveBeenCalledWith(
             resolve('storage/test-public', stored.key),
             input.buffer,
         );
-        expect(stored.url).toBe(`https://public.test/${stored.key}`);
+        expect(stored.url).toBe(
+            `https://public.test/storage/public/${stored.key}`,
+        );
         await expect(
             provider.getDownload(stored.key, null, 'PUBLIC'),
         ).resolves.toEqual({ type: 'redirect', url: stored.url });
+    });
+
+    it('links public objects through the mounted static path', async () => {
+        // No site root configured: the link stays relative so the browser can
+        // resolve it against whatever host served the page.
+        const relative = fixture({}, { 'storage.publicBaseUrl': '' });
+        const relativeProvider = new LocalStorageProvider(
+            relative.config,
+            relative.settings as never,
+        );
+        const relativeStored = await relativeProvider.putObject({
+            ...relative.input,
+            visibility: 'PUBLIC',
+            directory: 'uploads',
+        });
+        expect(relativeStored.url).toBe(
+            `/storage/public/${relativeStored.key}`,
+        );
+
+        // A site root that already ends with the mount path is not doubled.
+        const prefixed = fixture(
+            {},
+            { 'storage.publicBaseUrl': 'https://cdn.test/storage/public' },
+        );
+        const prefixedProvider = new LocalStorageProvider(
+            prefixed.config,
+            prefixed.settings as never,
+        );
+        const prefixedStored = await prefixedProvider.putObject({
+            ...prefixed.input,
+            visibility: 'PUBLIC',
+            directory: 'uploads',
+        });
+        expect(prefixedStored.url).toBe(
+            `https://cdn.test/storage/public/${prefixedStored.key}`,
+        );
+    });
+
+    it('routes reads and deletes by key, not by the caller visibility', async () => {
+        const { config, settings, input } = fixture();
+        const provider = new LocalStorageProvider(config, settings as never);
+        const stored = await provider.putObject({
+            ...input,
+            organizationId: undefined,
+            taskId: undefined,
+            directory: 'tickets',
+        });
+
+        // A private key never redirects, even if a caller labelled it PUBLIC.
+        await expect(
+            provider.getDownload(stored.key, null, 'PUBLIC'),
+        ).resolves.toEqual(expect.objectContaining({ type: 'stream' }));
+        expect(createReadStream).toHaveBeenLastCalledWith(
+            resolve('storage/test-private', stored.key),
+        );
+
+        // A public key redirects to the static host serving the public root,
+        // while its delete still resolves inside that root.
+        await expect(
+            provider.getDownload('avatars/2026/10/a.png', null, 'PUBLIC'),
+        ).resolves.toEqual({
+            type: 'redirect',
+            url: 'https://public.test/storage/public/avatars/2026/10/a.png',
+        });
+
+        await provider.deleteObject(stored.key);
+        expect(unlink).toHaveBeenCalledWith(
+            resolve('storage/test-private', stored.key),
+        );
+        await provider.deleteObject('avatars/2026/10/a.png');
+        expect(unlink).toHaveBeenLastCalledWith(
+            resolve('storage/test-public/avatars/2026/10/a.png'),
+        );
     });
 
     it.each(['storage/test-public', 'storage/test-public/nested', 'storage'])(

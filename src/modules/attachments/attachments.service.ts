@@ -16,9 +16,12 @@ import { SaveAttachmentDto } from './dto';
 import { AttachmentEntity, PublicUploadEntity } from './entities';
 import { StorageService } from './storage';
 import {
+    isPrivateDirectory,
+    isPrivateObjectKey,
     isPublicUploadKey,
     isTaskUploadKey,
-    normalizeUserUploadDirectory,
+    normalizeUploadDirectory,
+    UPLOADS_DIRECTORY,
 } from './storage/filename.util';
 import { SettingsService } from '../settings';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
@@ -208,11 +211,17 @@ export class AttachmentsService {
         }
 
         await this.validateFile(file);
-        const uploadDirectory = normalizeUserUploadDirectory(userId, directory);
-        if (
-            uploadDirectory.toLowerCase() === 'organizations' ||
-            uploadDirectory.toLowerCase().startsWith('organizations/')
-        ) {
+        const uploadDirectory = normalizeUploadDirectory(
+            directory,
+            UPLOADS_DIRECTORY,
+        );
+        // `tickets` is the one private directory a general upload may target:
+        // a ticket file is uploaded before it is claimed. Every other private
+        // prefix belongs to the task flow and must not be writable here.
+        const privateUpload = isPrivateDirectory(uploadDirectory);
+        const isTicketUpload =
+            uploadDirectory.split('/')[0] === TICKET_UPLOAD_DIRECTORY;
+        if (privateUpload && !isTicketUpload) {
             throw new BadRequestException('Reserved attachment directory');
         }
 
@@ -222,12 +231,11 @@ export class AttachmentsService {
             filename: file.originalname,
             mimeType,
             size: file.size,
-            organizationId: 'public',
-            taskId: 'public',
             uploadedById: userId,
             directory: uploadDirectory,
-            publicUpload: true,
-            visibility: 'PUBLIC',
+            // `visibility` picks the root: ticket files are private and only
+            // reachable through a signed link, everything else is publishable.
+            visibility: privateUpload ? 'PRIVATE' : 'PUBLIC',
         });
 
         // The row exists before any business flow claims it. A ticket can then
@@ -244,7 +252,7 @@ export class AttachmentsService {
                 bucket: stored.bucket ?? null,
                 checksum: stored.checksum ?? null,
                 source: 'UPLOAD',
-                visibility: 'PUBLIC',
+                visibility: privateUpload ? 'PRIVATE' : 'PUBLIC',
                 uploadedById: userId,
             },
         });
@@ -257,14 +265,15 @@ export class AttachmentsService {
             directory: uploadDirectory,
             bucket: attachment.bucket ?? undefined,
             fileKey: stored.key,
-            url: await this.objectUrls.toObjectUrl(
-                stored.key,
-                stored.provider,
-                // Ticket files always ship as a signed link; other directories
-                // (avatars, brand images) keep whatever the storage layer gave
-                // us, because those URLs are persisted by the caller.
-                uploadDirectory === TICKET_UPLOAD_DIRECTORY ? null : stored.url,
-            ),
+            url: privateUpload
+                ? await this.objectUrls.toObjectUrl(
+                      stored.key,
+                      stored.provider,
+                      // Never trust the provider's public URL here: a ticket
+                      // file must come back through the signed endpoint.
+                      null,
+                  )
+                : await this.objectUrls.toPublicUrl(stored.key, stored.url),
             checksum: attachment.checksum ?? undefined,
             uploadedById: userId,
         });
@@ -367,16 +376,24 @@ export class AttachmentsService {
      *  - a valid signed link — the API only signs keys for callers allowed to
      *    read them, so the link stands in for an Authorization header that an
      *    `<img src>` / `<a href>` can never send;
+     *  - a key that is public by design (an avatar or brand image, outside
+     *    `tickets/`) — those URLs are handed out unsigned and are meant to be
+     *    opened by anyone holding them;
      *  - a Bearer token whose user may read the attachment.
      */
     async getPublicObjectDownload(query: PublicObjectQuery, bearer?: string) {
-        if (!this.isSignedRequest(query)) {
+        const signed = this.isSignedRequest(query);
+        if (!signed && !this.isAnonymousReadableKey(query.key)) {
             const user = await this.requireBearerUser(bearer);
             await this.assertObjectAccess(query.key, user);
         }
 
         const storageProvider =
             query.provider ?? (await this.storage.activeProviderName());
+        // The key decides the space: `attachments/` and `tickets/` objects live
+        // in the private root (and private bucket), everything else is
+        // publishable. Callers never have to know where the object came from.
+        const visibility = isPrivateObjectKey(query.key) ? 'PRIVATE' : 'PUBLIC';
 
         return {
             filename: this.filenameFromKey(query.key),
@@ -385,11 +402,13 @@ export class AttachmentsService {
                 storageProvider,
                 query.key,
                 query.bucket,
-                'PUBLIC',
-                // This endpoint is the signed link target: it must stream from
-                // the storage itself instead of bouncing to a public base URL
-                // that may not map onto the storage root.
-                { followPublicUrl: false },
+                visibility,
+                // A signed link is the target of a permission check, so it must
+                // stream from the storage itself instead of bouncing to a public
+                // base URL that may not map onto the storage root. A public key
+                // may redirect: whoever configured `storage.publicBaseUrl` has
+                // already published that root.
+                { followPublicUrl: !signed },
             ),
         };
     }
@@ -504,6 +523,16 @@ export class AttachmentsService {
     }
 
     /**
+     * Keys the object endpoint serves to anyone: publishable keys (avatars,
+     * brand images, custom public directories). Ticket and task files live in
+     * the private space, so they always need a signature or a signed-in
+     * participant even though the same endpoint serves them.
+     */
+    private isAnonymousReadableKey(key: string): boolean {
+        return isPublicUploadKey(key);
+    }
+
+    /**
      * Verifies a raw bearer token on the public object endpoint. That route is
      * `@Public()` so browsers can open signed links, which means the guard no
      * longer resolves the caller and it has to happen here.
@@ -537,8 +566,9 @@ export class AttachmentsService {
      * Who may read an object when no signature vouches for the caller:
      *  - ticket attachment: the uploader, the ticket author, the reply author or
      *    a platform operator; internal notes only for uploader / operators;
-     *  - unclaimed upload: its owner, or anyone while it sits outside `tickets/`
-     *    (avatars and other general uploads keep their old behaviour).
+     *  - unclaimed upload: its owner, or anyone while it is public (`avatars`,
+     *    `uploads`, …). Ticket and task objects sit in the private space and
+     *    stay restricted.
      */
     private async assertObjectAccess(
         key: string,
@@ -570,12 +600,7 @@ export class AttachmentsService {
 
         if (!record.ticketId && !record.ticketReplyId) {
             if (isUploader || isOperator) return;
-            if (
-                isPublicUploadKey(key) &&
-                !key.startsWith(`${TICKET_UPLOAD_DIRECTORY}/`)
-            ) {
-                return;
-            }
+            if (this.isAnonymousReadableKey(key)) return;
             throw new ForbiddenException('Object key is not accessible');
         }
 

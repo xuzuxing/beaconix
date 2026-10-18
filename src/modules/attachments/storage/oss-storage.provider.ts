@@ -17,7 +17,7 @@ import {
     PutObjectResult,
     StorageVisibility,
 } from './storage.types';
-import { buildObjectKey, buildPublicObjectKey } from './filename.util';
+import { buildPrivateObjectKey, buildPublicObjectKey } from './filename.util';
 
 /**
  * Effective OSS configuration. Values come from the `storage.oss.*` settings
@@ -57,21 +57,23 @@ export class OssStorageProvider implements AttachmentStorageProvider {
     async putObject(input: PutObjectInput): Promise<PutObjectResult> {
         const { client, config } = await this.resolved();
         const objectId = randomUUID();
-        const publicUpload =
-            input.visibility === 'PUBLIC' && input.publicUpload === true;
-        const bucket = publicUpload
+        const isPublic = input.visibility === 'PUBLIC';
+        // Public and private live in separate buckets and separate key spaces;
+        // `visibility` picks both, so a public key can never end up in the
+        // private bucket or vice versa.
+        const bucket = isPublic
             ? this.requireBucket(config)
             : this.requirePrivateBucket(config);
-        const key = publicUpload
+        const key = isPublic
             ? buildPublicObjectKey({
-                  userId: input.uploadedById ?? 'unknown',
                   directory: input.directory,
                   objectId,
                   filename: input.filename,
               })
-            : buildObjectKey({
+            : buildPrivateObjectKey({
                   organizationId: input.organizationId,
                   taskId: input.taskId,
+                  directory: input.directory,
                   objectId,
                   filename: input.filename,
               });
@@ -86,11 +88,13 @@ export class OssStorageProvider implements AttachmentStorageProvider {
                 Body: input.buffer,
                 ContentLength: input.size,
                 ContentType: input.mimeType,
-                ACL: publicUpload ? undefined : 'private',
+                ACL: isPublic ? undefined : 'private',
                 Metadata: {
                     checksum,
-                    taskId: input.taskId,
-                    organizationId: input.organizationId,
+                    ...(input.taskId ? { taskId: input.taskId } : {}),
+                    ...(input.organizationId
+                        ? { organizationId: input.organizationId }
+                        : {}),
                     ...(input.uploadedById
                         ? { uploadedById: input.uploadedById }
                         : {}),
@@ -102,7 +106,7 @@ export class OssStorageProvider implements AttachmentStorageProvider {
             provider: 'OSS',
             bucket,
             key,
-            url: publicUpload ? await this.publicUrl(key) : '',
+            url: isPublic ? await this.publicUrl(key) : '',
             checksum,
         };
     }
@@ -125,14 +129,16 @@ export class OssStorageProvider implements AttachmentStorageProvider {
         const { client, config } = await this.resolved();
         const publicUrl =
             visibility === 'PUBLIC' ? await this.publicUrl(key) : '';
-        if (visibility === 'PRIVATE' && bucket !== config.privateBucket) {
+        // One trusted bucket per visibility: a private read without an explicit
+        // bucket is the default case (signed links carry no bucket), and it must
+        // resolve to the private bucket rather than fail closed.
+        const trustedBucket =
+            visibility === 'PRIVATE'
+                ? this.requirePrivateBucket(config)
+                : this.requireBucket(config);
+        if (bucket && bucket !== trustedBucket) {
             throw new BadRequestException(
-                'Private attachment bucket is not trusted',
-            );
-        }
-        if (visibility === 'PUBLIC' && bucket && bucket !== config.bucket) {
-            throw new BadRequestException(
-                'Public attachment bucket is not trusted',
+                'Attachment bucket locator is not trusted',
             );
         }
         if (publicUrl) {
@@ -147,7 +153,7 @@ export class OssStorageProvider implements AttachmentStorageProvider {
         const url = await getSignedUrl(
             client,
             new GetObjectCommand({
-                Bucket: bucket || this.requireBucket(config),
+                Bucket: bucket || trustedBucket,
                 Key: key,
             }),
             { expiresIn: Math.max(1, Math.min(300, signedUrlTtlSeconds)) },

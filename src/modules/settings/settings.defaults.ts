@@ -307,7 +307,10 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         group: 'storage',
         value: '',
         valueType: SettingValueType.STRING,
-        description: '可选：本地附件对象的公网基础地址，留空则由接口流式下载。',
+        description:
+            '可选：站点根地址（如 https://api.example.com）。公开附件 URL = ' +
+            '该地址 + /storage/public/<key>；留空则返回相对路径 ' +
+            '/storage/public/<key>。',
         url: true,
     },
     {
