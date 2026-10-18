@@ -2,6 +2,7 @@ import { mockProjectAccess } from '../../common/authorization/access-test.fixtur
 import { NotFoundException } from '@nestjs/common';
 import { CheckSource, MonitorStatus } from '../../generated/prisma/enums';
 import { deriveState, StateService } from './state.service';
+import type { SettledRoundVerdict } from './state.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { AlertEventsService } from '../alert-events/alert-events.service';
 
@@ -16,6 +17,7 @@ const monitorRow = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    probeSuccessRatio: 1,
     checkSsl: false,
     sslExpiryThreshold: 30,
     enabled: true,
@@ -54,6 +56,8 @@ function createService() {
             count: jest.fn(),
             aggregate: jest.fn(),
             findUnique: jest.fn(),
+            update: jest.fn().mockResolvedValue({}),
+            updateMany: jest.fn().mockResolvedValue({ count: 0 }),
         },
         $queryRaw: jest.fn(),
         $transaction: jest.fn(),
@@ -119,6 +123,232 @@ describe('deriveState', () => {
 });
 
 describe('StateService', () => {
+    describe('settle', () => {
+        const roundId = 'monitor-1:1700000000000';
+        const pendingLog = {
+            id: 'log-1',
+            monitorId: 'monitor-1',
+            roundId,
+            appliedAt: null,
+            observationId: 'obs-1',
+            evaluated: true,
+            checkedAt: new Date('2026-03-05T12:00:00.000Z'),
+            meta: {
+                aggregation: { protected: false, protectedReason: null },
+            },
+        };
+
+        function roundVerdict(
+            overrides: Partial<SettledRoundVerdict> = {},
+        ): SettledRoundVerdict {
+            return {
+                roundId,
+                success: true,
+                error: null,
+                latency: 12,
+                statusCode: 200,
+                localSuccess: true,
+                rescuedByProbe: false,
+                failureKind: null,
+                serviceVerdict: 'SUCCESS',
+                localServiceVerdict: 'SUCCESS',
+                ruleMatched: false,
+                ruleGroupIds: [],
+                aggregation: {
+                    protected: false,
+                    protectedReason: null,
+                    effectiveProbeCount: 2,
+                    sampleCount: 2,
+                    successCount: 2,
+                    ratio: 100,
+                    threshold: 100,
+                    decision: 'CONFIRMED_SUCCESS',
+                    settledAt: '2026-03-05T12:00:00.000Z',
+                },
+                configRevision: 1,
+                revision: 1,
+                ...overrides,
+            };
+        }
+
+        it('folds a settled batch into the state row and marks the log applied', async () => {
+            const { service, prisma, alerts } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                configRevision: 1,
+                state: { ...stateRow, failCount: 2, connectivityFailCount: 2 },
+            });
+            prisma.checkLog.findUnique.mockResolvedValue(pendingLog);
+            prisma.monitorState.upsert.mockResolvedValue(stateRow);
+
+            const settled = await service.settle(
+                'monitor-1',
+                roundId,
+                roundVerdict(),
+            );
+
+            expect(settled?.transition).toMatchObject({
+                status: 'UP',
+                failCount: 0,
+                changed: true,
+            });
+            expect(prisma.checkLog.update).toHaveBeenCalledWith({
+                where: { id: 'log-1' },
+                data: expect.objectContaining({
+                    success: true,
+                    appliedAt: expect.any(Date),
+                    meta: expect.objectContaining({
+                        aggregation: expect.objectContaining({
+                            decision: 'CONFIRMED_SUCCESS',
+                        }),
+                    }),
+                }),
+            });
+            const stateData =
+                prisma.monitorState.upsert.mock.calls[0][0].update;
+            expect(stateData).toMatchObject({
+                status: 'UP',
+                failCount: 0,
+                connectivityFailCount: 0,
+                lastAppliedObservationAt: expect.any(Date),
+            });
+            // Settling must not move the local scheduling anchor.
+            expect(stateData.lastLocalCheckAt).toBeUndefined();
+            expect(alerts.record).toHaveBeenCalledTimes(1);
+            expect(alerts.record.mock.calls[0][4].connectivityFailCount).toBe(
+                0,
+            );
+        });
+
+        it('counts a vetoed round as one connectivity failure', async () => {
+            const { service, prisma, alerts } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                configRevision: 1,
+                state: { ...stateRow, status: 'UP', connectivityFailCount: 0 },
+            });
+            prisma.checkLog.findUnique.mockResolvedValue(pendingLog);
+            prisma.monitorState.upsert.mockResolvedValue({
+                ...stateRow,
+                status: 'DEGRADED',
+                failCount: 1,
+            });
+
+            const settled = await service.settle(
+                'monitor-1',
+                roundId,
+                roundVerdict({
+                    success: false,
+                    error: 'Probe success ratio 1/2 below 100%',
+                    failureKind: 'AGGREGATE',
+                    serviceVerdict: 'FAILURE',
+                    aggregation: {
+                        ...roundVerdict().aggregation,
+                        successCount: 1,
+                        decision: 'OVERTURNED',
+                    },
+                }),
+            );
+
+            expect(settled?.transition).toMatchObject({
+                status: 'DEGRADED',
+                failCount: 1,
+            });
+            expect(alerts.record.mock.calls[0][4].connectivityFailCount).toBe(
+                1,
+            );
+            expect(prisma.checkLog.update.mock.calls[0][0].data).toMatchObject({
+                failureKind: 'AGGREGATE',
+                serviceVerdict: 'FAILURE',
+                rescuedByProbe: false,
+            });
+        });
+
+        it('reports the batch to the alert evaluator without notifying on a single failure', async () => {
+            const { service, prisma, alerts } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                configRevision: 1,
+                failureThreshold: 3,
+                state: { ...stateRow, status: 'UP', connectivityFailCount: 0 },
+            });
+            prisma.checkLog.findUnique.mockResolvedValue(pendingLog);
+            prisma.monitorState.upsert.mockResolvedValue({
+                ...stateRow,
+                status: 'DEGRADED',
+                failCount: 1,
+            });
+
+            const settled = await service.settle(
+                'monitor-1',
+                roundId,
+                roundVerdict({ success: false, serviceVerdict: 'FAILURE' }),
+            );
+
+            // The alert evaluator receives the derived counters; with
+            // connectivityFailCount 1 < 3 it opens no CONNECTIVITY event.
+            expect(alerts.record.mock.calls[0][4]).toMatchObject({
+                failCount: 1,
+                connectivityFailCount: 1,
+            });
+            expect(settled?.deliveries).toBe(0);
+        });
+
+        it('drops a batch that already settled', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                state: stateRow,
+            });
+            prisma.checkLog.findUnique.mockResolvedValue({
+                ...pendingLog,
+                appliedAt: new Date(),
+            });
+
+            expect(
+                await service.settle('monitor-1', roundId, roundVerdict()),
+            ).toBeNull();
+            expect(prisma.monitorState.upsert).not.toHaveBeenCalled();
+        });
+
+        it('drops a batch whose definition changed while it was open', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                configRevision: 2,
+                state: stateRow,
+            });
+            prisma.checkLog.findUnique.mockResolvedValue(pendingLog);
+
+            expect(
+                await service.settle('monitor-1', roundId, roundVerdict()),
+            ).toBeNull();
+            expect(prisma.checkLog.update).not.toHaveBeenCalled();
+        });
+
+        it('marks rows of older unsettled batches as applied', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                configRevision: 1,
+                state: stateRow,
+            });
+            prisma.checkLog.findUnique.mockResolvedValue(pendingLog);
+            prisma.monitorState.upsert.mockResolvedValue(stateRow);
+
+            await service.settle('monitor-1', roundId, roundVerdict());
+
+            expect(prisma.checkLog.updateMany).toHaveBeenCalledWith({
+                where: {
+                    monitorId: 'monitor-1',
+                    appliedAt: null,
+                    roundId: { not: null, notIn: [roundId] },
+                },
+                data: { appliedAt: expect.any(Date) },
+            });
+        });
+    });
+
     describe('record', () => {
         it('does not let a legacy future probe timestamp freeze local state', async () => {
             const { service, prisma } = createService();

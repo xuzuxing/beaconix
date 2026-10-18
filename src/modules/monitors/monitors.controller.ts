@@ -25,7 +25,7 @@ import {
     ApiServiceUnavailableResponse,
 } from '@nestjs/swagger';
 import { MonitorsService } from './monitors.service';
-import { CreateMonitorDto, UpdateMonitorDto } from './dto';
+import { CreateMonitorDto, SetMonitorProbesDto, UpdateMonitorDto } from './dto';
 import { MonitorEntity } from './entities';
 import { AuditLog } from '../../common/decorators';
 import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
@@ -135,6 +135,37 @@ export class MonitorsController {
         @CurrentPrincipal() principal: AccessPrincipal,
     ) {
         return this.monitorsService.update(projectId, id, dto, principal);
+    }
+
+    @Patch(':id/probes')
+    @AuditLog({ entity: 'Monitor', action: 'ASSIGN' })
+    @ApiOperation({
+        summary: 'Assign the tenant probes of this monitor (replaces the set)',
+    })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'id', description: 'Monitor CUID' })
+    @ApiBody({ type: SetMonitorProbesDto })
+    @ApiOkResponse({
+        type: MonitorEntity,
+        description: 'Probe assignments replaced',
+    })
+    @ApiBadRequestResponse({
+        description:
+            'Validation failed, or a probe does not belong to this organization',
+    })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({
+        description:
+            'Insufficient role, or the plan per-monitor probe limit is exceeded',
+    })
+    @ApiNotFoundResponse({ description: 'Monitor not found' })
+    async setProbes(
+        @Param('projectId') projectId: string,
+        @Param('id') id: string,
+        @Body() dto: SetMonitorProbesDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.monitorsService.setProbes(projectId, id, dto, principal);
     }
 
     @Post(':id/pause')

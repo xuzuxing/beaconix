@@ -3,7 +3,9 @@ import {
     Injectable,
     Logger,
     NotFoundException,
+    Optional,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { PrismaService } from '../../infra/database/prisma.service';
 import {
@@ -12,10 +14,15 @@ import {
     ExecutionTrigger,
     MonitorType,
 } from '../../generated/prisma/enums';
-import type { MonitorModel } from '../../generated/prisma/models';
+import type {
+    MonitorModel,
+    MonitorStateModel,
+    ProbeResultModel,
+} from '../../generated/prisma/models';
 import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
-import type { Prisma } from '../../generated/prisma/client';
+import { Prisma } from '../../generated/prisma/client';
 import { StateService } from '../state/state.service';
+import type { AppliedAggregation } from '../state/state.service';
 import { NotifierService } from '../notifier/notifier.service';
 import type { NotificationResult } from '../notifier/notifier.service';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
@@ -25,11 +32,24 @@ import type { RuleContext, RuleNode } from '../rules/types';
 import { CheckerRegistry } from './checker.registry';
 import { QuotaService } from '../../shared/quota/quota.service';
 import type { MonitorPolicy } from '../../shared/quota/quota.service';
-import type { CheckResult, ProbeReport } from './checkers';
+import type {
+    CheckFailureKind,
+    CheckMetadata,
+    CheckResult,
+    ProbeReport,
+} from './checkers';
 import { QueryCheckLogsDto } from './dto';
 import { CheckLogEntity } from './entities';
-import { MONITOR_CHECK_DEDUP_PREFIX, MONITOR_CHECK_JOB } from './checker.queue';
-import type { MonitorCheckJobData } from './checker.queue';
+import {
+    MONITOR_CHECK_DEDUP_PREFIX,
+    MONITOR_CHECK_JOB,
+    MONITOR_CHECK_QUEUE,
+    MONITOR_SETTLE_JOB,
+} from './checker.queue';
+import type {
+    MonitorCheckJobData,
+    MonitorSettleJobData,
+} from './checker.queue';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { monitoringProjection } from '../../common/authorization/monitoring-projection';
@@ -39,10 +59,10 @@ const PROBE_RESULT_MIN_WINDOW_MS = 2 * 60 * 1000;
 const PROBE_RESULT_MAX_WINDOW_MS = 15 * 60 * 1000;
 
 /**
- * How long a probe report stays usable when the local check failed. It scales
- * with the monitor interval - a 5 minute monitor cannot be judged by probes
- * that also report every 5 minutes if we only look back 2 minutes - but stays
- * bounded so an ancient report never decides for a long interval.
+ * How long a probe report stays usable for a batch. It scales with the monitor
+ * interval - a 5 minute monitor cannot be judged by probes that also report
+ * every 5 minutes if we only look back 2 minutes - but stays bounded so an
+ * ancient report never decides for a long interval.
  */
 export function probeResultWindowMs(intervalSeconds: number): number {
     const scaled = intervalSeconds * 1000 * PROBE_RESULT_WINDOW_INTERVALS;
@@ -58,13 +78,13 @@ const PROBE_REPORT_DEDUP_MAX_MS = 30 * 1000;
 const PROBE_REPORT_DEDUP_INTERVALS = 4;
 
 /**
- * Probe reports for the same monitor arriving closer together than this are
- * treated as one round and folded into the state only once: several probes can
- * cover the same target, and an agent that restarted reports again immediately.
+ * How long probe reports for the same monitor are treated as one round. Stays
+ * well below the interval, so a probe reporting on its own schedule is never
+ * suppressed.
  *
- * The window is a fraction of the monitor interval and stays well below it, so a
- * probe reporting on its own schedule is never suppressed. Raw rows still land in
- * `probe_results`, so a later local check still sees the full picture.
+ * With batches the aggregation itself is idempotent (`CheckLog.appliedAt`), so
+ * this window now only bounds how long a late report may still join the open
+ * batch.
  */
 export function probeReportDedupWindowMs(intervalSeconds: number): number {
     const scaled = (intervalSeconds * 1000) / PROBE_REPORT_DEDUP_INTERVALS;
@@ -73,6 +93,20 @@ export function probeReportDedupWindowMs(intervalSeconds: number): number {
         Math.max(scaled, PROBE_REPORT_DEDUP_MIN_MS),
         PROBE_REPORT_DEDUP_MAX_MS,
     );
+}
+
+/** Batch id anchored at the local check start; probes join the open batch. */
+export function buildRoundId(monitorId: string, startedAt: Date): string {
+    return `${monitorId}:${startedAt.getTime()}`;
+}
+
+/**
+ * How long after its start a batch still accepts probe reports: one interval
+ * plus the fold window, so a report that arrives late is not attributed
+ * retroactively.
+ */
+export function roundAttributionWindowMs(intervalSeconds: number): number {
+    return intervalSeconds * 1000 + probeReportDedupWindowMs(intervalSeconds);
 }
 
 export interface CheckExecution extends CheckResult {
@@ -89,10 +123,17 @@ export type DueMonitor = MonitorModel & {
     state?: { lastLocalCheckAt: Date | null } | null;
 };
 
-/** The aggregated verdict plus whether a probe overrode a local failure. */
-interface EvaluatedResult {
-    result: CheckResult;
-    rescuedByProbe: boolean;
+/** One latest valid probe observation: each probe gets at most one vote. */
+type ProbeVerdictSample = Pick<
+    ProbeResultModel,
+    'id' | 'probeId' | 'success' | 'checkedAt' | 'receivedAt'
+>;
+
+interface TenantProbeVerdict {
+    /** Currently bound, enabled and online tenant probes: the ratio denominator. */
+    effectiveProbeCount: number;
+    /** One latest valid sample per tenant probe. */
+    samples: ProbeVerdictSample[];
 }
 
 /** Rule-tree verdict for one check round: matched = abnormal. */
@@ -100,6 +141,21 @@ interface RuleOutcome {
     ruleMatched: boolean;
     ruleGroupIds: string[];
     ruleEvidence?: Prisma.InputJsonValue[];
+}
+
+/** Why a batch cannot be judged by probes and settles with the local verdict. */
+type AggregationGuards = {
+    protected: boolean;
+    protectedReason:
+        'LEGACY_UNSUPPORTED' | 'UNEVALUATED' | 'ASSERTION' | 'SSL' | null;
+};
+
+export type SettleOutcome =
+    'SETTLED' | 'DUPLICATE' | 'PENDING' | 'NOT_FOUND' | 'NOT_READY';
+
+export interface RoundSettlement {
+    outcome: SettleOutcome;
+    execution: CheckExecution | null;
 }
 
 @Injectable()
@@ -116,6 +172,11 @@ export class CheckerService {
         private readonly ruleEvaluator: RuleEvaluatorService,
         private readonly ruleGroups: RuleGroupsService,
         private readonly access: ProjectAccessService,
+        @Optional()
+        @InjectQueue(MONITOR_CHECK_QUEUE)
+        private readonly checkQueue?: Queue<
+            MonitorCheckJobData | MonitorSettleJobData
+        >,
     ) {}
 
     /** Runs a check for one monitor of a project (tenant-scoped entry). */
@@ -167,12 +228,7 @@ export class CheckerService {
             monitor.interval,
         );
 
-        const result = await this.execute(
-            monitor,
-            CheckSource.LOCAL,
-            undefined,
-            ExecutionTrigger.MANUAL,
-        );
+        const result = await this.execute(monitor, ExecutionTrigger.MANUAL);
         const current = await this.access.project(
             principal,
             projectId,
@@ -203,6 +259,13 @@ export class CheckerService {
         return this.ingestProbeReportForMonitor(monitors[0].id, report);
     }
 
+    /**
+     * Tries to settle the monitor's open batch after a probe report landed.
+     *
+     * The report itself is already stored as a `ProbeResult` row (with its
+     * `roundId`); this path never appends a CheckLog row, it only closes the
+     * batch once enough probes reported.
+     */
     async ingestProbeReportForMonitor(
         monitorId: string,
         report: ProbeReport,
@@ -224,72 +287,27 @@ export class CheckerService {
         );
         if (!eligibility.eligible) return null;
 
-        const localLog = await this.prisma.checkLog.findFirst({
+        // The open batch is the local row that has not been settled yet.
+        const open = await this.prisma.checkLog.findFirst({
             where: {
                 monitorId: monitor.id,
-                source: CheckSource.LOCAL,
-                configRevision: monitor.configRevision,
+                roundId: { not: null },
+                appliedAt: null,
             },
-            orderBy: { checkedAt: 'desc' },
+            orderBy: [{ checkedAt: 'desc' }, { id: 'desc' }],
         });
 
-        if (!localLog) return null;
+        if (!open?.roundId) return null;
+        if (open.configRevision !== monitor.configRevision) return null;
         if (
-            localLog.evaluated === false ||
-            (localLog.revision !== undefined &&
-                localLog.revision !== monitor.revision) ||
-            localLog.failureKind === 'ASSERTION'
+            open.evaluated === false ||
+            open.failureKind === 'ASSERTION' ||
+            open.revision !== monitor.revision
         )
             return null;
 
-        // Reports inside one round are folded once. The raw ProbeResult rows are
-        // already stored, so the next local check still aggregates all of them -
-        // only the duplicated CheckLog row and state transition are skipped.
-        const lastProbeLog = await this.prisma.checkLog.findFirst({
-            where: { monitorId: monitor.id, source: CheckSource.PROBE },
-            orderBy: { checkedAt: 'desc' },
-            select: { checkedAt: true },
-        });
-
-        if (
-            lastProbeLog &&
-            Date.now() - lastProbeLog.checkedAt.getTime() <
-                probeReportDedupWindowMs(monitor.interval)
-        ) {
-            return null;
-        }
-
-        return this.execute(
-            monitor,
-            CheckSource.PROBE,
-            {
-                success: localLog.localSuccess ?? localLog.success,
-                latency: localLog.latency,
-                error: localLog.error,
-                // Legacy agent clocks are not trusted for local state ordering.
-                checkedAt: new Date(),
-                statusCode: report.statusCode ?? localLog.statusCode ?? null,
-                configRevision: report.configRevision,
-                observationId: report.observationId,
-                probeResultId: report.probeResultId,
-                serviceVerdict:
-                    (localLog.localServiceVerdict as CheckResult['serviceVerdict']) ??
-                    (localLog.sslVerdict === 'INVALID'
-                        ? 'NO_EVIDENCE'
-                        : localLog.sslVerdict &&
-                            ['EXPIRING', 'EXPIRED'].includes(
-                                localLog.sslVerdict,
-                            )
-                          ? 'SUCCESS'
-                          : (localLog.localSuccess ?? localLog.success)
-                            ? 'SUCCESS'
-                            : 'FAILURE'),
-                sslVerdict:
-                    (localLog.sslVerdict as CheckResult['sslVerdict']) ??
-                    undefined,
-            },
-            ExecutionTrigger.CALLBACK,
-        );
+        const settlement = await this.settleRound(monitor.id, open.roundId);
+        return settlement.execution;
     }
 
     /**
@@ -386,12 +404,7 @@ export class CheckerService {
         );
         if (!eligibility.eligible) return null;
 
-        return this.execute(
-            monitor,
-            CheckSource.LOCAL,
-            undefined,
-            ExecutionTrigger.SCHEDULED,
-        );
+        return this.execute(monitor, ExecutionTrigger.SCHEDULED);
     }
 
     /** Paginated check history of one monitor. */
@@ -451,23 +464,577 @@ export class CheckerService {
         );
     }
 
+    /**
+     * Settles one batch: reads the pending CheckLog row, samples the bound
+     * tenant probes, aggregates, and hands the verdict to `StateService.settle`.
+     *
+     * Exactly one settlement wins per `(monitorId, roundId)`; later calls return
+     * `DUPLICATE`.
+     */
+    async settleRound(
+        monitorId: string,
+        roundId: string,
+        options: { force?: boolean } = {},
+    ): Promise<RoundSettlement> {
+        const log = await this.prisma.checkLog.findUnique({
+            where: { monitorId_roundId: { monitorId, roundId } },
+        });
+        if (!log) return { outcome: 'NOT_FOUND', execution: null };
+        if (log.appliedAt) return { outcome: 'DUPLICATE', execution: null };
+
+        const monitor = await this.prisma.monitor.findFirst({
+            where: { id: monitorId, enabled: true, deletedAt: null },
+            include: { state: true },
+        });
+        if (!monitor) return { outcome: 'NOT_FOUND', execution: null };
+        // A definition change while the batch was open discards it.
+        if (
+            monitor.configRevision !== log.configRevision ||
+            monitor.revision !== log.revision
+        ) {
+            return { outcome: 'DUPLICATE', execution: null };
+        }
+
+        const metaRecord = (log.meta ?? {}) as Record<string, unknown>;
+        const guards = (metaRecord.aggregation ?? {
+            protected: false,
+            protectedReason: null,
+        }) as AggregationGuards;
+
+        const localVerdict = {
+            success: log.localSuccess ?? log.success,
+            error: log.error,
+            failureKind: (log.failureKind as CheckFailureKind | null) ?? null,
+            serviceVerdict: this.serviceVerdictFromLog(log),
+            sslVerdict: (log.sslVerdict as CheckResult['sslVerdict']) ?? null,
+            latency: log.latency,
+            statusCode: log.statusCode,
+            checkedAt: log.checkedAt,
+            evaluated: log.evaluated !== false,
+        };
+
+        let effectiveProbeCount = 0;
+        let samples: ProbeVerdictSample[] = [];
+        if (!guards.protected) {
+            const verdict = await this.fetchTenantProbeVerdict(
+                monitor,
+                roundId,
+                log.checkedAt,
+            );
+            effectiveProbeCount = verdict.effectiveProbeCount;
+            samples = verdict.samples;
+            const ready =
+                effectiveProbeCount === 0 ||
+                samples.length >= effectiveProbeCount;
+            if (!ready && !options.force) {
+                // Not everyone reported yet: close the batch at its deadline.
+                await this.scheduleDeadlineSettlement(
+                    monitor,
+                    roundId,
+                    log.checkedAt,
+                );
+                return { outcome: 'PENDING', execution: null };
+            }
+        }
+
+        const hasVote = !guards.protected && effectiveProbeCount > 0;
+        const evaluation =
+            hasVote && samples.length > 0
+                ? this.evaluateRound(monitor, localVerdict, {
+                      effectiveProbeCount,
+                      samples,
+                  })
+                : null;
+
+        let passed = evaluation ? evaluation.passed : localVerdict.success;
+        const fallbackLocal = evaluation === null;
+        let systemRescue = false;
+
+        if (evaluation === null && effectiveProbeCount === 0) {
+            // No tenant probe is bound: the legacy system probe rescue still
+            // applies to a failing local check.
+            if (
+                !localVerdict.success &&
+                (await this.systemProbeRescue(monitor, log.checkedAt))
+            ) {
+                passed = true;
+                systemRescue = true;
+            }
+        }
+
+        const successCount = evaluation?.successCount ?? 0;
+        const aggregatedError = evaluation?.error ?? null;
+
+        let finalSuccess: boolean;
+        let decision: AppliedAggregation['decision'];
+        let failureKind = localVerdict.failureKind;
+        let serviceVerdict = localVerdict.serviceVerdict;
+        let rescuedByProbe = false;
+
+        if (fallbackLocal) {
+            finalSuccess = passed;
+            failureKind = passed ? null : localVerdict.failureKind;
+            if (passed && systemRescue) {
+                rescuedByProbe = true;
+                decision = 'RESCUED';
+                serviceVerdict = 'SUCCESS';
+            } else {
+                decision = 'FALLBACK_LOCAL';
+            }
+        } else if (passed && localVerdict.success) {
+            finalSuccess = true;
+            failureKind = null;
+            decision = 'CONFIRMED_SUCCESS';
+        } else if (passed) {
+            // A failing local check is rescued by the probe majority.
+            finalSuccess = true;
+            failureKind = null;
+            serviceVerdict = 'SUCCESS';
+            rescuedByProbe = true;
+            decision = 'RESCUED';
+        } else if (localVerdict.success) {
+            // The probes vetoed a successful local check.
+            finalSuccess = false;
+            failureKind = 'AGGREGATE';
+            serviceVerdict = 'FAILURE';
+            decision = 'OVERTURNED';
+        } else {
+            finalSuccess = false;
+            decision = 'CONFIRMED_FAILURE';
+        }
+
+        const error = finalSuccess
+            ? null
+            : (aggregatedError ?? localVerdict.error ?? 'Check failed');
+        const finalResult: CheckResult = {
+            success: finalSuccess,
+            latency: localVerdict.latency,
+            error,
+            checkedAt: localVerdict.checkedAt,
+            statusCode: localVerdict.statusCode,
+            // The local evidence is replayed so the rule tree sees the same
+            // context it saw before the batch closed.
+            bodyContains:
+                (metaRecord.localBodyContains as string | null) ?? null,
+            ssl: this.sslFromMeta(metaRecord),
+            sslVerdict: localVerdict.sslVerdict ?? undefined,
+            evaluated: localVerdict.evaluated,
+            failureKind,
+            meta: this.checkMetadataFrom(metaRecord),
+        };
+
+        // The rule tree runs against the aggregated verdict; the row keeps the
+        // local verdict until the settlement overwrites it.
+        const ruleOutcome = await this.evaluateRuleTree(monitor, finalResult);
+
+        const aggregation: AppliedAggregation = {
+            protected: guards.protected,
+            protectedReason: guards.protectedReason,
+            effectiveProbeCount,
+            sampleCount: samples.length,
+            successCount,
+            ratio:
+                effectiveProbeCount > 0
+                    ? Math.round((successCount * 10000) / effectiveProbeCount) /
+                      100
+                    : finalSuccess
+                      ? 100
+                      : 0,
+            threshold: monitor.probeSuccessRatio,
+            decision,
+            settledAt: new Date().toISOString(),
+        };
+
+        const settled = await this.stateService.settle(monitorId, roundId, {
+            roundId,
+            success: finalSuccess,
+            error,
+            latency: localVerdict.latency,
+            statusCode: localVerdict.statusCode,
+            localSuccess: localVerdict.success,
+            rescuedByProbe,
+            failureKind,
+            serviceVerdict,
+            localServiceVerdict: localVerdict.serviceVerdict,
+            ssl: this.sslFromMeta(metaRecord),
+            sslVerdict: localVerdict.sslVerdict ?? undefined,
+            failureReason: metaRecord.localFailureReason as string | undefined,
+            ruleMatched: ruleOutcome.ruleMatched,
+            ruleGroupIds: ruleOutcome.ruleGroupIds,
+            ruleEvidence: ruleOutcome.ruleEvidence,
+            aggregation,
+            configRevision: monitor.configRevision,
+            revision: monitor.revision,
+        });
+
+        if (!settled) {
+            // Another worker (or a definition change) already closed this batch.
+            return { outcome: 'DUPLICATE', execution: null };
+        }
+
+        const execution: CheckExecution = {
+            ...finalResult,
+            monitorId,
+            previousStatus: settled.transition.previousStatus,
+            status: settled.transition.status,
+            changed: settled.transition.changed,
+            notified: {
+                skipped: !settled.deliveries,
+                sent: settled.deliveries,
+                failed: 0,
+            },
+            applied: true,
+        };
+
+        return { outcome: 'SETTLED', execution };
+    }
+
     // -- Internals -------------------------------------------------------
+
+    /**
+     * Anchors one batch: settles any older open batch of the monitor, appends the
+     * pending CheckLog row that carries the local evidence, and advances only the
+     * scheduling anchors of `MonitorState`.
+     */
+    private async beginRound(input: {
+        monitor: MonitorModel;
+        roundId: string;
+        startedAt: Date;
+        localResult: CheckResult;
+        guards: AggregationGuards;
+        ruleOutcome: RuleOutcome;
+    }): Promise<MonitorStateModel | null> {
+        const {
+            monitor,
+            roundId,
+            startedAt,
+            localResult,
+            guards,
+            ruleOutcome,
+        } = input;
+
+        // The previous batch is due by now; settle it first so `failCount`
+        // advances in batch order.
+        await this.settleStaleRounds(monitor.id, roundId);
+
+        const evaluated = localResult.evaluated !== false;
+        const meta = {
+            ...(localResult.meta ?? {}),
+            ...(localResult.bodyContains
+                ? { localBodyContains: localResult.bodyContains }
+                : {}),
+            ...(localResult.ssl
+                ? {
+                      localSsl: {
+                          expiresAt: localResult.ssl.expiresAt.toISOString(),
+                          daysRemaining: localResult.ssl.daysRemaining,
+                          issuer: localResult.ssl.issuer,
+                          subject: localResult.ssl.subject,
+                      },
+                  }
+                : {}),
+            ...(localResult.failureReason
+                ? { localFailureReason: localResult.failureReason }
+                : {}),
+            ...(ruleOutcome.ruleEvidence
+                ? { ruleEvidence: ruleOutcome.ruleEvidence }
+                : {}),
+            aggregation: {
+                protected: guards.protected,
+                protectedReason: guards.protectedReason,
+            },
+        };
+
+        try {
+            return await this.prisma.$transaction(async (tx) => {
+                await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitor.id} FOR UPDATE`;
+                await tx.checkLog.create({
+                    data: {
+                        monitorId: monitor.id,
+                        monitorRefId: monitor.id,
+                        organizationId: monitor.organizationId,
+                        projectId: monitor.projectId,
+                        monitorType: monitor.type,
+                        configRevision: monitor.configRevision,
+                        serviceVerdict: localResult.serviceVerdict ?? null,
+                        localServiceVerdict: localResult.serviceVerdict ?? null,
+                        sslVerdict: localResult.sslVerdict ?? null,
+                        success: localResult.success,
+                        localSuccess: localResult.success,
+                        rescuedByProbe: false,
+                        latency: localResult.latency,
+                        error: localResult.error,
+                        statusCode: localResult.statusCode ?? null,
+                        ruleMatched: ruleOutcome.ruleMatched,
+                        ruleGroupIds: ruleOutcome.ruleGroupIds,
+                        source: CheckSource.LOCAL,
+                        checkedAt: startedAt,
+                        revision: monitor.revision,
+                        evaluated,
+                        failureKind: localResult.failureKind ?? null,
+                        meta: meta,
+                        roundId,
+                        appliedAt: null,
+                    },
+                });
+
+                // Status, failCount, connectivity and availability are written
+                // by the settlement only: a pending row must not advance them.
+                return tx.monitorState.upsert({
+                    where: { monitorId: monitor.id },
+                    create: {
+                        monitorId: monitor.id,
+                        lastCheckAt: evaluated ? startedAt : null,
+                        lastLocalCheckAt: startedAt,
+                        executionBlockedReason: evaluated
+                            ? null
+                            : localResult.error,
+                    },
+                    update: {
+                        lastCheckAt: evaluated ? startedAt : undefined,
+                        lastLocalCheckAt: startedAt,
+                        executionBlockedReason: evaluated
+                            ? null
+                            : localResult.error,
+                    },
+                });
+            });
+        } catch (caught) {
+            // `(monitorId, roundId)` is unique: a concurrent run anchored the
+            // same batch first.
+            if (
+                caught instanceof Prisma.PrismaClientKnownRequestError &&
+                caught.code === 'P2002'
+            ) {
+                return null;
+            }
+            throw caught;
+        }
+    }
+
+    /** Settles batches of this monitor that an earlier run left open. */
+    private async settleStaleRounds(
+        monitorId: string,
+        currentRoundId: string,
+    ): Promise<void> {
+        const stale = await this.prisma.checkLog.findMany({
+            where: { monitorId, roundId: { not: null }, appliedAt: null },
+            select: { roundId: true },
+        });
+
+        for (const row of stale) {
+            if (!row.roundId || row.roundId === currentRoundId) continue;
+            try {
+                await this.settleRound(monitorId, row.roundId, { force: true });
+            } catch (error) {
+                this.logger.warn(
+                    `Failed to settle stale round ${row.roundId} of monitor ${monitorId}: ${(error as Error).message}`,
+                );
+            }
+        }
+    }
+
+    /**
+     * Currently bound, enabled and online tenant probes (the denominator) plus
+     * one latest valid observation per probe (the votes).
+     *
+     * System probes are not part of the primary set: they are auto-assigned and
+     * only rescue a local failure when no tenant probe is bound.
+     */
+    private async fetchTenantProbeVerdict(
+        monitor: MonitorModel,
+        roundId: string,
+        roundStart: Date,
+    ): Promise<TenantProbeVerdict> {
+        const tenantProbes = await this.prisma.probe.findMany({
+            where: {
+                organizationId: monitor.organizationId,
+                scope: 'TENANT',
+                enabled: true,
+                status: 'ONLINE',
+                monitors: { some: { monitorId: monitor.id } },
+            },
+            select: { id: true },
+        });
+
+        if (tenantProbes.length === 0) {
+            return { effectiveProbeCount: 0, samples: [] };
+        }
+
+        const since = new Date(
+            roundStart.getTime() - probeResultWindowMs(monitor.interval),
+        );
+        const previousRoundId = await this.findPreviousRoundId(
+            monitor.id,
+            roundStart,
+        );
+        const rows = await this.prisma.probeResult.findMany({
+            where: {
+                monitorId: monitor.id,
+                target: monitor.target,
+                configRevision: monitor.configRevision,
+                checkedAt: { gte: since },
+                probeId: { in: tenantProbes.map((probe) => probe.id) },
+                OR: [
+                    { roundId },
+                    ...(previousRoundId ? [{ roundId: previousRoundId }] : []),
+                    { roundId: null },
+                ],
+            },
+            select: {
+                id: true,
+                probeId: true,
+                success: true,
+                checkedAt: true,
+                receivedAt: true,
+            },
+            orderBy: [
+                { checkedAt: 'desc' },
+                { receivedAt: 'desc' },
+                { id: 'desc' },
+            ],
+        });
+
+        // The newest row per probe is that probe's vote; `id` is only a
+        // deterministic tie-break, not a claim about observation order.
+        const latest = new Map<string, ProbeVerdictSample>();
+        for (const row of rows) {
+            if (!latest.has(row.probeId)) latest.set(row.probeId, row);
+        }
+
+        return {
+            effectiveProbeCount: tenantProbes.length,
+            samples: [...latest.values()],
+        };
+    }
+
+    /** Round id of the batch that directly preceded `roundStart`. */
+    private async findPreviousRoundId(
+        monitorId: string,
+        roundStart: Date,
+    ): Promise<string | null> {
+        const previous = await this.prisma.checkLog.findFirst({
+            where: {
+                monitorId,
+                roundId: { not: null },
+                checkedAt: { lt: roundStart },
+            },
+            orderBy: { checkedAt: 'desc' },
+            select: { roundId: true },
+        });
+
+        return previous?.roundId ?? null;
+    }
+
+    /** Integer cross-multiplication: `successCount * 100 >= ratio * N`. */
+    private evaluateRound(
+        monitor: MonitorModel,
+        localVerdict: { success: boolean; error: string | null },
+        verdict: TenantProbeVerdict,
+    ): { passed: boolean; successCount: number; error: string | null } {
+        const successCount = verdict.samples.filter(
+            (sample) => sample.success,
+        ).length;
+        const passed =
+            successCount * 100 >=
+            monitor.probeSuccessRatio * verdict.effectiveProbeCount;
+
+        return {
+            passed,
+            successCount,
+            error: passed
+                ? null
+                : this.buildAggregatedError(
+                      localVerdict,
+                      successCount,
+                      verdict.effectiveProbeCount,
+                      monitor.probeSuccessRatio,
+                  ),
+        };
+    }
+
+    /** Kept for the legacy rescue path: any successful system probe wins. */
+    private async systemProbeRescue(
+        monitor: MonitorModel,
+        roundStart: Date,
+    ): Promise<boolean> {
+        const systemProbeIds =
+            await this.systemProbeScheduler.getAssignedProbes(monitor.id);
+        if (systemProbeIds.length === 0) return false;
+
+        const since = new Date(
+            roundStart.getTime() - probeResultWindowMs(monitor.interval),
+        );
+        const results = await this.prisma.probeResult.findMany({
+            where: {
+                target: monitor.target,
+                monitorId: monitor.id,
+                probeId: { in: systemProbeIds },
+                checkedAt: { gte: since },
+                configRevision: monitor.configRevision,
+                probe: {
+                    scope: 'SYSTEM',
+                    enabled: true,
+                    status: 'ONLINE',
+                },
+            },
+            orderBy: { checkedAt: 'desc' },
+        });
+
+        return results.some((result) => result.success);
+    }
+
+    /** Registers the deadline job that closes a batch nobody completed. */
+    private async scheduleDeadlineSettlement(
+        monitor: MonitorModel,
+        roundId: string,
+        roundStart: Date,
+    ): Promise<void> {
+        if (!this.checkQueue) {
+            this.logger.warn(
+                `No check queue available; round ${roundId} will be settled by the next local check`,
+            );
+            return;
+        }
+
+        const delay = Math.max(
+            roundStart.getTime() + monitor.interval * 1000 - Date.now(),
+            1000,
+        );
+
+        try {
+            await this.checkQueue.add(
+                MONITOR_SETTLE_JOB,
+                { monitorId: monitor.id, roundId },
+                {
+                    // BullMQ rejects ':' in custom job ids.
+                    jobId: `${MONITOR_CHECK_DEDUP_PREFIX}-settle-${roundId.replaceAll(':', '_')}`,
+                    delay,
+                    removeOnComplete: true,
+                    removeOnFail: 100,
+                },
+            );
+        } catch (error) {
+            this.logger.warn(
+                `Failed to schedule settlement of round ${roundId}: ${(error as Error).message}`,
+            );
+        }
+    }
 
     private async execute(
         monitor: MonitorModel,
-        source: CheckSource = CheckSource.LOCAL,
-        reported?: CheckResult,
         trigger: ExecutionTrigger = ExecutionTrigger.SCHEDULED,
     ): Promise<CheckExecution> {
-        const localResult = reported ?? (await this.probe(monitor));
-        const { result, rescuedByProbe } = await this.evaluateResult(
-            monitor,
-            localResult,
-        );
-
+        // The batch is anchored at the server clock read before the local check
+        // starts, so local evidence and probe reports share one window.
+        const startedAt = new Date();
+        const localResult = await this.probe(monitor);
+        const roundId = buildRoundId(monitor.id, startedAt);
+        const guards = this.aggregationGuards(monitor, localResult);
         // Rule tree only produces a verdict (matched = abnormal); it is stored
-        // on the CheckLog row below, then the availability alert consumes it.
-        const ruleOutcome = await this.evaluateRuleTree(monitor, result);
+        // with the local evidence and recomputed once the batch settled.
+        const ruleOutcome = await this.evaluateRuleTree(monitor, localResult);
+
         // A plan can expire while a slow network operation is in flight.
         const eligibility = await this.quotaService.monitorEligibility(
             monitor.organizationId,
@@ -476,7 +1043,7 @@ export class CheckerService {
         );
         if (!eligibility.eligible) {
             return {
-                ...result,
+                ...localResult,
                 evaluated: false,
                 applied: false,
                 failureKind: 'POLICY',
@@ -489,80 +1056,61 @@ export class CheckerService {
             };
         }
 
-        const recorded = await this.stateService.record(monitor.id, {
-            success: result.success,
-            latency: result.latency,
-            error: result.error,
-            source,
-            checkedAt: result.checkedAt,
-            ssl: result.ssl,
-            localSuccess: localResult.success,
-            rescuedByProbe,
-            statusCode: result.statusCode ?? null,
-            configRevision: reported?.configRevision ?? monitor.configRevision,
-            observationId: reported?.observationId,
-            probeResultId: reported?.probeResultId,
-            serviceVerdict: result.serviceVerdict ?? localResult.serviceVerdict,
-            localServiceVerdict: localResult.serviceVerdict,
-            sslVerdict:
-                source === CheckSource.LOCAL
-                    ? localResult.sslVerdict
-                    : 'NO_EVIDENCE',
-            failureReason: localResult.failureReason,
-            ruleMatched: ruleOutcome.ruleMatched,
-            ruleGroupIds: ruleOutcome.ruleGroupIds,
-            ruleEvidence: ruleOutcome.ruleEvidence,
-            probeRoundWindowMs:
-                source === CheckSource.PROBE
-                    ? probeReportDedupWindowMs(monitor.interval)
-                    : undefined,
-            revision: monitor.revision,
-            evaluated: result.evaluated !== false,
-            failureKind: result.failureKind ?? null,
-            meta: result.meta,
+        const state = await this.beginRound({
+            monitor,
+            roundId,
+            startedAt,
+            localResult,
+            guards,
+            ruleOutcome,
         });
-        if (!recorded) {
-            return {
-                ...result,
-                evaluated: false,
-                applied: false,
-                error: 'Result discarded: monitor changed while check was running',
-                monitorId: monitor.id,
-                previousStatus: 'UNKNOWN',
-                status: 'UNKNOWN',
-                changed: false,
-                notified: { skipped: true, sent: 0, failed: 0 },
-            };
+        if (!state) {
+            return this.pendingExecution(monitor, localResult, null);
         }
-        const { transition, deliveries } = recorded;
 
-        // State recording writes alert deliveries into the transactional outbox.
-        const notified = {
-            skipped: !deliveries,
-            sent: deliveries ?? 0,
-            failed: 0,
-        };
+        // Protected batches settle right away; the others either reach quorum
+        // here or close at the deadline job.
+        const settlement = guards.protected
+            ? await this.settleRound(monitor.id, roundId, { force: true })
+            : await this.settleRound(monitor.id, roundId);
+        const execution =
+            settlement.execution ??
+            this.pendingExecution(monitor, localResult, state);
 
-        await this.writeExecution(monitor, result, trigger, {
-            previousStatus: transition.previousStatus,
-            status: transition.status,
-            changed: transition.changed,
+        await this.writeExecution(monitor, execution, trigger, {
+            previousStatus: execution.previousStatus,
+            status: execution.status,
+            changed: execution.changed,
             ruleGroupIds: ruleOutcome.ruleGroupIds,
             notified: {
-                skipped: notified.skipped,
-                sent: notified.sent,
-                failed: notified.failed,
+                skipped: execution.notified.skipped,
+                sent: execution.notified.sent,
+                failed: execution.notified.failed,
             },
         });
+
+        return execution;
+    }
+
+    /**
+     * Response for a batch that exists but is not settled yet: the local verdict
+     * is returned, the state stays untouched.
+     */
+    private pendingExecution(
+        monitor: MonitorModel,
+        result: CheckResult,
+        state: MonitorStateModel | null,
+    ): CheckExecution {
+        const status = state?.status ?? 'UNKNOWN';
 
         return {
             ...result,
             monitorId: monitor.id,
-            previousStatus: transition.previousStatus,
-            status: transition.status,
-            changed: transition.changed,
-            notified,
-            applied: true,
+            previousStatus: status,
+            status,
+            changed: false,
+            notified: { skipped: true, sent: 0, failed: 0 },
+            applied: false,
         };
     }
 
@@ -623,23 +1171,26 @@ export class CheckerService {
         );
     }
 
-    private async evaluateResult(
+    /**
+     * Decides whether the batch may be judged by probes at all. The order
+     * mirrors the protection blocks of the previous `evaluateResult`.
+     */
+    private aggregationGuards(
         monitor: MonitorModel,
         localResult: CheckResult,
-    ): Promise<EvaluatedResult> {
-        if (localResult.success) {
-            return { result: localResult, rescuedByProbe: false };
+    ): AggregationGuards {
+        if (!this.acceptsLegacyProbe(monitor)) {
+            return { protected: true, protectedReason: 'LEGACY_UNSUPPORTED' };
         }
-        if (
-            !this.acceptsLegacyProbe(monitor) ||
-            localResult.evaluated === false ||
-            localResult.failureKind === 'ASSERTION'
-        ) {
-            return { result: localResult, rescuedByProbe: false };
+        if (localResult.evaluated === false) {
+            return { protected: true, protectedReason: 'UNEVALUATED' };
+        }
+        if (localResult.failureKind === 'ASSERTION') {
+            return { protected: true, protectedReason: 'ASSERTION' };
         }
 
         // A certificate verdict is a fact about the certificate, not a
-        // reachability signal, so a reachable probe must not override it.
+        // reachability signal, so probes must not override it.
         const certificatePolicyFailure =
             localResult.ssl !== undefined ||
             !!(
@@ -650,97 +1201,81 @@ export class CheckerService {
             certificatePolicyFailure &&
             (localResult.serviceVerdict === 'SUCCESS' || localResult.ssl)
         ) {
-            return { result: localResult, rescuedByProbe: false };
+            return { protected: true, protectedReason: 'SSL' };
         }
 
-        const since = new Date(
-            Date.now() - probeResultWindowMs(monitor.interval),
+        return { protected: false, protectedReason: null };
+    }
+
+    /** Local service verdict recovered from the pending CheckLog row. */
+    private serviceVerdictFromLog(log: {
+        localServiceVerdict: string | null;
+        sslVerdict: string | null;
+        localSuccess: boolean | null;
+        success: boolean;
+    }): NonNullable<CheckResult['serviceVerdict']> {
+        return (
+            (log.localServiceVerdict as CheckResult['serviceVerdict']) ??
+            (log.sslVerdict === 'INVALID'
+                ? 'NO_EVIDENCE'
+                : log.sslVerdict &&
+                    ['EXPIRING', 'EXPIRED'].includes(log.sslVerdict)
+                  ? 'SUCCESS'
+                  : (log.localSuccess ?? log.success)
+                    ? 'SUCCESS'
+                    : 'FAILURE')
         );
-        const tenantProbeResults = await this.prisma.probeResult.findMany({
-            where: {
-                target: monitor.target,
-                monitorId: monitor.id,
-                checkedAt: { gte: since },
-                configRevision: monitor.configRevision,
-                probe: {
-                    organizationId: monitor.organizationId,
-                    enabled: true,
-                    status: 'ONLINE',
-                    scope: 'TENANT',
-                    monitors: {
-                        some: { monitorId: monitor.id },
-                    },
-                },
-            },
-            orderBy: { checkedAt: 'desc' },
-        });
+    }
 
-        const systemProbeIds =
-            await this.systemProbeScheduler.getAssignedProbes(monitor.id);
-        const systemProbeResults =
-            systemProbeIds.length > 0
-                ? await this.prisma.probeResult.findMany({
-                      where: {
-                          target: monitor.target,
-                          monitorId: monitor.id,
-                          probeId: { in: systemProbeIds },
-                          checkedAt: { gte: since },
-                          configRevision: monitor.configRevision,
-                          probe: {
-                              scope: 'SYSTEM',
-                              enabled: true,
-                              status: 'ONLINE',
-                          },
-                      },
-                      orderBy: { checkedAt: 'desc' },
-                  })
-                : [];
-
-        const probeResults = [...tenantProbeResults, ...systemProbeResults];
-
-        if (probeResults.length === 0) {
-            return { result: localResult, rescuedByProbe: false };
-        }
-
-        if (probeResults.some((result) => result.success)) {
-            if (certificatePolicyFailure) {
-                return {
-                    result: { ...localResult, serviceVerdict: 'SUCCESS' },
-                    rescuedByProbe: false,
-                };
-            }
-            return {
-                result: {
-                    ...localResult,
-                    success: true,
-                    latency: localResult.latency,
-                    error: null,
-                    failureKind: null,
-                    checkedAt: localResult.checkedAt,
-                    serviceVerdict: 'SUCCESS',
-                },
-                rescuedByProbe: true,
-            };
-        }
+    /** Rebuilds the local certificate evidence stored with the batch row. */
+    private sslFromMeta(
+        meta: Record<string, unknown>,
+    ): CheckResult['ssl'] | undefined {
+        const raw = meta.localSsl as
+            | {
+                  expiresAt?: string;
+                  daysRemaining?: number;
+                  issuer?: string | null;
+                  subject?: string | null;
+              }
+            | undefined;
+        if (!raw?.expiresAt) return undefined;
 
         return {
-            result: {
-                ...localResult,
-                error: this.buildAggregatedError(
-                    localResult,
-                    probeResults.length,
-                ),
-            },
-            rescuedByProbe: false,
+            expiresAt: new Date(raw.expiresAt),
+            daysRemaining: raw.daysRemaining ?? 0,
+            issuer: raw.issuer ?? null,
+            subject: raw.subject ?? null,
         };
     }
 
+    /** Protocol metadata of the local check, without the aggregation keys. */
+    private checkMetadataFrom(
+        meta: Record<string, unknown>,
+    ): CheckMetadata | undefined {
+        if (typeof meta.protocol !== 'string') return undefined;
+
+        const rest = { ...meta };
+        delete rest.aggregation;
+        delete rest.localSsl;
+        delete rest.localFailureReason;
+        delete rest.localBodyContains;
+        delete rest.ruleEvidence;
+
+        return rest as unknown as CheckMetadata;
+    }
+
     private buildAggregatedError(
-        localResult: CheckResult,
-        probeFailureCount: number,
+        localVerdict: { success: boolean; error: string | null },
+        successCount: number,
+        probeCount: number,
+        threshold: number,
     ): string {
-        const localError = localResult.error ?? 'Local check failed';
-        return `${localError}; all ${probeFailureCount} probe result(s) failed`;
+        const ratio = `probe success ratio ${successCount}/${probeCount} below ${threshold}%`;
+
+        return localVerdict.success
+            ? `Probe success ratio ${successCount}/${probeCount} below ${threshold}% (local check succeeded)`
+            : `${localVerdict.error ?? 'Local check failed'}; ${ratio}`;
     }
 
     private isDue(intervalSeconds: number, lastCheckAt: Date | null): boolean {
@@ -749,7 +1284,7 @@ export class CheckerService {
         return Date.now() - lastCheckAt.getTime() >= intervalSeconds * 1000;
     }
 
-    /** 构造规则求值上下文，来自聚合后的 CheckResult。 */
+    /** 构造规则求值上下文，来自聚合后的CheckResult。*/
     private buildRuleContext(result: CheckResult): RuleContext {
         return {
             success: result.success,

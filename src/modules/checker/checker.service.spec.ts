@@ -2,14 +2,15 @@ import { mockProjectAccess } from '../../common/authorization/access-test.fixtur
 import { NotFoundException } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import {
+    buildRoundId,
     CheckerService,
     probeReportDedupWindowMs,
     probeResultWindowMs,
+    roundAttributionWindowMs,
 } from './checker.service';
-import type { PrismaService } from '../../infra/database/prisma.service';
 import type { StateService } from '../state/state.service';
 import type { NotifierService } from '../notifier/notifier.service';
-import { MONITOR_CHECK_JOB } from './checker.queue';
+import { MONITOR_CHECK_JOB, MONITOR_SETTLE_JOB } from './checker.queue';
 import type { MonitorCheckJobData } from './checker.queue';
 import { CheckerRegistry } from './checker.registry';
 
@@ -24,12 +25,14 @@ const monitorRow = {
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    probeSuccessRatio: 1,
     checkSsl: false,
     sslExpiryThreshold: 30,
     enabled: true,
     config: {},
     configVersion: 1,
     revision: 1,
+    configRevision: 1,
     createdAt: new Date('2026-03-05T12:00:00.000Z'),
     updatedAt: new Date('2026-03-05T12:00:00.000Z'),
     deletedAt: null,
@@ -58,33 +61,174 @@ const checkResult = {
     checkedAt: new Date('2026-03-05T12:00:00.000Z'),
 };
 
+type Round = Record<string, unknown> & {
+    id: string;
+    monitorId: string;
+    roundId: string | null;
+    appliedAt: Date | null;
+    checkedAt: Date;
+};
+
+function probeSample(
+    probeId: string,
+    success: boolean,
+    checkedAt = new Date('2026-03-05T11:59:30.000Z'),
+) {
+    return {
+        id: `sample-${probeId}`,
+        probeId,
+        success,
+        checkedAt,
+        receivedAt: checkedAt,
+    };
+}
+
 function createService() {
+    const rounds = new Map<string, Round>();
     const prisma = {
         auditLog: { create: jest.fn().mockResolvedValue({}) },
         monitor: { findFirst: jest.fn(), findMany: jest.fn() },
         checkLog: {
-            findFirst: jest.fn(),
-            findMany: jest.fn(),
-            count: jest.fn(),
+            create: jest.fn(({ data }: { data: Record<string, unknown> }) => {
+                const row = {
+                    observationId: null,
+                    evaluated: true,
+                    failureKind: null,
+                    localSuccess: null,
+                    localServiceVerdict: null,
+                    serviceVerdict: null,
+                    sslVerdict: null,
+                    statusCode: null,
+                    ruleMatched: false,
+                    ruleGroupIds: [],
+                    meta: {},
+                    appliedAt: null,
+                    ...data,
+                } as unknown as Round;
+                row.id = `log-${rounds.size + 1}`;
+                rounds.set(row.id, row);
+                return row;
+            }),
+            findUnique: jest.fn(
+                ({
+                    where,
+                }: {
+                    where: {
+                        monitorId_roundId: {
+                            monitorId: string;
+                            roundId: string;
+                        };
+                    };
+                }) => {
+                    const key = where.monitorId_roundId;
+                    return (
+                        [...rounds.values()].find(
+                            (row) =>
+                                row.monitorId === key.monitorId &&
+                                row.roundId === key.roundId,
+                        ) ?? null
+                    );
+                },
+            ),
+            findFirst: jest.fn(({ where }: { where: Record<string, any> }) => {
+                const rows = [...rounds.values()]
+                    .filter((row) => row.monitorId === where.monitorId)
+                    .sort(
+                        (a, b) => b.checkedAt.getTime() - a.checkedAt.getTime(),
+                    );
+                if (where.roundId && where.appliedAt === null) {
+                    return (
+                        rows.find(
+                            (row) => row.roundId && row.appliedAt === null,
+                        ) ?? null
+                    );
+                }
+                if (where.checkedAt?.lt) {
+                    return (
+                        rows.find(
+                            (row) =>
+                                row.roundId &&
+                                row.checkedAt < where.checkedAt.lt,
+                        ) ?? null
+                    );
+                }
+                return null;
+            }),
+            findMany: jest.fn(
+                ({ where }: { where?: Record<string, any> } = {}) => {
+                    if (where?.appliedAt === null) {
+                        return [...rounds.values()].filter(
+                            (row) =>
+                                row.monitorId === where.monitorId &&
+                                row.roundId &&
+                                row.appliedAt === null,
+                        );
+                    }
+                    return [];
+                },
+            ),
+            update: jest.fn(
+                ({
+                    where,
+                    data,
+                }: {
+                    where: { id: string };
+                    data: Record<string, unknown>;
+                }) => {
+                    const row = rounds.get(where.id);
+                    if (row) Object.assign(row, data);
+                    return row;
+                },
+            ),
+            updateMany: jest.fn(() => ({ count: 0 })),
+            count: jest.fn().mockResolvedValue(0),
         },
+        probe: { findMany: jest.fn().mockResolvedValue([]) },
         probeResult: { findMany: jest.fn().mockResolvedValue([]) },
-        probeExecution: { create: jest.fn() },
-        monitorState: { update: jest.fn() },
+        probeExecution: { create: jest.fn().mockResolvedValue({}) },
+        monitorState: {
+            upsert: jest.fn().mockResolvedValue(stateRow),
+            update: jest.fn(),
+        },
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        $transaction: jest.fn((callback: (tx: unknown) => Promise<unknown>) =>
+            callback(prisma),
+        ),
+    };
+    const settleResult = {
+        monitor: monitorRow,
+        state: stateRow,
+        transition: {
+            previousStatus: 'UNKNOWN',
+            previousFailCount: 0,
+            status: 'UP',
+            failCount: 0,
+            changed: true,
+        },
+        deliveries: 0,
     };
     const stateService = {
         claimAvailabilityAlert: jest.fn().mockResolvedValue('pending-1'),
         completeAvailabilityAlert: jest.fn(),
-        record: jest.fn().mockResolvedValue({
-            monitor: monitorRow,
-            state: stateRow,
-            transition: {
-                previousStatus: 'UNKNOWN',
-                previousFailCount: 0,
-                status: 'UP',
-                failCount: 0,
-                changed: true,
+        record: jest.fn(),
+        // Mirrors the real settlement: the batch row is marked applied, and a
+        // second attempt on the same row loses the race.
+        settle: jest.fn(
+            (
+                monitorId: string,
+                roundId: string,
+                verdict: Record<string, unknown>,
+            ): Promise<typeof settleResult | null> => {
+                const round = [...rounds.values()].find(
+                    (row) =>
+                        row.monitorId === monitorId && row.roundId === roundId,
+                );
+                if (!round || round.appliedAt) return Promise.resolve(null);
+                round.appliedAt = new Date();
+                round.settlement = verdict;
+                return Promise.resolve(settleResult);
             },
-        }),
+        ),
     };
     const notifierService = {
         notifyTransition: jest
@@ -159,10 +303,11 @@ function createService() {
     const ruleGroups = {
         findBindingsForMonitor: jest.fn().mockResolvedValue([]),
     };
+    const queue = { add: jest.fn().mockResolvedValue({}) };
 
     const access = mockProjectAccess(prisma);
     const service = new CheckerService(
-        prisma as unknown as PrismaService,
+        prisma,
         stateService as unknown as StateService,
         notifierService as unknown as NotifierService,
         registry,
@@ -171,6 +316,7 @@ function createService() {
         ruleEvaluator as never,
         ruleGroups as never,
         access,
+        queue as unknown as Queue<MonitorCheckJobData>,
     );
 
     return {
@@ -187,136 +333,623 @@ function createService() {
         pingChecker,
         quotaService,
         access,
+        queue,
+        rounds,
+        settleResult,
     };
 }
 
+/** Seeds a pending batch row without running a local check. */
+function seedRound(
+    rounds: Map<string, Round>,
+    overrides: Partial<Round> = {},
+): Round {
+    const row = {
+        id: `log-seed-${rounds.size + 1}`,
+        monitorId: 'monitor-1',
+        roundId: 'monitor-1:1700000000000',
+        appliedAt: null,
+        checkedAt: new Date('2026-03-05T12:00:00.000Z'),
+        localSuccess: true,
+        success: true,
+        latency: 12,
+        error: null,
+        statusCode: 200,
+        failureKind: null,
+        localServiceVerdict: 'SUCCESS',
+        serviceVerdict: 'SUCCESS',
+        sslVerdict: null,
+        ruleMatched: false,
+        ruleGroupIds: [],
+        meta: { aggregation: { protected: false, protectedReason: null } },
+        configRevision: 1,
+        revision: 1,
+        evaluated: true,
+        ...overrides,
+    } as unknown as Round;
+    rounds.set(row.id, row);
+    return row;
+}
+
+function bindProbes(
+    prisma: ReturnType<typeof createService>['prisma'],
+    count: number,
+) {
+    const probes = Array.from({ length: count }, (_, index) => ({
+        id: `probe-${index + 1}`,
+    }));
+    prisma.probe.findMany.mockResolvedValue(probes);
+    return probes;
+}
+
 describe('CheckerService', () => {
-    describe('local protocol and execution isolation', () => {
-        it.each(['ASSERTION', 'TIMEOUT', 'TRANSPORT'])(
-            'keeps configured HTTP %s outcomes local, including new revision-one definitions',
-            async (failureKind) => {
-                const { service, prisma, httpChecker, stateService } =
-                    createService();
-                prisma.monitor.findFirst.mockResolvedValue({
-                    ...monitorRow,
-                    config: { keyword: 'healthy' },
-                });
-                const meta = {
-                    protocol: 'HTTP',
-                    bodyTruncated: false,
-                    bodyBytes: 100,
-                    bodyLimitBytes: 65536,
-                    assertions: [{ kind: 'keyword', passed: false }],
-                    assertionFailure: 'KEYWORD',
-                };
-                httpChecker.check.mockResolvedValue({
-                    ...checkResult,
-                    success: false,
-                    error: 'HTTP keyword assertion failed',
-                    failureKind,
-                    meta,
-                });
-                await service.checkMonitorForProject('project-1', 'monitor-1', {
-                    type: 'USER',
-                    userId: 'user-1',
-                });
-                expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
-                expect(stateService.record).toHaveBeenCalledWith(
-                    'monitor-1',
-                    expect.objectContaining({
-                        revision: 1,
-                        success: false,
-                        evaluated: true,
-                        rescuedByProbe: false,
-                        failureKind,
-                        meta,
-                        ruleMatched: true,
-                    }),
-                );
-                expect(
-                    await service.ingestProbeReportForMonitor('monitor-1', {
-                        target: monitorRow.target,
-                        success: true,
-                        latency: 1,
-                    }),
-                ).toBeNull();
-            },
-        );
-
-        it.each(['DNS', 'PING'])(
-            'routes %s through the registry and never applies legacy probe rescue',
-            async (type) => {
-                const {
-                    service,
-                    prisma,
-                    dnsChecker,
-                    pingChecker,
-                    stateService,
-                } = createService();
-                prisma.monitor.findFirst.mockResolvedValue({
-                    ...monitorRow,
-                    type,
-                    target: 'example.com',
-                    config: type === 'DNS' ? { recordType: 'A' } : {},
-                });
-                const checker = type === 'DNS' ? dnsChecker : pingChecker;
-                checker.run.mockResolvedValue({
-                    ...checkResult,
-                    success: false,
-                    error: 'Target failed',
-                    failureKind: 'ASSERTION',
-                });
-                await service.checkMonitorForProject('project-1', 'monitor-1', {
-                    type: 'USER',
-                    userId: 'user-1',
-                });
-                expect(checker.run).toHaveBeenCalledTimes(1);
-                expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
-                expect(stateService.record).toHaveBeenCalledWith(
-                    'monitor-1',
-                    expect.objectContaining({
-                        success: false,
-                        rescuedByProbe: false,
-                    }),
-                );
-                expect(
-                    await service.ingestProbeReportForMonitor('monitor-1', {
-                        target: 'example.com',
-                        success: true,
-                        latency: 1,
-                    }),
-                ).toBeNull();
-            },
-        );
-
-        it('does not rescue HTTP status assertions or revised definitions with old probe observations', async () => {
-            const { service, prisma, httpChecker } = createService();
+    describe('batch anchored by the local check', () => {
+        it('settles as soon as every bound probe reported', async () => {
+            const { service, prisma, stateService, rounds } = createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            bindProbes(prisma, 2);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', true),
+                probeSample('probe-2', true),
+            ]);
+
+            const execution = await service.checkMonitorForProject(
+                'project-1',
+                'monitor-1',
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(execution.applied).toBe(true);
+            expect(stateService.settle).toHaveBeenCalledTimes(1);
+            expect(stateService.record).not.toHaveBeenCalled();
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: true,
+                rescuedByProbe: false,
+                aggregation: {
+                    effectiveProbeCount: 2,
+                    sampleCount: 2,
+                    successCount: 2,
+                    decision: 'CONFIRMED_SUCCESS',
+                },
+            });
+            expect([...rounds.values()][0].roundId).toMatch(/^monitor-1:\d+$/);
+        });
+
+        it('stays pending until the deadline when probes are missing', async () => {
+            const { service, prisma, stateService, queue } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            bindProbes(prisma, 3);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', true),
+            ]);
+
+            const execution = await service.checkMonitorForProject(
+                'project-1',
+                'monitor-1',
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(execution.applied).toBe(false);
+            expect(stateService.settle).not.toHaveBeenCalled();
+            expect(queue.add).toHaveBeenCalledWith(
+                MONITOR_SETTLE_JOB,
+                expect.objectContaining({ monitorId: 'monitor-1' }),
+                expect.objectContaining({
+                    delay: expect.any(Number),
+                    jobId: expect.stringMatching(/^monitor-check-settle-/),
+                }),
+            );
+        });
+
+        it('settles a protected batch immediately without sampling probes', async () => {
+            const { service, prisma, stateService, httpChecker } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            bindProbes(prisma, 2);
             httpChecker.check.mockResolvedValue({
                 ...checkResult,
                 success: false,
                 failureKind: 'ASSERTION',
+                error: 'HTTP keyword assertion failed',
             });
+
+            const execution = await service.checkMonitorForProject(
+                'project-1',
+                'monitor-1',
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+            expect(prisma.probe.findMany).not.toHaveBeenCalled();
+            expect(stateService.settle).toHaveBeenCalledTimes(1);
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: false,
+                failureKind: 'ASSERTION',
+                aggregation: {
+                    protected: true,
+                    protectedReason: 'ASSERTION',
+                    decision: 'FALLBACK_LOCAL',
+                },
+            });
+            expect(execution.applied).toBe(true);
+        });
+
+        it('keeps the local verdict when no tenant probe is bound', async () => {
+            const { service, prisma, stateService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.findMany.mockResolvedValue([]);
+
             await service.checkMonitorForProject('project-1', 'monitor-1', {
                 type: 'USER',
                 userId: 'user-1',
             });
+
+            expect(prisma.probe.findMany).toHaveBeenCalledTimes(1);
             expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
-            prisma.monitor.findFirst.mockResolvedValue({
-                ...monitorRow,
-                revision: 2,
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: true,
+                aggregation: {
+                    effectiveProbeCount: 0,
+                    decision: 'FALLBACK_LOCAL',
+                },
             });
+        });
+
+        it('keeps a failing local verdict UP when no tenant probe is bound and a system probe succeeded', async () => {
+            const {
+                service,
+                prisma,
+                stateService,
+                systemProbeScheduler,
+                httpChecker,
+            } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.findMany.mockResolvedValue([]);
+            systemProbeScheduler.getAssignedProbes.mockResolvedValue(['sys-1']);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('sys-1', true),
+            ]);
             httpChecker.check.mockResolvedValue({
                 ...checkResult,
                 success: false,
+                error: 'Request timed out',
+                failureKind: 'TRANSPORT',
             });
+
             await service.checkMonitorForProject('project-1', 'monitor-1', {
                 type: 'USER',
                 userId: 'user-1',
             });
-            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: true,
+                rescuedByProbe: true,
+                serviceVerdict: 'SUCCESS',
+                aggregation: { effectiveProbeCount: 0, decision: 'RESCUED' },
+            });
         });
 
+        it('falls back to the local verdict while bound probes never reported', async () => {
+            const { service, prisma, stateService, httpChecker, rounds } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            bindProbes(prisma, 2);
+            prisma.probeResult.findMany.mockResolvedValue([]);
+            httpChecker.check.mockResolvedValue({
+                ...checkResult,
+                success: false,
+                error: 'Request timed out',
+                failureKind: 'TRANSPORT',
+            });
+
+            const execution = await service.checkMonitorForProject(
+                'project-1',
+                'monitor-1',
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            // Nobody reported: the batch waits for its deadline instead of
+            // reading the missing probes as failures.
+            expect(execution.applied).toBe(false);
+            expect(stateService.settle).not.toHaveBeenCalled();
+
+            const forced = await service.settleRound(
+                'monitor-1',
+                [...rounds.values()][0].roundId!,
+                { force: true },
+            );
+
+            expect(forced.outcome).toBe('SETTLED');
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: false,
+                failureKind: 'TRANSPORT',
+                aggregation: {
+                    effectiveProbeCount: 2,
+                    sampleCount: 0,
+                    decision: 'FALLBACK_LOCAL',
+                },
+            });
+        });
+    });
+
+    describe('ratio verdict', () => {
+        it.each([
+            { probes: 3, ratio: 100, successes: 3, passed: true },
+            { probes: 3, ratio: 100, successes: 2, passed: false },
+            { probes: 5, ratio: 60, successes: 3, passed: true },
+            { probes: 5, ratio: 60, successes: 2, passed: false },
+            { probes: 5, ratio: 1, successes: 1, passed: true },
+            { probes: 5, ratio: 1, successes: 0, passed: false },
+        ])(
+            'votes $successes/$probes against $ratio%',
+            async ({ probes, ratio, successes, passed }) => {
+                const { service, prisma, stateService, rounds } =
+                    createService();
+                prisma.monitor.findFirst.mockResolvedValue({
+                    ...monitorRow,
+                    probeSuccessRatio: ratio,
+                });
+                const bound = bindProbes(prisma, probes);
+                prisma.probeResult.findMany.mockResolvedValue(
+                    bound.map((probe, index) =>
+                        probeSample(probe.id, index < successes),
+                    ),
+                );
+                seedRound(rounds);
+
+                const settlement = await service.settleRound(
+                    'monitor-1',
+                    'monitor-1:1700000000000',
+                    { force: true },
+                );
+
+                expect(settlement.outcome).toBe('SETTLED');
+                expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                    success: passed,
+                    aggregation: {
+                        effectiveProbeCount: probes,
+                        successCount: successes,
+                        threshold: ratio,
+                    },
+                });
+            },
+        );
+
+        it('counts a missing probe as a failure instead of shrinking the denominator', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                probeSuccessRatio: 100,
+            });
+            bindProbes(prisma, 3);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', true),
+                probeSample('probe-2', true),
+            ]);
+            seedRound(rounds);
+
+            await service.settleRound('monitor-1', 'monitor-1:1700000000000', {
+                force: true,
+            });
+
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: false,
+                aggregation: {
+                    effectiveProbeCount: 3,
+                    sampleCount: 2,
+                    successCount: 2,
+                },
+            });
+        });
+
+        it('rescues a failing local check with the probe majority', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                probeSuccessRatio: 60,
+            });
+            bindProbes(prisma, 3);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', true),
+                probeSample('probe-2', true),
+                probeSample('probe-3', false),
+            ]);
+            seedRound(rounds, {
+                localSuccess: false,
+                success: false,
+                failureKind: 'TRANSPORT',
+                error: 'Request timed out',
+                localServiceVerdict: 'FAILURE',
+                serviceVerdict: 'FAILURE',
+            });
+
+            await service.settleRound('monitor-1', 'monitor-1:1700000000000', {
+                force: true,
+            });
+
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: true,
+                rescuedByProbe: true,
+                failureKind: null,
+                serviceVerdict: 'SUCCESS',
+                localServiceVerdict: 'FAILURE',
+                aggregation: { decision: 'RESCUED' },
+            });
+        });
+
+        it('overturns a successful local check when the probes vote it down', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                probeSuccessRatio: 100,
+            });
+            bindProbes(prisma, 3);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', true),
+                probeSample('probe-2', false),
+                probeSample('probe-3', false),
+            ]);
+            seedRound(rounds);
+
+            await service.settleRound('monitor-1', 'monitor-1:1700000000000', {
+                force: true,
+            });
+
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: false,
+                localSuccess: true,
+                rescuedByProbe: false,
+                failureKind: 'AGGREGATE',
+                serviceVerdict: 'FAILURE',
+                error: expect.stringContaining('1/3'),
+                aggregation: { decision: 'OVERTURNED' },
+            });
+        });
+
+        it('keeps one vote per probe, using its newest observation', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                probeSuccessRatio: 100,
+            });
+            bindProbes(prisma, 2);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', false),
+                probeSample('probe-1', true),
+                probeSample('probe-2', true),
+            ]);
+            seedRound(rounds);
+
+            await service.settleRound('monitor-1', 'monitor-1:1700000000000', {
+                force: true,
+            });
+
+            // The query returns rows newest-first, so probe-1's first sample wins.
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: false,
+                aggregation: { sampleCount: 2, successCount: 1 },
+            });
+        });
+
+        it('does not count a system probe as a primary vote', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                probeSuccessRatio: 100,
+            });
+            bindProbes(prisma, 1);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', false),
+            ]);
+            seedRound(rounds);
+
+            await service.settleRound('monitor-1', 'monitor-1:1700000000000', {
+                force: true,
+            });
+
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: false,
+                aggregation: { effectiveProbeCount: 1, successCount: 0 },
+            });
+        });
+    });
+
+    describe('batch lifecycle', () => {
+        it('returns NOT_FOUND without a local row', async () => {
+            const { service } = createService();
+
+            const settlement = await service.settleRound(
+                'monitor-1',
+                'monitor-1:1700000000000',
+            );
+
+            expect(settlement).toEqual({
+                outcome: 'NOT_FOUND',
+                execution: null,
+            });
+        });
+
+        it('treats an already settled batch as a duplicate', async () => {
+            const { service, prisma, rounds } = createService();
+            seedRound(rounds, { appliedAt: new Date() });
+
+            const settlement = await service.settleRound(
+                'monitor-1',
+                'monitor-1:1700000000000',
+                { force: true },
+            );
+
+            expect(settlement.outcome).toBe('DUPLICATE');
+            expect(prisma.probe.findMany).not.toHaveBeenCalled();
+        });
+
+        it('settles once: a second forced call is a duplicate', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            bindProbes(prisma, 1);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', true),
+            ]);
+            seedRound(rounds);
+
+            const first = await service.settleRound(
+                'monitor-1',
+                'monitor-1:1700000000000',
+                { force: true },
+            );
+            const second = await service.settleRound(
+                'monitor-1',
+                'monitor-1:1700000000000',
+                { force: true },
+            );
+
+            expect(first.outcome).toBe('SETTLED');
+            expect(second.outcome).toBe('DUPLICATE');
+            expect(stateService.settle).toHaveBeenCalledTimes(1);
+        });
+
+        it('discards a batch whose definition changed while it was open', async () => {
+            const { service, prisma, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                configRevision: 2,
+            });
+            seedRound(rounds);
+
+            const settlement = await service.settleRound(
+                'monitor-1',
+                'monitor-1:1700000000000',
+                { force: true },
+            );
+
+            expect(settlement.outcome).toBe('DUPLICATE');
+        });
+
+        it('reports a settlement conflict from the state writer as a duplicate', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.findMany.mockResolvedValue([]);
+            stateService.settle.mockResolvedValue(null);
+            seedRound(rounds);
+
+            const settlement = await service.settleRound(
+                'monitor-1',
+                'monitor-1:1700000000000',
+                { force: true },
+            );
+
+            expect(settlement.outcome).toBe('DUPLICATE');
+        });
+
+        it('settles the previous open batch before anchoring a new one', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.findMany.mockResolvedValue([]);
+            seedRound(rounds, {
+                roundId: 'monitor-1:1699999999000',
+                checkedAt: new Date('2026-03-05T11:59:00.000Z'),
+            });
+
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+
+            // The stale round is settled by its deadline, then the new one settles.
+            const sunkRoundIds = stateService.settle.mock.calls.map(
+                (call) => call[1],
+            );
+            expect(sunkRoundIds).toContain('monitor-1:1699999999000');
+            expect(sunkRoundIds).toHaveLength(2);
+        });
+    });
+
+    describe('probe report ingestion', () => {
+        it('settles the open batch instead of appending a row', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            bindProbes(prisma, 1);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('probe-1', true),
+            ]);
+            seedRound(rounds);
+
+            const execution = await service.ingestProbeReportForMonitor(
+                'monitor-1',
+                {
+                    target: monitorRow.target,
+                    success: true,
+                    latency: 1,
+                },
+            );
+
+            expect(execution).toMatchObject({ applied: true });
+            expect(prisma.checkLog.create).not.toHaveBeenCalled();
+            expect(stateService.settle).toHaveBeenCalledTimes(1);
+        });
+
+        it('ignores a report when no batch is open', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+
+            expect(
+                await service.ingestProbeReportForMonitor('monitor-1', {
+                    target: monitorRow.target,
+                    success: true,
+                    latency: 1,
+                }),
+            ).toBeNull();
+        });
+
+        it('ignores a report for an assertion batch', async () => {
+            const { service, prisma, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            seedRound(rounds, { failureKind: 'ASSERTION' });
+
+            expect(
+                await service.ingestProbeReportForMonitor('monitor-1', {
+                    target: monitorRow.target,
+                    success: true,
+                    latency: 1,
+                }),
+            ).toBeNull();
+            expect(prisma.probe.findMany).not.toHaveBeenCalled();
+        });
+
+        it('keeps non-legacy protocols out of probe aggregation', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                config: { keyword: 'healthy' },
+            });
+
+            expect(
+                await service.ingestProbeReportForMonitor('monitor-1', {
+                    target: monitorRow.target,
+                    success: true,
+                    latency: 1,
+                }),
+            ).toBeNull();
+        });
+
+        it('returns null when no monitor owns the target', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findMany.mockResolvedValue([
+                monitorRow,
+                { ...monitorRow, id: 'monitor-2' },
+            ]);
+
+            expect(
+                await service.ingestProbeReport('org-1', {
+                    target: monitorRow.target,
+                    success: true,
+                    latency: 1,
+                }),
+            ).toBeNull();
+        });
+    });
+
+    describe('execution guards', () => {
         it('stops queued jobs and manual checks when entitlement is revoked', async () => {
             const { service, prisma, httpChecker, quotaService, stateService } =
                 createService();
@@ -336,502 +969,44 @@ describe('CheckerService', () => {
                 }),
             ).rejects.toThrow('not allowed');
             expect(httpChecker.check).not.toHaveBeenCalled();
-            expect(stateService.record).not.toHaveBeenCalled();
+            expect(stateService.settle).not.toHaveBeenCalled();
         });
 
-        it('filters the due scan by runtime entitlement and resolves each org policy once', async () => {
-            const { service, prisma, quotaService } = createService();
-            prisma.monitor.findMany.mockResolvedValue([
-                monitorRow,
-                { ...monitorRow, id: 'monitor-2', type: 'DNS' },
-            ]);
+        it('does not record or alert after an entitlement expires during the network check', async () => {
+            const { service, prisma, stateService, quotaService } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
             quotaService.monitorEligibility
                 .mockResolvedValueOnce({ eligible: true, reason: null })
                 .mockResolvedValueOnce({
                     eligible: false,
                     reason: 'MONITOR_TYPE_NOT_ALLOWED',
                 });
-            expect(await service.findDueMonitors()).toHaveLength(1);
-            expect(quotaService.getMonitorPolicy).toHaveBeenCalledTimes(1);
-        });
 
-        it('discards results that became stale without notifying', async () => {
-            const { service, prisma, stateService, notifierService } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue(null);
-            expect(
-                await service.checkMonitorForProject('project-1', 'monitor-1', {
-                    type: 'USER',
-                    userId: 'user-1',
-                }),
-            ).toMatchObject({
-                applied: false,
-                evaluated: false,
-                changed: false,
-            });
-            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
-            expect(prisma.probeExecution.create).not.toHaveBeenCalled();
-        });
+            const execution = await service.executeMonitor('monitor-1');
 
-        it('does not record or alert after an entitlement expires during the network check', async () => {
-            const {
-                service,
-                prisma,
-                quotaService,
-                stateService,
-                notifierService,
-            } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            quotaService.monitorEligibility.mockResolvedValue({
-                eligible: false,
-                reason: 'INTERVAL_TOO_SHORT',
-            });
-            const result = await service.checkMonitorForProject(
-                'project-1',
-                'monitor-1',
-                { type: 'USER', userId: 'user-1' },
-            );
-            expect(result).toMatchObject({
+            expect(execution).toMatchObject({
                 applied: false,
                 evaluated: false,
                 failureKind: 'POLICY',
             });
-            expect(stateService.record).not.toHaveBeenCalled();
-            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
+            expect(stateService.settle).not.toHaveBeenCalled();
+            expect(prisma.checkLog.create).not.toHaveBeenCalled();
         });
 
         it('rejects manual execution while a monitor is paused', async () => {
-            const { service, prisma, httpChecker } = createService();
+            const { service, prisma } = createService();
             prisma.monitor.findFirst.mockResolvedValue({
                 ...monitorRow,
                 enabled: false,
             });
+
             await expect(
                 service.checkMonitorForProject('project-1', 'monitor-1', {
                     type: 'USER',
                     userId: 'user-1',
                 }),
-            ).rejects.toThrow('paused');
-            expect(httpChecker.check).not.toHaveBeenCalled();
-        });
-    });
-    describe('checkMonitorForProject', () => {
-        it.each([true, false])(
-            'does not disclose response snippets to MEMBER (success=%s)',
-            async (success) => {
-                const { service, prisma, httpChecker, access } =
-                    createService();
-                prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-                httpChecker.check.mockResolvedValue({
-                    ...checkResult,
-                    success,
-                    bodyContains: 'sensitive-marker',
-                });
-                (access.project as jest.Mock).mockResolvedValue({
-                    effectiveRole: 'MEMBER',
-                    organizationId: 'org-1',
-                    projectId: 'project-1',
-                });
-                const response = await service.checkMonitorForProject(
-                    'project-1',
-                    'monitor-1',
-                    { type: 'USER', userId: 'user-1' },
-                );
-                expect(response.success).toBe(success);
-                expect(JSON.stringify(response)).not.toContain(
-                    'sensitive-marker',
-                );
-                expect(response).not.toHaveProperty('bodyContains');
-            },
-        );
-        it('runs an HTTP check and leaves delivery to the transactional outbox', async () => {
-            const {
-                service,
-                prisma,
-                stateService,
-                notifierService,
-                httpChecker,
-            } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-
-            const result = await service.checkMonitorForProject(
-                'project-1',
-                'monitor-1',
-                { type: 'USER', userId: 'user-1' },
-            );
-
-            expect(prisma.monitor.findFirst).toHaveBeenCalledWith({
-                where: {
-                    id: 'monitor-1',
-                    projectId: 'project-1',
-                    organizationId: 'org-1',
-                    deletedAt: null,
-                },
-            });
-            expect(httpChecker.check).toHaveBeenCalledWith(
-                'https://api.example.com/health',
-                5000,
-                200,
-                {
-                    checkSsl: false,
-                    sslExpiryThreshold: 30,
-                },
-            );
-            expect(stateService.record).toHaveBeenCalledWith('monitor-1', {
-                success: true,
-                latency: 12,
-                error: null,
-                source: 'LOCAL',
-                checkedAt: checkResult.checkedAt,
-                ssl: undefined,
-                localSuccess: true,
-                rescuedByProbe: false,
-                statusCode: null,
-                ruleMatched: false,
-                ruleGroupIds: [],
-                revision: 1,
-                evaluated: true,
-                failureKind: null,
-                meta: undefined,
-            });
-            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
-            expect(prisma.probeExecution.create).toHaveBeenCalledWith({
-                data: expect.objectContaining({
-                    probeId: null,
-                    monitorId: 'monitor-1',
-                    target: 'https://api.example.com/health',
-                    trigger: 'MANUAL',
-                    status: 'SUCCESS',
-                    success: true,
-                    latency: 12,
-                    error: null,
-                    requestMeta: {
-                        source: 'LOCAL',
-                        monitorType: 'HTTP',
-                        revision: 1,
-                        configVersion: 1,
-                    },
-                    responseMeta: {
-                        previousStatus: 'UNKNOWN',
-                        status: 'UP',
-                        changed: true,
-                        ruleGroupIds: [],
-                        notified: {
-                            skipped: true,
-                            sent: 0,
-                            failed: 0,
-                        },
-                    },
-                    executedAt: checkResult.checkedAt,
-                }),
-            });
-            expect(result).toMatchObject({
-                monitorId: 'monitor-1',
-                status: 'UP',
-                changed: true,
-                latency: 12,
-            });
-        });
-
-        it('skips the notifier when the status did not change', async () => {
-            const { service, prisma, stateService, notifierService } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue({
-                monitor: monitorRow,
-                state: stateRow,
-                transition: {
-                    previousStatus: 'UP',
-                    previousFailCount: 0,
-                    status: 'UP',
-                    failCount: 0,
-                    changed: false,
-                },
-            });
-
-            const result = await service.checkMonitorForProject(
-                'project-1',
-                'monitor-1',
-                { type: 'USER', userId: 'user-1' },
-            );
-
-            expect(notifierService.notifyTransition).not.toHaveBeenCalled();
-            expect(result.notified).toEqual({
-                skipped: true,
-                sent: 0,
-                failed: 0,
-            });
-        });
-
-        it('uses the TCP checker for TCP monitors', async () => {
-            const { service, prisma, tcpChecker, httpChecker } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue({
-                ...monitorRow,
-                type: 'TCP',
-                target: 'db.internal:5432',
-            });
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(tcpChecker.check).toHaveBeenCalledWith(
-                'db.internal:5432',
-                5000,
-            );
-            expect(httpChecker.check).not.toHaveBeenCalled();
-        });
-
-        it('passes SSL probe details through to state recording', async () => {
-            const { service, prisma, stateService, httpChecker } =
-                createService();
-            const ssl = {
-                expiresAt: new Date('2026-04-05T12:00:00.000Z'),
-                daysRemaining: 31,
-                issuer: 'Example CA',
-                subject: 'api.example.com',
-            };
-            prisma.monitor.findFirst.mockResolvedValue({
-                ...monitorRow,
-                checkSsl: true,
-                sslExpiryThreshold: 30,
-            });
-            httpChecker.check.mockResolvedValue({
-                ...checkResult,
-                ssl,
-            });
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(httpChecker.check).toHaveBeenCalledWith(
-                'https://api.example.com/health',
-                5000,
-                200,
-                {
-                    checkSsl: true,
-                    sslExpiryThreshold: 30,
-                },
-            );
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({ ssl }),
-            );
-        });
-
-        it('keeps a local failure UP when a fresh bound probe succeeded', async () => {
-            const { service, prisma, stateService, httpChecker } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            httpChecker.check.mockResolvedValue({
-                success: false,
-                latency: 30,
-                error: 'HTTP 500',
-                checkedAt: checkResult.checkedAt,
-            });
-            prisma.probeResult.findMany.mockResolvedValue([
-                {
-                    id: 'probe-result-1',
-                    probeId: 'probe-1',
-                    target: monitorRow.target,
-                    success: true,
-                    latency: 40,
-                    error: null,
-                    checkedAt: checkResult.checkedAt,
-                },
-            ]);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(prisma.probeResult.findMany).toHaveBeenCalledWith({
-                where: {
-                    target: monitorRow.target,
-                    monitorId: monitorRow.id,
-                    configRevision: undefined,
-                    checkedAt: { gte: expect.any(Date) },
-                    probe: {
-                        organizationId: 'org-1',
-                        enabled: true,
-                        status: 'ONLINE',
-                        scope: 'TENANT',
-                        monitors: { some: { monitorId: 'monitor-1' } },
-                    },
-                },
-                orderBy: { checkedAt: 'desc' },
-            });
-            expect(stateService.record).toHaveBeenCalledWith('monitor-1', {
-                success: true,
-                latency: 30,
-                error: null,
-                source: 'LOCAL',
-                checkedAt: checkResult.checkedAt,
-                ssl: undefined,
-                localSuccess: false,
-                rescuedByProbe: true,
-                serviceVerdict: 'SUCCESS',
-                statusCode: null,
-                ruleMatched: false,
-                ruleGroupIds: [],
-                revision: 1,
-                evaluated: true,
-                failureKind: null,
-                meta: undefined,
-            });
-        });
-
-        it('keeps a local failure UP when an assigned system probe succeeded', async () => {
-            const {
-                service,
-                prisma,
-                stateService,
-                httpChecker,
-                systemProbeScheduler,
-            } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            httpChecker.check.mockResolvedValue({
-                success: false,
-                latency: 30,
-                error: 'HTTP 500',
-                checkedAt: checkResult.checkedAt,
-            });
-            systemProbeScheduler.getAssignedProbes.mockResolvedValue([
-                'system-probe-1',
-            ]);
-            prisma.probeResult.findMany
-                .mockResolvedValueOnce([])
-                .mockResolvedValueOnce([
-                    {
-                        id: 'probe-result-1',
-                        probeId: 'system-probe-1',
-                        target: monitorRow.target,
-                        success: true,
-                        latency: 40,
-                        error: null,
-                        checkedAt: checkResult.checkedAt,
-                    },
-                ]);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(prisma.probeResult.findMany).toHaveBeenNthCalledWith(2, {
-                where: {
-                    target: monitorRow.target,
-                    monitorId: monitorRow.id,
-                    configRevision: undefined,
-                    probeId: { in: ['system-probe-1'] },
-                    checkedAt: { gte: expect.any(Date) },
-                    probe: {
-                        scope: 'SYSTEM',
-                        enabled: true,
-                        status: 'ONLINE',
-                    },
-                },
-                orderBy: { checkedAt: 'desc' },
-            });
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
-                    success: true,
-                    error: null,
-                    localSuccess: false,
-                    rescuedByProbe: true,
-                }),
-            );
-        });
-
-        it('does not let probe success override an SSL failure', async () => {
-            const { service, prisma, stateService, httpChecker } =
-                createService();
-            const ssl = {
-                expiresAt: new Date('2026-03-10T12:00:00.000Z'),
-                daysRemaining: 5,
-                issuer: 'Example CA',
-                subject: 'api.example.com',
-            };
-            prisma.monitor.findFirst.mockResolvedValue({
-                ...monitorRow,
-                checkSsl: true,
-            });
-            httpChecker.check.mockResolvedValue({
-                success: false,
-                latency: 30,
-                error: 'SSL certificate expires in 5 day(s)',
-                checkedAt: checkResult.checkedAt,
-                ssl,
-            });
-            prisma.probeResult.findMany.mockResolvedValue([
-                {
-                    id: 'probe-result-1',
-                    probeId: 'probe-1',
-                    target: monitorRow.target,
-                    success: true,
-                    latency: 40,
-                    error: null,
-                    checkedAt: checkResult.checkedAt,
-                },
-            ]);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
-                    success: false,
-                    error: 'SSL certificate expires in 5 day(s)',
-                    ssl,
-                }),
-            );
-        });
-
-        it('keeps a local failure DOWN when every fresh bound probe failed', async () => {
-            const { service, prisma, stateService, httpChecker } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            httpChecker.check.mockResolvedValue({
-                success: false,
-                latency: 30,
-                error: 'HTTP 500',
-                checkedAt: checkResult.checkedAt,
-            });
-            prisma.probeResult.findMany.mockResolvedValue([
-                {
-                    id: 'probe-result-1',
-                    probeId: 'probe-1',
-                    target: monitorRow.target,
-                    success: false,
-                    latency: 40,
-                    error: 'timeout',
-                    checkedAt: checkResult.checkedAt,
-                },
-            ]);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
-                    success: false,
-                    error: 'HTTP 500; all 1 probe result(s) failed',
-                }),
-            );
+            ).rejects.toThrow('Monitor is paused');
         });
 
         it('throws when the monitor is not in the project', async () => {
@@ -843,305 +1018,79 @@ describe('CheckerService', () => {
                     type: 'USER',
                     userId: 'user-1',
                 }),
-            ).rejects.toThrow(NotFoundException);
+            ).rejects.toBeInstanceOf(NotFoundException);
         });
-    });
 
-    describe('ingestProbeReport', () => {
-        it('keeps versioned probes usable after a compatible definition update', async () => {
-            const { service, prisma, stateService } = createService();
-            prisma.monitor.findFirst.mockResolvedValue({
-                ...monitorRow,
-                revision: 2,
-                configRevision: 2,
-            });
-            prisma.checkLog.findFirst
-                .mockResolvedValueOnce({
+        it('routes DNS and PING monitors through the registry without probe aggregation', async () => {
+            const { service, prisma, dnsChecker, pingChecker, stateService } =
+                createService();
+            for (const [type, checker] of [
+                ['DNS', dnsChecker],
+                ['PING', pingChecker],
+            ] as const) {
+                prisma.monitor.findFirst.mockResolvedValue({
+                    ...monitorRow,
+                    type,
+                    target: 'example.com',
+                    config: type === 'DNS' ? { recordType: 'A' } : {},
+                });
+                checker.run.mockResolvedValue({
                     ...checkResult,
                     success: false,
-                    localSuccess: false,
-                    revision: 2,
-                    configRevision: 2,
-                    failureKind: 'TRANSPORT',
-                })
-                .mockResolvedValueOnce(null);
-            prisma.probeResult.findMany.mockResolvedValue([{ success: true }]);
-            await service.ingestProbeReportForMonitor('monitor-1', {
-                target: monitorRow.target,
-                success: true,
-                latency: 20,
-                configRevision: 2,
-            });
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
-                    revision: 2,
-                    configRevision: 2,
-                    success: true,
-                    rescuedByProbe: true,
-                }),
-            );
-            expect(prisma.probeResult.findMany).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    where: expect.objectContaining({ configRevision: 2 }),
-                }),
-            );
+                    error: 'Target failed',
+                    failureKind: 'ASSERTION',
+                });
+
+                await service.checkMonitorForProject('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                });
+
+                expect(checker.run).toHaveBeenCalledTimes(1);
+            }
+            expect(prisma.probe.findMany).not.toHaveBeenCalled();
+            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+            expect(stateService.settle).toHaveBeenCalledTimes(2);
         });
 
-        it('does not reuse an effective rescued verdict as raw local service evidence', async () => {
-            const { service, prisma, stateService } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            prisma.checkLog.findFirst
-                .mockResolvedValueOnce({
-                    success: true,
-                    localSuccess: false,
-                    serviceVerdict: 'SUCCESS',
-                    localServiceVerdict: 'FAILURE',
-                    latency: 30,
-                    error: null,
-                    checkedAt: new Date(),
-                })
-                .mockResolvedValueOnce(null);
-            prisma.probeResult.findMany.mockResolvedValue([{ success: false }]);
-            await service.ingestProbeReportForMonitor('monitor-1', {
-                target: monitorRow.target,
-                success: false,
-                latency: 20,
-                checkedAt: new Date(),
-            });
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
-                    success: false,
-                    serviceVerdict: 'FAILURE',
-                    localServiceVerdict: 'FAILURE',
-                    sslVerdict: 'NO_EVIDENCE',
-                }),
-            );
-        });
-
-        it('uses fresh probe service success without overriding an independent SSL failure', async () => {
-            const { service, prisma, stateService } = createService();
+        it('keeps a certificate policy failure protected from probe votes', async () => {
+            const { service, prisma, httpChecker, stateService } =
+                createService();
             prisma.monitor.findFirst.mockResolvedValue({
                 ...monitorRow,
                 checkSsl: true,
-                configRevision: 1,
             });
-            prisma.checkLog.findFirst
-                .mockResolvedValueOnce({
-                    success: false,
-                    localSuccess: false,
-                    serviceVerdict: 'NO_EVIDENCE',
-                    localServiceVerdict: 'NO_EVIDENCE',
-                    sslVerdict: 'INVALID',
-                    latency: 30,
-                    error: 'SSL invalid',
-                    checkedAt: new Date(),
-                })
-                .mockResolvedValueOnce(null);
-            prisma.probeResult.findMany.mockResolvedValue([{ success: true }]);
-            await service.ingestProbeReportForMonitor('monitor-1', {
-                target: monitorRow.target,
-                success: true,
-                latency: 20,
-                checkedAt: new Date(),
-            });
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
-                    success: false,
-                    serviceVerdict: 'SUCCESS',
-                    localServiceVerdict: 'NO_EVIDENCE',
-                    sslVerdict: 'NO_EVIDENCE',
-                    rescuedByProbe: false,
-                }),
-            );
-        });
-        it('re-evaluates the latest local outcome when a probe report arrives', async () => {
-            const { service, prisma, stateService } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            prisma.checkLog.findFirst.mockResolvedValue({
-                id: 'log-1',
-                monitorId: 'monitor-1',
+            httpChecker.check.mockResolvedValue({
+                ...checkResult,
                 success: false,
-                latency: 30,
-                error: 'HTTP 500',
-                source: 'LOCAL',
-                checkedAt: checkResult.checkedAt,
-            });
-            prisma.probeResult.findMany.mockResolvedValue([
-                {
-                    id: 'probe-result-1',
-                    probeId: 'probe-1',
-                    target: monitorRow.target,
-                    success: true,
-                    latency: 20,
-                    error: null,
-                    checkedAt: checkResult.checkedAt,
-                },
-            ]);
-
-            const result = await service.ingestProbeReportForMonitor(
-                'monitor-1',
-                {
-                    target: 'https://api.example.com/health',
-                    success: true,
-                    latency: 20,
-                },
-            );
-
-            expect(prisma.monitor.findFirst).toHaveBeenCalledWith({
-                where: {
-                    id: 'monitor-1',
-                    target: 'https://api.example.com/health',
-                    deletedAt: null,
-                    enabled: true,
-                },
-            });
-            expect(prisma.checkLog.findFirst).toHaveBeenCalledWith({
-                where: {
-                    monitorId: 'monitor-1',
-                    source: 'LOCAL',
-                    configRevision: undefined,
-                },
-                orderBy: { checkedAt: 'desc' },
-            });
-            expect(stateService.record).toHaveBeenCalledWith('monitor-1', {
-                success: true,
-                latency: 30,
-                error: null,
-                source: 'PROBE',
-                probeRoundWindowMs: 15000,
-                checkedAt: expect.any(Date),
-                ssl: undefined,
-                localSuccess: false,
-                rescuedByProbe: true,
+                error: 'Certificate expired',
+                sslVerdict: 'EXPIRED',
                 serviceVerdict: 'SUCCESS',
-                localServiceVerdict: 'FAILURE',
-                sslVerdict: 'NO_EVIDENCE',
-                statusCode: null,
-                ruleMatched: false,
-                ruleGroupIds: [],
-                revision: 1,
-                evaluated: true,
-                failureKind: null,
-                meta: undefined,
+                ssl: {
+                    expiresAt: new Date('2026-03-01T00:00:00.000Z'),
+                    daysRemaining: -4,
+                    issuer: "Let's Encrypt",
+                    subject: 'api.example.com',
+                },
             });
-            expect(result?.monitorId).toBe('monitor-1');
-        });
 
-        it('carries the probe-reported status code into the check outcome', async () => {
-            const { service, prisma, stateService } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            prisma.checkLog.findFirst.mockResolvedValue({
-                id: 'log-1',
-                monitorId: 'monitor-1',
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+
+            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
                 success: false,
-                latency: 30,
-                error: 'HTTP 500',
-                source: 'LOCAL',
-                checkedAt: checkResult.checkedAt,
+                aggregation: { protected: true, protectedReason: 'SSL' },
+                ssl: expect.objectContaining({ daysRemaining: -4 }),
             });
-            prisma.probeResult.findMany.mockResolvedValue([
-                {
-                    id: 'probe-result-1',
-                    probeId: 'probe-1',
-                    target: monitorRow.target,
-                    success: false,
-                    latency: 40,
-                    error: 'timeout',
-                    checkedAt: checkResult.checkedAt,
-                },
-            ]);
-
-            await service.ingestProbeReportForMonitor('monitor-1', {
-                target: 'https://api.example.com/health',
-                success: false,
-                latency: 40,
-                statusCode: 503,
-            });
-
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({ statusCode: 503 }),
-            );
-        });
-
-        it('does not apply a probe report before any local baseline exists', async () => {
-            const { service, prisma, stateService } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            prisma.checkLog.findFirst.mockResolvedValue(null);
-
-            const result = await service.ingestProbeReportForMonitor(
-                'monitor-1',
-                {
-                    target: 'https://api.example.com/health',
-                    success: true,
-                    latency: 5,
-                },
-            );
-
-            expect(result).toBeNull();
-            expect(stateService.record).not.toHaveBeenCalled();
-        });
-
-        it('ignores a report for a round that was already folded', async () => {
-            const { service, prisma, stateService } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            prisma.checkLog.findFirst
-                .mockResolvedValueOnce({
-                    id: 'log-1',
-                    monitorId: 'monitor-1',
-                    success: false,
-                    latency: 30,
-                    error: 'HTTP 500',
-                    source: 'LOCAL',
-                    checkedAt: new Date('2026-03-05T12:00:00.000Z'),
-                })
-                .mockResolvedValueOnce({ checkedAt: new Date() });
-
-            const result = await service.ingestProbeReportForMonitor(
-                'monitor-1',
-                {
-                    target: 'https://api.example.com/health',
-                    success: true,
-                    latency: 40,
-                    error: null,
-                },
-            );
-
-            expect(result).toBeNull();
-            expect(stateService.record).not.toHaveBeenCalled();
-        });
-
-        it('returns null when no monitor owns the target', async () => {
-            const { service, prisma, stateService } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(null);
-
-            const result = await service.ingestProbeReportForMonitor(
-                'monitor-1',
-                {
-                    target: 'https://unknown.example.com',
-                    success: true,
-                    latency: 5,
-                },
-            );
-
-            expect(result).toBeNull();
-            expect(stateService.record).not.toHaveBeenCalled();
         });
     });
 
     describe('enqueueDueChecks', () => {
-        function createQueue() {
-            return {
-                add: jest.fn().mockResolvedValue({ id: 'job-1' }),
-            } as unknown as Queue<MonitorCheckJobData> & { add: jest.Mock };
-        }
-
         it('enqueues one check job per monitor whose interval elapsed', async () => {
-            const { service, prisma } = createService();
-            const queue = createQueue();
+            const { service, prisma, queue } = createService();
             prisma.monitor.findMany.mockResolvedValue([
                 { ...monitorRow, state: { lastLocalCheckAt: null } },
                 {
@@ -1151,27 +1100,22 @@ describe('CheckerService', () => {
                 },
             ]);
 
-            const result = await service.enqueueDueChecks(queue);
-
-            expect(result).toEqual({ due: 1, enqueued: 1 });
-            expect(queue.add).toHaveBeenCalledTimes(1);
+            await expect(
+                service.enqueueDueChecks(
+                    queue as unknown as Queue<MonitorCheckJobData>,
+                ),
+            ).resolves.toEqual({ due: 1, enqueued: 1 });
             expect(queue.add).toHaveBeenCalledWith(
                 MONITOR_CHECK_JOB,
                 { monitorId: 'monitor-1' },
                 expect.objectContaining({
-                    // No TTL: the key must be released when the job finishes,
-                    // otherwise the monitor would be skipped until it expires.
                     deduplication: { id: 'monitor-check:monitor-1' },
                 }),
             );
         });
 
         it('keeps enqueuing the remaining monitors when one add fails', async () => {
-            const { service, prisma } = createService();
-            const queue = createQueue();
-            queue.add
-                .mockRejectedValueOnce(new Error('redis down'))
-                .mockResolvedValueOnce({ id: 'job-2' });
+            const { service, prisma, queue } = createService();
             prisma.monitor.findMany.mockResolvedValue([
                 { ...monitorRow, state: { lastLocalCheckAt: null } },
                 {
@@ -1180,40 +1124,36 @@ describe('CheckerService', () => {
                     state: { lastLocalCheckAt: null },
                 },
             ]);
+            queue.add
+                .mockRejectedValueOnce(new Error('redis down'))
+                .mockResolvedValueOnce({});
 
-            const result = await service.enqueueDueChecks(queue);
-
-            expect(result).toEqual({ due: 2, enqueued: 1 });
-            expect(queue.add).toHaveBeenCalledTimes(2);
+            await expect(
+                service.enqueueDueChecks(
+                    queue as unknown as Queue<MonitorCheckJobData>,
+                ),
+            ).resolves.toEqual({ due: 2, enqueued: 1 });
         });
     });
 
     describe('executeMonitor', () => {
         it('runs a scheduled local check for the monitor', async () => {
-            const { service, prisma, stateService, httpChecker } =
+            const { service, prisma, httpChecker, stateService } =
                 createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
 
-            const result = await service.executeMonitor('monitor-1');
+            await service.executeMonitor('monitor-1');
 
-            expect(httpChecker.check).toHaveBeenCalled();
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({ source: 'LOCAL' }),
-            );
-            expect(result?.monitorId).toBe('monitor-1');
+            expect(httpChecker.check).toHaveBeenCalledTimes(1);
+            expect(stateService.settle).toHaveBeenCalledTimes(1);
         });
 
         it('does nothing when the monitor is gone or disabled', async () => {
-            const { service, prisma, stateService, httpChecker } =
-                createService();
+            const { service, prisma, httpChecker } = createService();
             prisma.monitor.findFirst.mockResolvedValue(null);
 
-            const result = await service.executeMonitor('monitor-1');
-
-            expect(result).toBeNull();
+            expect(await service.executeMonitor('monitor-1')).toBeNull();
             expect(httpChecker.check).not.toHaveBeenCalled();
-            expect(stateService.record).not.toHaveBeenCalled();
         });
     });
 
@@ -1225,39 +1165,27 @@ describe('CheckerService', () => {
                 {
                     id: 'log-1',
                     monitorId: 'monitor-1',
-                    success: false,
-                    latency: 30,
-                    error: 'Unexpected status 500 (expected 200)',
+                    success: true,
+                    localSuccess: true,
+                    latency: 12,
+                    error: null,
+                    ruleMatched: false,
+                    ruleGroupIds: [],
                     source: 'LOCAL',
                     checkedAt: new Date('2026-03-05T12:00:00.000Z'),
                 },
             ]);
             prisma.checkLog.count.mockResolvedValue(1);
 
-            const result = await service.listCheckLogs(
+            const page = await service.listCheckLogs(
                 'project-1',
                 'monitor-1',
-                {
-                    success: false,
-                    page: 1,
-                    limit: 5,
-                },
+                { page: 1, limit: 20 },
                 { type: 'USER', userId: 'user-1' },
             );
 
-            expect(prisma.checkLog.findMany).toHaveBeenCalledWith({
-                where: {
-                    monitorId: 'monitor-1',
-                    organizationId: 'org-1',
-                    projectId: 'project-1',
-                    success: false,
-                },
-                orderBy: { checkedAt: 'desc' },
-                skip: 0,
-                take: 5,
-            });
-            expect(result.meta.total).toBe(1);
-            expect(result.data[0].success).toBe(false);
+            expect(page.meta).toMatchObject({ total: 1, page: 1, limit: 20 });
+            expect(page.data).toHaveLength(1);
         });
 
         it('throws when the monitor is not in the project', async () => {
@@ -1268,242 +1196,28 @@ describe('CheckerService', () => {
                 service.listCheckLogs(
                     'project-1',
                     'monitor-1',
-                    {},
+                    { page: 1, limit: 20 },
                     { type: 'USER', userId: 'user-1' },
                 ),
-            ).rejects.toThrow(NotFoundException);
+            ).rejects.toBeInstanceOf(NotFoundException);
         });
     });
 
-    describe('availability alert', () => {
-        const alertMonitor = {
-            ...monitorRow,
-            availabilityEnabled: true,
-            availabilityThreshold: 90,
-            availabilityWindow: 10,
-        };
-
-        const recordWith = (overrides: Record<string, unknown>) => ({
-            monitor: alertMonitor,
-            state: { ...stateRow, ...overrides },
-            transition: {
-                previousStatus: 'UP',
-                previousFailCount: 0,
-                status: 'DOWN',
-                failCount: 3,
-                changed: true,
-            },
-        });
-
-        it('does not create a second nontransactional availability notification', async () => {
-            const { service, prisma, stateService, notifierService } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
-            stateService.record.mockResolvedValue(
-                recordWith({
-                    status: 'DOWN',
-                    failCount: 3,
-                    availabilityAlertActive: false,
-                }),
-            );
-            prisma.checkLog.findMany.mockResolvedValue([
-                { ruleMatched: true },
-                { ruleMatched: true },
-                { ruleMatched: true },
-                { ruleMatched: false },
-            ]);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(prisma.checkLog.findMany).not.toHaveBeenCalled();
-            expect(
-                notifierService.notifyAvailabilityAlert,
-            ).not.toHaveBeenCalled();
-            expect(stateService.record).toHaveBeenCalledTimes(1);
-        });
-
-        it('stays silent while already alerting', async () => {
-            const { service, prisma, stateService, notifierService } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
-            stateService.record.mockResolvedValue(
-                recordWith({
-                    status: 'DOWN',
-                    failCount: 3,
-                    availabilityAlertActive: true,
-                }),
-            );
-            prisma.checkLog.findMany.mockResolvedValue([
-                { ruleMatched: true },
-                { ruleMatched: true },
-                { ruleMatched: true },
-            ]);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(
-                notifierService.notifyAvailabilityAlert,
-            ).not.toHaveBeenCalled();
-            expect(prisma.monitorState.update).not.toHaveBeenCalled();
-        });
-
-        it('delegates recovery to the transactional state writer', async () => {
-            const { service, prisma, stateService, notifierService } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
-            stateService.record.mockResolvedValue(
-                recordWith({
-                    status: 'UP',
-                    failCount: 0,
-                    availabilityAlertActive: true,
-                }),
-            );
-            prisma.checkLog.findMany.mockResolvedValue(
-                Array.from({ length: 10 }, () => ({ ruleMatched: false })),
-            );
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(
-                notifierService.notifyAvailabilityRecovery,
-            ).not.toHaveBeenCalled();
-            expect(prisma.monitorState.update).not.toHaveBeenCalled();
-            expect(stateService.record).toHaveBeenCalledTimes(1);
-        });
-
-        it('does not alert while consecutive failures are below the threshold', async () => {
-            const { service, prisma, stateService, notifierService } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
-            stateService.record.mockResolvedValue(
-                recordWith({
-                    status: 'DEGRADED',
-                    failCount: 1,
-                    availabilityAlertActive: false,
-                }),
-            );
-            prisma.checkLog.findMany.mockResolvedValue([
-                { ruleMatched: true },
-                { ruleMatched: false },
-            ]);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(
-                notifierService.notifyAvailabilityAlert,
-            ).not.toHaveBeenCalled();
-            expect(prisma.monitorState.update).not.toHaveBeenCalled();
-        });
-
-        it('does not alert when availability is at or above the threshold', async () => {
-            const { service, prisma, stateService, notifierService } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(alertMonitor);
-            stateService.record.mockResolvedValue(
-                recordWith({
-                    status: 'DOWN',
-                    failCount: 3,
-                    availabilityAlertActive: false,
-                }),
-            );
-            // 10 checks, 9 healthy => 90%, not below the 90% threshold.
-            prisma.checkLog.findMany.mockResolvedValue([
-                ...Array.from({ length: 9 }, () => ({ ruleMatched: false })),
-                { ruleMatched: true },
-            ]);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(
-                notifierService.notifyAvailabilityAlert,
-            ).not.toHaveBeenCalled();
-            expect(
-                notifierService.notifyAvailabilityRecovery,
-            ).not.toHaveBeenCalled();
-            expect(prisma.monitorState.update).not.toHaveBeenCalled();
-        });
-
-        it('does nothing when availability alerting is disabled', async () => {
-            const { service, prisma, stateService, notifierService } =
+    describe('rule evaluation', () => {
+        it('records the rule verdict against the aggregated verdict', async () => {
+            const { service, prisma, ruleEvaluator, ruleGroups, rounds } =
                 createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue(
-                recordWith({ status: 'DOWN', failCount: 3 }),
-            );
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(prisma.checkLog.findMany).not.toHaveBeenCalled();
-            expect(
-                notifierService.notifyAvailabilityAlert,
-            ).not.toHaveBeenCalled();
-        });
-    });
-
-    describe('node anomaly condition rules', () => {
-        const binding = {
-            id: 'binding-1',
-            monitorId: 'monitor-1',
-            ruleGroupId: 'rg-1',
-            priority: 0,
-            enabled: true,
-            ruleGroup: {
-                id: 'rg-1',
-                organizationId: 'org-1',
-                projectId: null,
-                name: 'High latency',
-                description: null,
-                tree: {
-                    type: 'condition',
-                    id: 'c1',
-                    field: 'latency',
-                    operator: 'gt',
-                    value: 100,
+            prisma.probe.findMany.mockResolvedValue([]);
+            ruleGroups.findBindingsForMonitor.mockResolvedValue([
+                {
+                    ruleGroupId: 'group-1',
+                    ruleGroup: {
+                        tree: { type: 'condition' },
+                        fieldsUsed: ['latency'],
+                    },
                 },
-                fieldsUsed: ['latency'],
-                enabled: true,
-                createdAt: new Date('2026-03-05T12:00:00.000Z'),
-                updatedAt: new Date('2026-03-05T12:00:00.000Z'),
-                deletedAt: null,
-            },
-        };
-
-        const noChangeTransition = {
-            previousStatus: 'UP',
-            previousFailCount: 0,
-            status: 'UP',
-            failCount: 0,
-            changed: false,
-        };
-
-        it('records the rule verdict onto the check log when a bound rule matches', async () => {
-            const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue({
-                monitor: monitorRow,
-                state: stateRow,
-                transition: noChangeTransition,
-            });
-            ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
+            ]);
             ruleEvaluator.evaluate.mockReturnValue(true);
 
             await service.checkMonitorForProject('project-1', 'monitor-1', {
@@ -1511,103 +1225,49 @@ describe('CheckerService', () => {
                 userId: 'user-1',
             });
 
-            expect(ruleGroups.findBindingsForMonitor).toHaveBeenCalledWith(
-                'monitor-1',
-            );
-            expect(ruleEvaluator.evaluate).toHaveBeenCalledWith(
-                binding.ruleGroup.tree,
-                {
-                    success: true,
-                    latency: 12,
-                    certDaysRemaining: undefined,
-                    statusCode: undefined,
-                },
-            );
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
+            expect(ruleEvaluator.evaluate).toHaveBeenCalled();
+            expect(prisma.checkLog.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
                     ruleMatched: true,
-                    ruleGroupIds: ['rg-1'],
+                    ruleGroupIds: ['group-1'],
                 }),
-            );
-        });
-
-        it('records ruleMatched=false when no rule matches', async () => {
-            const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
-                createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue({
-                monitor: monitorRow,
-                state: stateRow,
-                transition: noChangeTransition,
             });
-            ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
-            ruleEvaluator.evaluate.mockReturnValue(false);
-
-            await service.checkMonitorForProject('project-1', 'monitor-1', {
-                type: 'USER',
-                userId: 'user-1',
-            });
-
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
-                    ruleMatched: false,
-                    ruleGroupIds: [],
-                }),
-            );
+            expect([...rounds.values()]).toHaveLength(1);
         });
 
         it('falls back to !success when the monitor has no bound rule group', async () => {
-            const { service, prisma, stateService, ruleEvaluator, ruleGroups } =
-                createService();
+            const { service, prisma, stateService } = createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue({
-                monitor: monitorRow,
-                state: stateRow,
-                transition: noChangeTransition,
-            });
-            ruleGroups.findBindingsForMonitor.mockResolvedValue([]);
+            prisma.probe.findMany.mockResolvedValue([]);
 
             await service.checkMonitorForProject('project-1', 'monitor-1', {
                 type: 'USER',
                 userId: 'user-1',
             });
 
-            expect(ruleEvaluator.evaluate).not.toHaveBeenCalled();
-            expect(stateService.record).toHaveBeenCalledWith(
-                'monitor-1',
-                expect.objectContaining({
-                    ruleMatched: false,
-                    ruleGroupIds: [],
-                }),
-            );
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                ruleMatched: false,
+            });
         });
 
         it('passes the actual HTTP status code into the rule context', async () => {
-            const {
-                service,
-                prisma,
-                stateService,
-                httpChecker,
-                ruleEvaluator,
-                ruleGroups,
-            } = createService();
-            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            stateService.record.mockResolvedValue({
-                monitor: monitorRow,
-                state: stateRow,
-                transition: noChangeTransition,
+            const { service, prisma, ruleEvaluator, ruleGroups, httpChecker } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                expectedStatus: 200,
             });
+            prisma.probe.findMany.mockResolvedValue([]);
             httpChecker.check.mockResolvedValue({
-                success: false,
-                latency: 30,
-                error: 'Unexpected status 503 (expected 200)',
-                checkedAt: checkResult.checkedAt,
-                statusCode: 503,
+                ...checkResult,
+                statusCode: 200,
             });
-            ruleGroups.findBindingsForMonitor.mockResolvedValue([binding]);
-            ruleEvaluator.evaluate.mockReturnValue(true);
+            ruleGroups.findBindingsForMonitor.mockResolvedValue([
+                {
+                    ruleGroupId: 'group-1',
+                    ruleGroup: { tree: { type: 'condition' }, fieldsUsed: [] },
+                },
+            ]);
 
             await service.checkMonitorForProject('project-1', 'monitor-1', {
                 type: 'USER',
@@ -1615,35 +1275,41 @@ describe('CheckerService', () => {
             });
 
             expect(ruleEvaluator.evaluate).toHaveBeenCalledWith(
-                binding.ruleGroup.tree,
-                expect.objectContaining({ statusCode: 503 }),
+                expect.anything(),
+                expect.objectContaining({ statusCode: 200 }),
             );
         });
     });
-});
 
-describe('probeResultWindowMs', () => {
-    it('keeps the two minute floor for fast monitors', () => {
-        expect(probeResultWindowMs(10)).toBe(2 * 60 * 1000);
-        expect(probeResultWindowMs(60)).toBe(2 * 60 * 1000);
-    });
+    describe('window helpers', () => {
+        it('keeps the two minute floor for fast monitors', () => {
+            expect(probeResultWindowMs(10)).toBe(2 * 60 * 1000);
+        });
 
-    it('scales with the monitor interval', () => {
-        expect(probeResultWindowMs(300)).toBe(10 * 60 * 1000);
-    });
+        it('scales with the monitor interval', () => {
+            expect(probeResultWindowMs(120)).toBe(4 * 60 * 1000);
+        });
 
-    it('caps the window for slow monitors', () => {
-        expect(probeResultWindowMs(86_400)).toBe(15 * 60 * 1000);
-    });
-});
+        it('caps the window for slow monitors', () => {
+            expect(probeResultWindowMs(3600)).toBe(15 * 60 * 1000);
+        });
 
-describe('probeReportDedupWindowMs', () => {
-    it('scales with the monitor interval', () => {
-        expect(probeReportDedupWindowMs(10)).toBe(5 * 1000);
-        expect(probeReportDedupWindowMs(60)).toBe(15 * 1000);
-    });
+        it('scales the probe fold window with the interval', () => {
+            expect(probeReportDedupWindowMs(120)).toBe(30 * 1000);
+        });
 
-    it('never suppresses reports for longer than the cap', () => {
-        expect(probeReportDedupWindowMs(600)).toBe(30 * 1000);
+        it('never suppresses reports for longer than the cap', () => {
+            expect(probeReportDedupWindowMs(3600)).toBe(30 * 1000);
+        });
+
+        it('builds the round id from the local check start', () => {
+            expect(
+                buildRoundId('monitor-1', new Date('2026-03-05T12:00:00.000Z')),
+            ).toBe('monitor-1:1772712000000');
+        });
+
+        it('attributes reports for one interval plus the fold window', () => {
+            expect(roundAttributionWindowMs(60)).toBe(60_000 + 15_000);
+        });
     });
 });

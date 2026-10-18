@@ -95,6 +95,20 @@ export class CreateMonitorDto {
     failureThreshold?: number;
 
     @ApiPropertyOptional({
+        example: 100,
+        minimum: 1,
+        maximum: 100,
+        default: 1,
+        description:
+            'Minimum success percentage of the currently bound tenant probes; the probe verdict overrides a local success and rescues a local failure',
+    })
+    @ValidateIf((_, value: unknown) => value !== undefined)
+    @IsInt()
+    @Min(1)
+    @Max(100)
+    probeSuccessRatio?: number;
+
+    @ApiPropertyOptional({
         example: true,
         description: 'Whether HTTPS certificate expiry should be monitored',
         default: false,
@@ -166,4 +180,15 @@ export class CreateMonitorDto {
     @IsArray()
     @IsString({ each: true })
     notificationChannelIds?: string[];
+
+    @ApiPropertyOptional({
+        example: ['clx123probe1'],
+        description:
+            'Tenant probes to assign at creation time; capped by the plan per-monitor probe limit',
+        type: [String],
+    })
+    @IsOptional()
+    @IsArray()
+    @IsString({ each: true })
+    probeIds?: string[];
 }

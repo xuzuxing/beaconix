@@ -14,7 +14,7 @@ import type {
 import { MonitorStateEntity } from './entities';
 import type { SslCertificateInfo } from '../checker/checkers';
 import { AlertEventsService } from '../alert-events/alert-events.service';
-import type { Prisma } from '../../generated/prisma/client';
+import { Prisma } from '../../generated/prisma/client';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { monitoringProjection } from '../../common/authorization/monitoring-projection';
@@ -69,6 +69,24 @@ export interface DerivedState {
     failCount: number;
 }
 
+/** State columns written by `record` and `settle`; bare values only. */
+interface MonitorStateValues {
+    status: MonitorStatus;
+    failCount: number;
+    lastCheckAt?: Date;
+    executionBlockedReason?: string | null;
+    lastLocalCheckAt?: Date;
+    lastError?: string | null;
+    lastLatency?: number;
+    connectivityFailCount?: number;
+    lastAppliedObservationAt?: Date;
+    lastAppliedObservationId?: string;
+    sslExpiresAt?: Date | null;
+    sslDaysRemaining?: number | null;
+    sslIssuer?: string | null;
+    sslSubject?: string | null;
+}
+
 export interface MonitorTransition extends DerivedState {
     previousStatus: MonitorStatus;
     previousFailCount: number;
@@ -79,6 +97,57 @@ export interface MonitorTransition extends DerivedState {
 export type MonitorWithState = MonitorModel & {
     state?: MonitorStateModel | null;
 };
+
+/** Structured diagnosis written into `CheckLog.meta.aggregation` after a round settled. */
+export interface AppliedAggregation {
+    /** True: the round was protected and settled with the local verdict only. */
+    protected: boolean;
+    protectedReason:
+        'LEGACY_UNSUPPORTED' | 'UNEVALUATED' | 'ASSERTION' | 'SSL' | null;
+    /** Effective bound tenant probes at settlement: the ratio denominator. */
+    effectiveProbeCount: number;
+    /** Samples that took part in the vote (at most one per probe). */
+    sampleCount: number;
+    successCount: number;
+    /** Display-only percentage; the decision always uses integer cross-multiplication. */
+    ratio: number;
+    threshold: number;
+    decision:
+        | 'RESCUED'
+        | 'OVERTURNED'
+        | 'CONFIRMED_SUCCESS'
+        | 'CONFIRMED_FAILURE'
+        | 'FALLBACK_LOCAL';
+    /** Settlement time (ISO string), identical to `CheckLog.appliedAt`. */
+    settledAt: string;
+}
+
+/**
+ * Aggregated verdict of one closed batch, ready to be folded into state.
+ * Mirrors `CheckOutcome` but always carries the batch identity and the final
+ * (not local) verdict.
+ */
+export interface SettledRoundVerdict {
+    roundId: string;
+    success: boolean;
+    error: string | null;
+    latency: number;
+    statusCode: number | null;
+    localSuccess: boolean;
+    rescuedByProbe: boolean;
+    failureKind: CheckFailureKind | null;
+    serviceVerdict: NonNullable<CheckOutcome['serviceVerdict']>;
+    localServiceVerdict: NonNullable<CheckOutcome['localServiceVerdict']>;
+    ssl?: CheckOutcome['ssl'];
+    sslVerdict?: CheckOutcome['sslVerdict'];
+    failureReason?: CheckOutcome['failureReason'];
+    ruleMatched: boolean;
+    ruleGroupIds: string[];
+    ruleEvidence?: Prisma.InputJsonValue[];
+    aggregation: AppliedAggregation;
+    configRevision: number;
+    revision: number;
+}
 
 /** Rolling window used by the uptime / latency summary. */
 export const UPTIME_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -247,37 +316,26 @@ export class StateService {
                     : outcome.success
                       ? 'SUCCESS'
                       : 'FAILURE');
-            const connectivityFailCount =
-                serviceVerdict === 'SUCCESS'
-                    ? 0
-                    : (monitor.state?.connectivityFailCount ?? 0) +
-                      (serviceVerdict === 'FAILURE' ? 1 : 0);
+            const connectivityFailCount = this.buildConnectivityCount(
+                monitor.state?.connectivityFailCount ?? 0,
+                serviceVerdict,
+            );
 
-            const stateValues = {
-                status: derived.status,
-                failCount: derived.failCount,
-                lastCheckAt: evaluated ? checkedAt : undefined,
-                executionBlockedReason: evaluated ? null : error,
+            const stateValues = this.stateValues({
+                derived,
+                evaluated,
+                error,
+                latency: outcome.latency,
+                connectivityFailCount,
+                observationId,
+                checkedAt,
+                appliedAt: checkedAt,
                 // The schedule only moves on local checks: a chatty probe must not
                 // push the next local run out of reach.
                 lastLocalCheckAt:
                     source === CheckSource.LOCAL ? checkedAt : undefined,
-                lastError: evaluated ? error : undefined,
-                lastLatency: evaluated ? outcome.latency : undefined,
-                connectivityFailCount: evaluated
-                    ? connectivityFailCount
-                    : undefined,
-                lastAppliedObservationAt: evaluated ? checkedAt : undefined,
-                lastAppliedObservationId: evaluated ? observationId : undefined,
-                ...(outcome.ssl !== undefined
-                    ? {
-                          sslExpiresAt: outcome.ssl?.expiresAt ?? null,
-                          sslDaysRemaining: outcome.ssl?.daysRemaining ?? null,
-                          sslIssuer: outcome.ssl?.issuer ?? null,
-                          sslSubject: outcome.ssl?.subject ?? null,
-                      }
-                    : {}),
-            };
+                ssl: outcome.ssl,
+            });
 
             await tx.checkLog.create({
                 data: {
@@ -359,6 +417,199 @@ export class StateService {
                 deliveries: alertResult.deliveries,
             };
         });
+    }
+
+    /**
+     * Folds an already aggregated batch verdict into state.
+     *
+     * Shares the transaction skeleton of `record`: row lock, monitor/config
+     * validation, `deriveState`, `AlertEventsService.record`, `MonitorState`
+     * upsert. The difference is that the batch CheckLog row written by
+     * `beginRound` is updated instead of a new row being appended, so a batch is
+     * folded exactly once.
+     *
+     * Returns null when the batch was already settled, the monitor changed while
+     * the batch was open, or a concurrent settle won the race.
+     */
+    async settle(
+        monitorId: string,
+        roundId: string,
+        verdict: SettledRoundVerdict,
+    ) {
+        try {
+            return await this.prisma.$transaction(async (tx) => {
+                await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitorId} FOR UPDATE`;
+                const monitor = await tx.monitor.findFirst({
+                    where: {
+                        id: monitorId,
+                        deletedAt: null,
+                        project: {
+                            deletedAt: null,
+                            organization: { deletedAt: null },
+                        },
+                    },
+                    include: { state: true },
+                });
+
+                if (!monitor || !monitor.enabled) return null;
+                if (
+                    monitor.configRevision !== verdict.configRevision ||
+                    monitor.revision !== verdict.revision
+                ) {
+                    return null;
+                }
+
+                const log = await tx.checkLog.findUnique({
+                    where: { monitorId_roundId: { monitorId, roundId } },
+                });
+                if (!log || log.appliedAt) return null;
+
+                const previous: DerivedState = {
+                    status: monitor.state?.status ?? MonitorStatus.UNKNOWN,
+                    failCount: monitor.state?.failCount ?? 0,
+                };
+                const evaluated = log.evaluated !== false;
+                const derived = evaluated
+                    ? deriveState(
+                          {
+                              ...previous,
+                              status:
+                                  previous.status === MonitorStatus.PAUSED
+                                      ? MonitorStatus.UNKNOWN
+                                      : previous.status,
+                          },
+                          verdict.success,
+                          monitor.failureThreshold,
+                      )
+                    : previous;
+                const connectivityFailCount = this.buildConnectivityCount(
+                    monitor.state?.connectivityFailCount ?? 0,
+                    verdict.serviceVerdict,
+                );
+                const settledAt = new Date();
+                const checkedAt = log.checkedAt;
+                const error = verdict.success
+                    ? null
+                    : (verdict.error ?? 'Check failed');
+                const observationId = log.observationId ?? randomUUID();
+                const meta = {
+                    ...((log.meta ?? {}) as Record<string, unknown>),
+                    ...(verdict.ruleEvidence !== undefined
+                        ? { ruleEvidence: verdict.ruleEvidence }
+                        : {}),
+                    aggregation: verdict.aggregation,
+                };
+
+                await tx.checkLog.update({
+                    where: { id: log.id },
+                    data: {
+                        success: verdict.success,
+                        error,
+                        failureKind: verdict.failureKind,
+                        serviceVerdict: verdict.serviceVerdict,
+                        rescuedByProbe: verdict.rescuedByProbe,
+                        ruleMatched: verdict.ruleMatched,
+                        ruleGroupIds: verdict.ruleGroupIds,
+                        meta: meta as unknown as Prisma.InputJsonValue,
+                        appliedAt: settledAt,
+                    },
+                });
+
+                const outcome: CheckOutcome = {
+                    success: verdict.success,
+                    latency: verdict.latency,
+                    error,
+                    checkedAt,
+                    statusCode: verdict.statusCode,
+                    ssl: verdict.ssl,
+                    sslVerdict: verdict.sslVerdict,
+                    serviceVerdict: verdict.serviceVerdict,
+                    localServiceVerdict: verdict.localServiceVerdict,
+                    failureReason: verdict.failureReason,
+                    failureKind: verdict.failureKind,
+                    localSuccess: verdict.localSuccess,
+                    rescuedByProbe: verdict.rescuedByProbe,
+                    ruleMatched: verdict.ruleMatched,
+                    ruleGroupIds: verdict.ruleGroupIds,
+                    ruleEvidence: verdict.ruleEvidence,
+                };
+                const alertResult = evaluated
+                    ? await this.alerts.record(
+                          tx,
+                          monitor,
+                          monitor.state,
+                          outcome,
+                          { ...derived, connectivityFailCount },
+                      )
+                    : {
+                          deliveries: 0,
+                          availabilityAlertActive:
+                              monitor.state?.availabilityAlertActive ?? false,
+                      };
+
+                const stateValues = this.stateValues({
+                    derived,
+                    evaluated,
+                    error,
+                    latency: verdict.latency,
+                    connectivityFailCount,
+                    observationId,
+                    checkedAt,
+                    // The settlement time, not the local check time, orders
+                    // state application so batches apply in sequence.
+                    appliedAt: settledAt,
+                    ssl: verdict.ssl,
+                });
+                const state = await tx.monitorState.upsert({
+                    where: { monitorId },
+                    create: {
+                        monitorId,
+                        ...stateValues,
+                        availabilityAlertActive:
+                            alertResult.availabilityAlertActive,
+                    },
+                    update: {
+                        ...stateValues,
+                        availabilityAlertActive:
+                            alertResult.availabilityAlertActive,
+                    },
+                });
+
+                // Rows left pending by a crash keep their local verdict but stop
+                // polluting the availability window.
+                await tx.checkLog.updateMany({
+                    where: {
+                        monitorId,
+                        appliedAt: null,
+                        roundId: { not: null, notIn: [roundId] },
+                    },
+                    data: { appliedAt: settledAt },
+                });
+
+                const transition: MonitorTransition = {
+                    ...(evaluated ? derived : previous),
+                    previousStatus: previous.status,
+                    previousFailCount: previous.failCount,
+                    changed: evaluated && derived.status !== previous.status,
+                };
+
+                return {
+                    monitor,
+                    state,
+                    transition,
+                    deliveries: alertResult.deliveries,
+                };
+            });
+        } catch (caught) {
+            // A concurrent settle of the same batch hits the unique index.
+            if (
+                caught instanceof Prisma.PrismaClientKnownRequestError &&
+                caught.code === 'P2002'
+            ) {
+                return null;
+            }
+            throw caught;
+        }
     }
 
     /** Marks `status` as the last status that was pushed to notification channels. */
@@ -448,6 +699,70 @@ export class StateService {
                 availabilityAlertPendingId: pendingId,
             },
         );
+    }
+
+    /** Consecutive connectivity failures: a success resets, a failure counts. */
+    private buildConnectivityCount(
+        previousCount: number,
+        serviceVerdict: NonNullable<CheckOutcome['serviceVerdict']>,
+    ): number {
+        if (serviceVerdict === 'SUCCESS') return 0;
+
+        return previousCount + (serviceVerdict === 'FAILURE' ? 1 : 0);
+    }
+
+    /**
+     * State columns derived from one applied outcome, shared by `record` (fresh
+     * row) and `settle` (batch row). `lastLocalCheckAt` is only passed by the
+     * local check that anchors a batch: settling must not move the schedule.
+     */
+    private stateValues(options: {
+        derived: DerivedState;
+        evaluated: boolean;
+        error: string | null;
+        latency: number;
+        connectivityFailCount: number;
+        observationId: string;
+        checkedAt: Date;
+        appliedAt: Date;
+        lastLocalCheckAt?: Date;
+        ssl?: CheckOutcome['ssl'];
+    }): MonitorStateValues {
+        const {
+            derived,
+            evaluated,
+            error,
+            latency,
+            connectivityFailCount,
+            observationId,
+            checkedAt,
+            appliedAt,
+            lastLocalCheckAt,
+            ssl,
+        } = options;
+
+        return {
+            status: derived.status,
+            failCount: derived.failCount,
+            lastCheckAt: evaluated ? checkedAt : undefined,
+            executionBlockedReason: evaluated ? null : error,
+            lastLocalCheckAt,
+            lastError: evaluated ? error : undefined,
+            lastLatency: evaluated ? latency : undefined,
+            connectivityFailCount: evaluated
+                ? connectivityFailCount
+                : undefined,
+            lastAppliedObservationAt: evaluated ? appliedAt : undefined,
+            lastAppliedObservationId: evaluated ? observationId : undefined,
+            ...(ssl !== undefined
+                ? {
+                      sslExpiresAt: ssl?.expiresAt ?? null,
+                      sslDaysRemaining: ssl?.daysRemaining ?? null,
+                      sslIssuer: ssl?.issuer ?? null,
+                      sslSubject: ssl?.subject ?? null,
+                  }
+                : {}),
+        };
     }
 
     private async updateCurrentState(

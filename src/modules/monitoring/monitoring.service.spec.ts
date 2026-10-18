@@ -13,6 +13,7 @@ const monitor = (overrides: Record<string, unknown> = {}) => ({
     timeout: 5000,
     expectedStatus: 200,
     failureThreshold: 3,
+    probeSuccessRatio: 1,
     checkSsl: true,
     sslExpiryThreshold: 30,
     enabled: true,

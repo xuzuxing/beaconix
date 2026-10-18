@@ -990,6 +990,8 @@ model Monitor {
   timeout            Int         @default(5000)
   expectedStatus     Int         @default(200)
   failureThreshold   Int         @default(3)
+  /// 主力租户探针的成功比例门槛（1-100）；默认 1 表示至少 1 个有效租户探针成功。
+  probeSuccessRatio  Int         @default(1)
   checkSsl           Boolean     @default(false)
   sslExpiryThreshold Int         @default(30)
   enabled            Boolean     @default(true)
@@ -1205,6 +1207,8 @@ model ProbeResult {
   payloadHash String?
   receivedAt DateTime @default(now())
   appliedAt DateTime?
+  /// 该结果归属的批次标识；未归属到任何批次时保留 null。
+  roundId   String?
   target    String
   success   Boolean
   error     String?
@@ -1221,6 +1225,8 @@ model ProbeResult {
   @@index([target, checkedAt])
   @@index([probeId, checkedAt])
   @@index([checkedAt])
+  @@index([monitorId, roundId, checkedAt])
+  @@index([projectId, monitorId, roundId])
   @@map("probe_results")
 }
 
@@ -1282,12 +1288,18 @@ model CheckLog {
   failureKind    String?
   meta           Json        @default("{}")
   checkedAt      DateTime    @default(now())
+  /// 批次标识：由一次本地检查锚定的一轮聚合；旧数据为 null。
+  roundId        String?
+  /// 批次结论已写入状态与告警的时间；null 表示该批次尚未结算。
+  appliedAt      DateTime?
 
   monitor Monitor? @relation(fields: [monitorRefId], references: [id], onDelete: SetNull)
 
+  @@unique([monitorId, roundId])
   @@index([projectId, source, checkedAt])
   @@index([projectId, source, monitorType, checkedAt])
   @@index([monitorId, checkedAt])
+  @@index([monitorId, appliedAt])
   @@index([checkedAt])
   @@map("check_logs")
 }
@@ -1497,6 +1509,9 @@ model Plan {
 
   maxMonitors Int @default(5)
   maxProbes   Int @default(0)
+  /// 单个监控最多可分配（绑定）的租户探针数量；0 表示不允许手动分配。
+  /// 有效上限还会被 maxProbes 夹住，见 QuotaService.getProbeAssignmentLimit()。
+  maxProbesPerMonitor Int @default(0)
   maxApiKeys  Int @default(5)
   maxMembers  Int @default(3)
   maxChannels Int @default(1)

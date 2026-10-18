@@ -4,9 +4,13 @@ import {
     BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
-import { CreateMonitorDto, UpdateMonitorDto } from './dto';
-import { MonitorEntity } from './entities';
-import { MonitorStatus, MonitorType } from '../../generated/prisma/enums';
+import { CreateMonitorDto, SetMonitorProbesDto, UpdateMonitorDto } from './dto';
+import { MonitorEntity, MonitorProbeEntity } from './entities';
+import {
+    MonitorStatus,
+    MonitorType,
+    ProbeScope,
+} from '../../generated/prisma/enums';
 import type {
     MonitorModel,
     MonitorStateModel,
@@ -14,7 +18,10 @@ import type {
 } from '../../generated/prisma/models';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { NotifierService } from '../notifier/notifier.service';
-import { QuotaService } from '../../shared/quota/quota.service';
+import {
+    QuotaService,
+    probeAssignmentLimit,
+} from '../../shared/quota/quota.service';
 import type { MonitorPolicy } from '../../shared/quota/quota.service';
 import { isIP } from 'node:net';
 import { parseTcpTarget } from '../checker/checkers/tcp.checker';
@@ -41,10 +48,39 @@ import {
     sanitizeMonitoringTarget,
 } from '../../common/authorization/monitoring-projection';
 
+/** Columns of an assigned probe returned by the monitor endpoints. */
+const PROBE_SUMMARY_SELECT = {
+    id: true,
+    name: true,
+    provider: true,
+    region: true,
+    status: true,
+    enabled: true,
+    lastHeartbeat: true,
+} as const;
+
+/** Single-monitor reads always carry the state row, channels and probes. */
+const MONITOR_INCLUDE = {
+    state: true,
+    notificationChannels: true,
+    probes: { include: { probe: { select: PROBE_SUMMARY_SELECT } } },
+} as const;
+
 /** A monitor row with its companion state row and channel bindings loaded. */
 type MonitorWithState = MonitorModel & {
     state?: MonitorStateModel | null;
     notificationChannels?: { channelId: string }[];
+    probes?: {
+        probe: {
+            id: string;
+            name: string;
+            provider: string;
+            region: string;
+            status: string;
+            enabled: boolean;
+            lastHeartbeat: Date | null;
+        };
+    }[];
 };
 
 @Injectable()
@@ -87,14 +123,23 @@ export class MonitorsService {
         this.validateTarget(dto.type, dto.target, config);
         this.validateSslConfig(dto.type, dto.target, dto.checkSsl ?? false);
 
-        const { notificationChannelIds, ...monitorData } = dto;
+        const { notificationChannelIds, probeIds, ...monitorData } = dto;
         await this.assertChannelsBelongToOrg(
             project.organizationId,
             notificationChannelIds,
         );
+        const probesToAssign = await this.assertProbesBelongToOrg(
+            project.organizationId,
+            probeIds,
+        );
+        await this.quotaService.assertProbesAssignable(
+            project.organizationId,
+            probesToAssign.length,
+        );
 
-        // The nested write creates the companion MonitorState row and the
-        // channel bindings in the same transaction as the monitor itself.
+        // The nested write creates the companion MonitorState row, the
+        // channel bindings and the probe assignments in the same
+        // transaction as the monitor itself.
         const monitor = await this.access.withProject(
             principal,
             projectId,
@@ -103,6 +148,11 @@ export class MonitorsService {
                 await this.assertChannelsBelongToOrg(
                     project.organizationId,
                     notificationChannelIds,
+                    tx,
+                );
+                await this.assertProbesBelongToOrg(
+                    project.organizationId,
+                    probesToAssign,
                     tx,
                 );
                 return tx.monitor.create({
@@ -129,8 +179,15 @@ export class MonitorsService {
                                   ),
                               }
                             : undefined,
+                        probes: probesToAssign.length
+                            ? {
+                                  create: probesToAssign.map((probeId) => ({
+                                      probeId,
+                                  })),
+                              }
+                            : undefined,
                     },
-                    include: { state: true, notificationChannels: true },
+                    include: MONITOR_INCLUDE,
                 });
             },
         );
@@ -274,6 +331,7 @@ export class MonitorsService {
                     'timeout',
                     'expectedStatus',
                     'failureThreshold',
+                    'probeSuccessRatio',
                     'interval',
                     'checkSsl',
                     'sslExpiryThreshold',
@@ -322,11 +380,24 @@ export class MonitorsService {
                       credentialsEnc: existing.credentialsEnc,
                   };
 
-        const { notificationChannelIds, ...monitorData } = dto;
+        const { notificationChannelIds, probeIds, ...monitorData } = dto;
         await this.assertChannelsBelongToOrg(
             existing.organizationId,
             notificationChannelIds,
         );
+        const probesToAssign =
+            probeIds === undefined
+                ? undefined
+                : await this.assertProbesBelongToOrg(
+                      existing.organizationId,
+                      probeIds,
+                  );
+        if (probesToAssign) {
+            await this.quotaService.assertProbesAssignable(
+                existing.organizationId,
+                probesToAssign.length,
+            );
+        }
 
         const monitor = await this.access.withProject(
             principal,
@@ -337,6 +408,11 @@ export class MonitorsService {
                 await this.assertChannelsBelongToOrg(
                     existing.organizationId,
                     notificationChannelIds,
+                    tx,
+                );
+                await this.assertProbesBelongToOrg(
+                    existing.organizationId,
+                    probesToAssign,
                     tx,
                 );
                 return tx.monitor.update({
@@ -407,17 +483,89 @@ export class MonitorsService {
                                   },
                               }
                             : {}),
+                        ...(probesToAssign
+                            ? {
+                                  probes: {
+                                      deleteMany: {},
+                                      create: probesToAssign.map((probeId) => ({
+                                          probeId,
+                                      })),
+                                  },
+                              }
+                            : {}),
                     },
-                    include: { state: true, notificationChannels: true },
+                    include: MONITOR_INCLUDE,
                 });
             },
         );
 
-        if (targetChanged || dto.enabled !== undefined) {
+        if (
+            targetChanged ||
+            dto.enabled !== undefined ||
+            probesToAssign !== undefined
+        ) {
             await this.systemProbeScheduler.rebalance();
         }
 
         return this.toEntity(monitor);
+    }
+
+    /**
+     * Replaces the tenant probes assigned to one monitor (set semantics).
+     *
+     * Bound probes vote on every check: the success verdict is the percentage
+     * of bound, enabled and online probes that reported success, so clearing
+     * the set hands the verdict back to the local checker. The number of probes
+     * is capped by the plan (`maxProbesPerMonitor`, clamped by `maxProbes`).
+     */
+    async setProbes(
+        projectId: string,
+        monitorId: string,
+        dto: SetMonitorProbesDto,
+        principal: AccessPrincipal,
+    ) {
+        await this.access.project(principal, projectId, 'monitor.manage');
+        const monitor = await this.ensureMonitorExists(projectId, monitorId);
+        const probeIds = await this.assertProbesBelongToOrg(
+            monitor.organizationId,
+            dto.probeIds,
+        );
+        await this.quotaService.assertProbesAssignable(
+            monitor.organizationId,
+            probeIds.length,
+        );
+
+        const updated = await this.access.withProject(
+            principal,
+            projectId,
+            'monitor.manage',
+            async (tx) => {
+                await this.ensureMonitorExists(projectId, monitorId, tx);
+                await this.assertProbesBelongToOrg(
+                    monitor.organizationId,
+                    probeIds,
+                    tx,
+                );
+                await tx.monitorProbe.deleteMany({ where: { monitorId } });
+                if (probeIds.length > 0) {
+                    await tx.monitorProbe.createMany({
+                        data: probeIds.map((probeId) => ({
+                            monitorId,
+                            probeId,
+                        })),
+                        skipDuplicates: true,
+                    });
+                }
+                return tx.monitor.findFirstOrThrow({
+                    where: { id: monitorId, projectId, deletedAt: null },
+                    include: MONITOR_INCLUDE,
+                });
+            },
+        );
+
+        await this.systemProbeScheduler.rebalance();
+
+        return this.toEntity(updated);
     }
 
     async pause(
@@ -457,7 +605,7 @@ export class MonitorsService {
                             },
                         },
                     },
-                    include: { state: true, notificationChannels: true },
+                    include: MONITOR_INCLUDE,
                 }),
         );
 
@@ -519,7 +667,7 @@ export class MonitorsService {
                             },
                         },
                     },
-                    include: { state: true, notificationChannels: true },
+                    include: MONITOR_INCLUDE,
                 }),
         );
 
@@ -549,7 +697,7 @@ export class MonitorsService {
                         revision: monitor.revision,
                     },
                     data: { deletedAt: new Date(), revision: { increment: 1 } },
-                    include: { state: true, notificationChannels: true },
+                    include: MONITOR_INCLUDE,
                 }),
         );
 
@@ -629,7 +777,7 @@ export class MonitorsService {
                             },
                         },
                     },
-                    include: { state: true, notificationChannels: true },
+                    include: MONITOR_INCLUDE,
                 }),
         );
 
@@ -840,7 +988,7 @@ export class MonitorsService {
     ): Promise<MonitorWithState> {
         const monitor = await db.monitor.findFirst({
             where: { id: monitorId, projectId, deletedAt: null },
-            include: { state: true, notificationChannels: true },
+            include: MONITOR_INCLUDE,
         });
 
         if (!monitor) {
@@ -870,18 +1018,51 @@ export class MonitorsService {
         }
     }
 
+    /**
+     * Normalises a probe ID list and rejects probes that are missing, belong to
+     * another organization, or are system probes (those are scheduled by the
+     * SystemProbeScheduler, never assigned by hand).
+     */
+    private async assertProbesBelongToOrg(
+        organizationId: string,
+        probeIds?: string[],
+        db: AccessDb = this.prisma,
+    ): Promise<string[]> {
+        if (!probeIds || probeIds.length === 0) return [];
+
+        const uniqueIds = [...new Set(probeIds)];
+        const found = await db.probe.count({
+            where: {
+                id: { in: uniqueIds },
+                organizationId,
+                scope: ProbeScope.TENANT,
+            },
+        });
+
+        if (found !== uniqueIds.length) {
+            throw new BadRequestException(
+                'One or more probes do not belong to this organization',
+            );
+        }
+
+        return uniqueIds;
+    }
+
     /** Flattens the companion state row into the monitor response. */
     private async toEntity(
         monitor: MonitorWithState,
         policy?: MonitorPolicy,
     ): Promise<MonitorEntity> {
-        const { state, notificationChannels, credentialsEnc, ...rest } =
+        const { state, notificationChannels, probes, credentialsEnc, ...rest } =
             monitor;
+        const effectivePolicy =
+            policy ??
+            (await this.quotaService.getMonitorPolicy(monitor.organizationId));
         const eligibility = await this.quotaService.monitorEligibility(
             monitor.organizationId,
             monitor.type,
             monitor.interval,
-            policy,
+            effectivePolicy,
         );
         const reason = !monitor.enabled
             ? 'PAUSED'
@@ -896,6 +1077,12 @@ export class MonitorsService {
             executionBlockedReason: reason,
             notificationChannelIds:
                 notificationChannels?.map((binding) => binding.channelId) ?? [],
+            // List endpoints omit the binding so they stay a single query;
+            // single-monitor endpoints always include it.
+            probes: probes?.map(
+                (binding) => new MonitorProbeEntity(binding.probe),
+            ),
+            maxProbes: probeAssignmentLimit(effectivePolicy),
             status: state?.status ?? 'UNKNOWN',
             failCount: state?.failCount ?? 0,
             lastCheckAt: state?.lastCheckAt ?? null,
