@@ -4,10 +4,20 @@ const { VERSION } = require('../version');
 const logger = require('../logger');
 
 const DEFAULT_DOWNLOAD_BASE = 'https://get.beaconix.app/probe';
+const DEFAULT_INSTALL_URL = 'https://get.beaconix.app/install.sh';
+
+/** Installer URL when the manifest does not carry `installUrl`. */
+function installUrlFor(base) {
+    return base === DEFAULT_DOWNLOAD_BASE
+        ? DEFAULT_INSTALL_URL
+        : `${base}/install.sh`;
+}
 
 /** Fetch the published release manifest ({ version, installUrl? }). */
 async function fetchManifest(base) {
-    const url = `${base}/latest.json`;
+    // The manifest is cached for 60s at most, but a stale CDN edge would still
+    // report the previous release, so bust the cache explicitly.
+    const url = `${base}/latest.json?ts=${Date.now()}`;
     let response;
     try {
         response = await fetch(url, { headers: { accept: 'application/json' } });
@@ -59,7 +69,7 @@ async function runSelfUpdate(args) {
         };
     }
 
-    const installUrl = manifest.installUrl || `${base}/install.sh`;
+    const installUrl = manifest.installUrl || installUrlFor(base);
     const command = `curl -fsSL ${installUrl} | sudo sh -s -- --version=${latest}`;
     logger.log('To update, run:');
     logger.log(`  ${command}`);

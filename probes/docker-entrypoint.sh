@@ -2,10 +2,18 @@
 #
 # Beacon probe agent container entrypoint.
 #
-# Mirrors install.sh: with `latest`, read `<base>/latest.json` first (version +
-# sha256) and download the immutable `beaconix-probe-<version>.tar.gz`. That way
-# a CDN that still serves a stale `latest` alias cannot pin the container to an
-# old build; the alias is only used when the manifest is unreachable.
+# Mirrors install.sh. With `latest`, read `<base>/latest.json` first (version +
+# sha256 + tarball) and download the immutable
+# `<base>/<version>/beaconix-probe-<version>.tar.gz`. Resolution degrades in the
+# same order as the installer, so neither a stale CDN cache nor an older
+# published layout can pin the container to an old build:
+#
+#   1. <base>/<version>/beaconix-probe-<version>.tar.gz
+#   2. manifest `tarball` (absolute URL written by build-release.js)
+#   3. <base>/beaconix-probe-<version>.tar.gz     (flat, compat copy)
+#   4. <base>/beaconix-probe-latest.tar.gz        (moving alias)
+#
+# Keep this block in sync with probes/agent/install/install.sh.
 #
 # The /data volume keeps both the payload and the credential:
 #   /data/agent      installed payload (PROBE_INSTALL_DIR)
@@ -37,28 +45,62 @@ manifest_field() {
             2>/dev/null || true
 }
 
-# Resolve `latest` through the manifest; fall back to the moving alias only when
-# the manifest cannot be fetched.
+fetch_manifest() {
+    MANIFEST="$(curl -fsSL -H 'cache-control: no-cache' \
+        --connect-timeout 10 --max-time 30 "$1" 2>/dev/null || true)"
+    [ -n "$MANIFEST" ]
+}
+
+# Checksum fallback when the manifest carries none.
+sha_from_sums() {
+    [ "$RESOLVED_VERSION" = "latest" ] && return 0
+    sums="$(curl -fsSL --connect-timeout 10 --max-time 30 \
+        "$DOWNLOAD_BASE/$RESOLVED_VERSION/SHA256SUMS" 2>/dev/null || true)"
+    [ -n "$sums" ] || return 0
+    printf '%s\n' "$sums" | \
+        awk -v file="beaconix-probe-$RESOLVED_VERSION.tar.gz" \
+            '$2 == file { print $1; exit }'
+}
+
+# Most specific source first; the configured base stays authoritative.
+candidate_urls() {
+    if [ "$RESOLVED_VERSION" != "latest" ]; then
+        printf '%s\n' "$DOWNLOAD_BASE/$RESOLVED_VERSION/beaconix-probe-$RESOLVED_VERSION.tar.gz"
+    fi
+    if [ -n "$MANIFEST_TARBALL" ]; then
+        printf '%s\n' "$MANIFEST_TARBALL"
+    fi
+    if [ "$RESOLVED_VERSION" != "latest" ]; then
+        printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-$RESOLVED_VERSION.tar.gz"
+    fi
+    printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-latest.tar.gz"
+}
+
+# Resolve `latest` through the manifest; explicit PROBE_VERSION values read that
+# version's own manifest, then fall back to its SHA256SUMS.
 resolve_payload() {
     RESOLVED_VERSION="$VERSION"
     EXPECTED_SHA=""
+    MANIFEST_TARBALL=""
 
     if [ "$VERSION" = "latest" ]; then
-        RESOLVED_VERSION=""
-        MANIFEST="$(curl -fsSL -H 'cache-control: no-cache' \
-            --connect-timeout 10 --max-time 30 \
-            "$DOWNLOAD_BASE/latest.json?ts=$(date +%s)" 2>/dev/null || true)"
-        if [ -n "$MANIFEST" ]; then
+        if fetch_manifest "$DOWNLOAD_BASE/latest.json?ts=$(date +%s)"; then
             RESOLVED_VERSION="$(manifest_field version)"
             EXPECTED_SHA="$(manifest_field sha256)"
+            MANIFEST_TARBALL="$(manifest_field tarball)"
         fi
         if [ -z "$RESOLVED_VERSION" ]; then
             log "warning: latest.json unavailable; falling back to the latest alias"
             RESOLVED_VERSION="latest"
         fi
+    elif fetch_manifest "$DOWNLOAD_BASE/$VERSION/latest.json?ts=$(date +%s)"; then
+        EXPECTED_SHA="$(manifest_field sha256)"
+        MANIFEST_TARBALL="$(manifest_field tarball)"
     fi
 
-    TARBALL_URL="$DOWNLOAD_BASE/beaconix-probe-${RESOLVED_VERSION}.tar.gz?ts=$(date +%s)"
+    if [ -z "$EXPECTED_SHA" ]; then
+        EXPECTED_SHA="$(sha_from_sums)"
+    fi
 }
 
 # Download into a staging directory and swap it in, so a failed download, a
@@ -71,8 +113,21 @@ install_payload() {
     archive="$(mktemp)"
     rm -rf "$staging"
 
-    if ! curl -fsSL --connect-timeout 10 --max-time 120 \
-        "$TARBALL_URL" -o "$archive"; then
+    TARBALL_URL=""
+    while IFS= read -r url; do
+        [ -n "$url" ] || continue
+        log "downloading $url"
+        if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$archive"; then
+            TARBALL_URL="$url"
+            break
+        fi
+        log "warning: $url is unavailable; trying the next source"
+    done <<EOF
+$(candidate_urls)
+EOF
+
+    if [ -z "$TARBALL_URL" ]; then
+        log "no release payload found under $DOWNLOAD_BASE (every fallback failed)"
         rm -f "$archive"
         return 1
     fi

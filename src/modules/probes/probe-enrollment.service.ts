@@ -338,7 +338,7 @@ export class ProbeEnrollmentService {
         // The command carries the API address so the installed probe talks to
         // this deployment rather than falling back to a built-in default.
         const command =
-            `curl -fsSL ${this.downloadBase()}/install.sh | sudo sh -s -- ` +
+            `curl -fsSL ${this.installScriptUrl()} | sudo sh -s -- ` +
             `--token=${token} --api-url=${this.publicApiUrl()}`;
 
         return {
@@ -475,9 +475,15 @@ export class ProbeEnrollmentService {
         ).replace(/\/+$/, '');
     }
 
-    private downloadBase(): string {
-        return (
-            process.env.BEACON_DOWNLOAD_BASE || 'https://get.beaconix.app/probe'
-        ).replace(/\/+$/, '');
+    /**
+     * The installer is published at the bucket root, next to (not inside) the
+     * `/probe` download base, so it needs its own entry point. See
+     * probes/RELEASE.md §5.
+     */
+    private installScriptUrl(): string {
+        const url =
+            process.env.BEACON_INSTALL_URL ||
+            'https://get.beaconix.app/install.sh';
+        return url.replace(/\/+$/, '');
     }
 }

@@ -29,9 +29,11 @@ probes/agent/
 ├── index.js                 # 腾讯云 SCF 根入口（exports.main → index.main）
 ├── functions/scf.js         # 单次执行实现
 ├── install/                 # install.sh 与 systemd unit 模板
-├── scripts/build-release.js # 发布打包（tar.gz / SCF zip / latest.json）
+├── scripts/build-release.js # 发布打包（自动 bump / 版本目录归档 / latest.json / version.json）
+├── scripts/verify-release.js # 发布后校验（按 versioned / flat 布局逐项检查）
 ├── docker-entrypoint.sh     # 容器入口（首次下载安装 + 登录）
 ├── docker-compose.yml       # 容器部署（运行时下载安装 + 登录，配套 probe.env.example）
+├── releases/                # 版本归档（pack 时写入；version.json 入库，二进制不入库）
 └── test/                    # node --test 用例
 ```
 
@@ -49,8 +51,15 @@ probes/agent/
 curl -fsSL https://get.beaconix.app/install.sh | sudo sh
 ```
 
+安装器先读 `<base>/latest.json` 拿到版本与 sha256，再从
+`<base>/<version>/beaconix-probe-<version>.tar.gz` 下载不可变产物；manifest 不可达时
+依次回退到版本目录、扁平兼容副本与 `latest` 别名（契约见 [RELEASE.md §5](RELEASE.md)）。
+`BEACON_DOWNLOAD_BASE` 可整体替换下载基址（镜像 / 灰度环境），`BEACON_INSTALL_URL`
+用于覆盖安装脚本地址本身。
+
 - `--token <t>`：用 Web「添加探针」下发的一次性 token 直接注册（无交互）；
 - `--login`：安装时立即走设备码登录（阻塞到授权成功或超时）；
+- `--version <v>`：安装指定版本（默认解析 `latest.json`）；
 - `--no-service`：只装程序，之后手动 `sudo beaconix-probe run`。
 
 本地批量测试可使用 [系统探针测试容器](test-fleet/README.md)：启动时通过管理员账号登录，

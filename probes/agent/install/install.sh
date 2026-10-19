@@ -8,9 +8,21 @@
 # user and registers a systemd **system** unit.
 #
 # The payload is resolved through `<download-base>/latest.json` (version +
-# sha256) and fetched from the immutable `beaconix-probe-<version>.tar.gz` URL.
-# The `latest` alias is only a fallback when the manifest is unreachable, so a
-# stale CDN cache of that alias cannot pin this install to an old build.
+# sha256 + tarball) and fetched from the immutable
+# `<download-base>/<version>/beaconix-probe-<version>.tar.gz` URL. Resolution
+# degrades in this order, so an unreachable manifest or a CDN still serving the
+# previous layout cannot pin this install:
+#
+#   1. <download-base>/<version>/beaconix-probe-<version>.tar.gz
+#   2. manifest `tarball` (absolute URL written by build-release.js)
+#   3. <download-base>/beaconix-probe-<version>.tar.gz   (flat, compat copy)
+#   4. <download-base>/beaconix-probe-latest.tar.gz      (moving alias)
+#
+# The configured download base wins over the manifest's absolute URL, so a
+# mirror that overrides BEACON_DOWNLOAD_BASE never falls back to the public host.
+#
+# Checksums come from the manifest, then from `<version>/SHA256SUMS`, and are
+# skipped only when neither is reachable.
 #
 # Enrollment is optional at install time:
 #   --token <t>   redeem a one-time token issued in the web UI (no interaction)
@@ -20,6 +32,7 @@
 set -eu
 
 DOWNLOAD_BASE="${BEACON_DOWNLOAD_BASE:-https://get.beaconix.app/probe}"
+MANIFEST_URL="${BEACON_MANIFEST_URL:-}"
 API_URL="${BEACON_API_URL:-}"
 ENROLL_TOKEN=""
 VERSION="latest"
@@ -145,11 +158,10 @@ prepare_dirs() {
     chmod 750 "$CONF_DIR" "$LOG_DIR" "$RUN_DIR"
 }
 
-# Resolve the published payload through latest.json. The versioned tarball URL
-# is immutable, so a CDN that still serves a stale `latest` alias cannot pin an
-# installation to the previous build.
+# Fetch a manifest into $MANIFEST (default: the root pointer). Non-zero when
+# the manifest cannot be read at all.
 fetch_manifest() {
-    manifest_url="${DOWNLOAD_BASE}/latest.json?ts=$(date +%s)"
+    manifest_url="${1:-${MANIFEST_URL:-$DOWNLOAD_BASE/latest.json}}"
     if have curl; then
         MANIFEST="$(curl -fsSL -H 'cache-control: no-cache' "$manifest_url" 2>/dev/null || true)"
     elif have wget; then
@@ -166,38 +178,103 @@ manifest_field() {
             2>/dev/null || true
 }
 
-download_payload() {
+fetch_to() {
+    if have curl; then
+        curl -fsSL -H 'cache-control: no-cache' "$1" -o "$2"
+    elif have wget; then
+        wget -qO "$2" "$1"
+    else
+        return 1
+    fi
+}
+
+fetch_text() {
+    if have curl; then
+        curl -fsSL -H 'cache-control: no-cache' "$1" 2>/dev/null || true
+    elif have wget; then
+        wget -qO- "$1" 2>/dev/null || true
+    fi
+}
+
+# Resolve version + expected checksum. `latest` reads the root manifest; an
+# explicit --version reads that version's own manifest when it exists.
+resolve_manifest() {
     resolved_version="$VERSION"
     expected_sha=""
+    manifest_tarball=""
 
     if [ "$VERSION" = "latest" ]; then
-        resolved_version=""
         if fetch_manifest; then
             resolved_version="$(manifest_field version)"
             expected_sha="$(manifest_field sha256)"
+            manifest_tarball="$(manifest_field tarball)"
         fi
         if [ -z "$resolved_version" ]; then
-            log "warning: ${DOWNLOAD_BASE}/latest.json unavailable; falling back to the latest alias"
+            log "warning: latest.json unavailable; falling back to the latest alias"
             resolved_version="latest"
         fi
+    elif fetch_manifest "$DOWNLOAD_BASE/$VERSION/latest.json"; then
+        expected_sha="$(manifest_field sha256)"
+        manifest_tarball="$(manifest_field tarball)"
+    fi
+}
+
+# Fallback checksum source when the manifest did not carry one (or was down).
+sha_from_sums() {
+    [ "$resolved_version" = "latest" ] && return 0
+    sums="$(fetch_text "$DOWNLOAD_BASE/$resolved_version/SHA256SUMS")"
+    [ -n "$sums" ] || return 0
+    printf '%s\n' "$sums" | \
+        awk -v file="beaconix-probe-$resolved_version.tar.gz" \
+            '$2 == file { print $1; exit }'
+}
+
+# Every place the payload may live, most specific first. The base-derived
+# versioned URL comes before the manifest's absolute URL so an overridden
+# BEACON_DOWNLOAD_BASE (mirror / staging) stays authoritative.
+candidate_urls() {
+    if [ "$resolved_version" != "latest" ]; then
+        printf '%s\n' "$DOWNLOAD_BASE/$resolved_version/beaconix-probe-$resolved_version.tar.gz"
+    fi
+    if [ -n "$manifest_tarball" ]; then
+        printf '%s\n' "$manifest_tarball"
+    fi
+    if [ "$resolved_version" != "latest" ]; then
+        printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-$resolved_version.tar.gz"
+    fi
+    printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-latest.tar.gz"
+}
+
+download_payload() {
+    resolve_manifest
+    if [ -z "$expected_sha" ]; then
+        expected_sha="$(sha_from_sums)"
     fi
 
-    url="$DOWNLOAD_BASE/beaconix-probe-$resolved_version.tar.gz"
-    log "downloading $url"
     tmp="$(mktemp -d)"
-    if have curl; then
-        curl -fsSL -H 'cache-control: no-cache' "$url" -o "$tmp/agent.tgz"
-    elif have wget; then
-        wget -qO "$tmp/agent.tgz" "$url"
-    else
-        die "curl or wget is required"
+    chosen=""
+    while IFS= read -r url; do
+        [ -n "$url" ] || continue
+        log "downloading $url"
+        if fetch_to "$url" "$tmp/agent.tgz"; then
+            chosen="$url"
+            break
+        fi
+        log "warning: $url is unavailable; trying the next source"
+    done <<EOF
+$(candidate_urls)
+EOF
+
+    if [ -z "$chosen" ]; then
+        rm -rf "$tmp"
+        die "no release payload found under $DOWNLOAD_BASE (every fallback failed)"
     fi
 
     if [ -n "$expected_sha" ] && have sha256sum; then
         printf '%s  agent.tgz\n' "$expected_sha" > "$tmp/agent.sha256"
         if ! ( cd "$tmp" && sha256sum -c agent.sha256 >/dev/null 2>&1 ); then
             rm -rf "$tmp"
-            die "payload checksum mismatch for $url (stale CDN cache?); try again"
+            die "payload checksum mismatch for $chosen (stale CDN cache?); try again"
         fi
         log "checksum ok ($expected_sha)"
     fi

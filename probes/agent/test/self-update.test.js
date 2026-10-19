@@ -62,7 +62,7 @@ test('self-update --check reports an available update', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'beaconix-update-'));
     const server = await startMock((req, res) => {
         res.setHeader('content-type', 'application/json');
-        if (req.url === '/latest.json') {
+        if (req.url.startsWith('/latest.json')) {
             res.end(
                 JSON.stringify({
                     version: '9.9.9',
