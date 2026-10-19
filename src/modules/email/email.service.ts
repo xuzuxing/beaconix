@@ -213,7 +213,10 @@ export class EmailService {
             port,
             secure,
             account: account.trim(),
-            password,
+            // 密码只可能是从服务商后台复制粘贴来的；带上首尾空白（尤其末尾
+            // 换行）时，服务商统一回 526/535 认证失败，从日志里完全看不出是
+            // 空格导致的，所以在使用前去掉。
+            password: password.trim(),
             fromAddress: fromAddress.trim(),
         };
     }

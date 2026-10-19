@@ -37,6 +37,7 @@
     "prisma:validate": "npx prisma validate",
     "admin:create": "tsx scripts/create-admin.ts",
     "test:resend": "ts-node scripts/test-resend.ts",
+    "test:smtp": "tsx scripts/test-smtp.ts",
     "probe:cli": "node probes/agent/bin/beaconix-probe.js",
     "probe:login": "node probes/agent/bin/beaconix-probe.js login",
     "probe:run": "node probes/agent/bin/beaconix-probe.js run",

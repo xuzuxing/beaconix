@@ -88,8 +88,23 @@ export class SmtpMailTransport implements MailTransport {
             return typeof info.messageId === 'string'
                 ? info.messageId
                 : undefined;
+        } catch (error) {
+            throw this.describeFailure(error);
         } finally {
             transporter.close();
         }
+    }
+
+    /**
+     * 认证失败时服务商只回一句 `Invalid login: 526 Authentication failure`，
+     * 看不出该改哪一项配置：这里补上排查方向（账号、客户端专用密码、
+     * 主机/端口/加密三项）。其它错误原样抛出。
+     */
+    private describeFailure(error: unknown): unknown {
+        if (!(error instanceof Error)) return error;
+        if ((error as { code?: string }).code !== 'EAUTH') return error;
+
+        error.message = `${error.message} (SMTP authentication rejected: check smtp.account is the full mailbox address, smtp.password is the mailbox/app-specific password — Alibaba Mail requires a "client-specific password" once that feature is on — and smtp.host / smtp.port / smtp.secure match the provider)`;
+        return error;
     }
 }

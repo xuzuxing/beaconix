@@ -304,6 +304,65 @@ describe('EmailService', () => {
             }
         });
 
+        it('trims whitespace around SMTP credentials', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            (createTransport as jest.Mock).mockReturnValue({
+                sendMail: jest.fn().mockResolvedValue({ messageId: 'smtp-1' }),
+                close: jest.fn(),
+            });
+
+            const { service } = createService({
+                settings: {
+                    'smtp.host': 'smtp.example.com',
+                    'smtp.account': ' bot@example.com ',
+                    'smtp.password': '  app-password\r\n',
+                },
+            });
+
+            await service.send(EmailTemplate.EMAIL_VERIFICATION, payload);
+
+            expect(createTransport).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    auth: { user: 'bot@example.com', pass: 'app-password' },
+                }),
+            );
+        });
+
+        it('adds a troubleshooting hint to SMTP authentication failures', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            jest.spyOn(Logger.prototype, 'error').mockImplementation(
+                () => undefined,
+            );
+            const authError = Object.assign(
+                new Error('Invalid login: 526 Authentication failure[0]'),
+                { code: 'EAUTH', responseCode: 526 },
+            );
+            (createTransport as jest.Mock).mockReturnValue({
+                sendMail: jest.fn().mockRejectedValue(authError),
+                close: jest.fn(),
+            });
+
+            const { service } = createService({
+                settings: {
+                    'smtp.host': 'smtp.qiye.aliyun.com',
+                    'smtp.port': 465,
+                    'smtp.secure': true,
+                    'smtp.account': 'noreply@example.com',
+                    'smtp.password': 'wrong',
+                },
+            });
+
+            await expect(
+                service.send(EmailTemplate.EMAIL_VERIFICATION, payload),
+            ).rejects.toThrow(
+                /526 Authentication failure\[0\].*client-specific password/,
+            );
+        });
+
         it('reports the failing transport when SMTP rejects the message', async () => {
             jest.spyOn(Logger.prototype, 'log').mockImplementation(
                 () => undefined,
