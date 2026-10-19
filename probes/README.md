@@ -130,9 +130,9 @@ cd probes/agent && node --test
 # 从仓库根跑同一套用例
 pnpm probe:test
 
-# 打发布包（tar.gz / SCF zip / latest.json，输出到 probes/agent/dist）
+# 打发布包（自动 patch+1，产物归档到 probes/releases/<version>）
 pnpm probe:pack
-# 只打腾讯云 SCF 代码包
+# 只打腾讯云 SCF 代码包（默认不累加版本）
 pnpm probe:pack:scf
 
 # 本地调试 SCF 入口

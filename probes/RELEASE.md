@@ -26,6 +26,7 @@ node probes/agent/scripts/build-release.js
 | `latest.json` | `src/commands/self-update.js` | 至少含 `version`、`installUrl`；缺失则 `self-update` 直接报错 |
 | `install.sh` | 安装入口 `https://get.beaconix.app/install.sh` | 与 `probes/agent/install/install.sh` 完全一致 |
 | `SHA256SUMS` | 人工 / CI 校验 | `sha256sum -c` 兼容格式 |
+| `version.json` | 发布历史 / 审计页 | `{ updatedAt, versions: [...] }`，pack 时按版本累加 |
 
 仓库内的 `probes/Dockerfile` 不产生新的发布物：它只是一个空镜像，容器首次启动时
 由 `docker-entrypoint.sh` 按上表下载 tar.gz 并解压（见 §6.1）。
@@ -51,12 +52,20 @@ node probes/agent/scripts/build-release.js
 - **唯一版本来源**：`probes/agent/package.json` 的 `version`。运行时
   `src/version.js` 直接 `require` 它，所以归档里的 `package.json` 版本号就是
   `beaconix-probe --version` 的输出。
-- 发布前先改版本号、提交，再打 tag：
+- **默认自动累加**：`pnpm probe:pack` 会把 patch 位 +1（例如 `2.1.1 -> 2.1.2`），
+  写回 `package.json`，并把产物归档到 `probes/releases/<version>/`。
+  - `--bump minor|major`：改累加位；
+  - `--no-bump`：保持当前版本重打包；
+  - `--version 2.2.0`：显式指定版本；
+  - `pnpm probe:pack:scf` 默认**不**累加，避免只重打云函数包时版本上涨
+    （需要时显式传 `--bump` 或 `--version`）。
+- 发布流程：
 
   ```bash
-  # 修改 probes/agent/package.json 的 version，然后：
-  git commit -am "chore(probe): release 2.0.0"
-  git tag probe-v2.0.0
+  pnpm probe:pack                     # 自动 bump + 构建 + 归档
+  git add probes/agent/package.json
+  git commit -m "chore(probe): release 2.1.2"
+  git tag probe-v2.1.2
   git push origin master --tags
   ```
 
@@ -68,9 +77,10 @@ node probes/agent/scripts/build-release.js
   ```
 
   需要强制让预发布占用 `latest` 时用 `--latest`（一般只在灰度环境这么做）。
-- `--require-clean` 会在 `probes/agent` 有未提交改动时直接失败，正式发布建议带上。
-- 每次发布都递增 `package.json` 的 `version`。容器启动时通过 `latest.json` 解析
-  当前版本并拉取对应的版本化 tar，所以升版本后无需手动清卷。
+- `--require-clean` 会在 `probes/agent` 有未提交改动时直接失败；它在 bump 之前检查，
+  所以正式发布可以带上。bump 会修改 `package.json`，发布后记得一起提交。
+- 容器启动时通过 `latest.json` 解析当前版本并拉取对应的版本化 tar，所以升版本后
+  无需手动清卷。
 
 ---
 
@@ -99,6 +109,11 @@ pnpm probe:pack:scf
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
 | `--out <dir>` | `probes/agent/dist` | 输出目录（每次构建会先清空，已加进 `.gitignore`） |
+| `--releases-dir <dir>` | `probes/releases` | 版本归档目录，每个版本一个子目录 |
+| `--no-archive` | 关 | 只写版本索引，不复制产物到 `releases/` |
+| `--bump <part>` | `patch` | 自动累加 `package.json`：`patch` / `minor` / `major` |
+| `--no-bump` | 关 | 保持当前版本重打包 |
+| `--version <x.y.z>` | — | 显式指定版本（优先于 bump） |
 | `--base-url <url>` | `https://get.beaconix.app/probe` | 写进 `latest.json` 的 tarball 地址前缀 |
 | `--install-url <url>` | `https://get.beaconix.app/install.sh` | 写进 `latest.json` 的安装脚本地址 |
 | `--no-scf` | 构建 | 跳过腾讯云 SCF zip |
@@ -110,15 +125,24 @@ pnpm probe:pack:scf
 输出示例：
 
 ```
-Beacon probe agent 2.0.0 (latest, fde31d2)
+Beacon probe agent 2.1.2 (latest, 3f0c5b3)
+Version: 2.1.1 -> 2.1.2
 Output: probes/agent/dist
+Archive: probes/releases/2.1.2
 
-  beaconix-probe-2.0.0.tar.gz          21.6 KiB
-  beaconix-probe-latest.tar.gz         21.6 KiB
-  beaconix-probe-scf-2.0.0.zip         29.6 KiB
-  install.sh                           5.8 KiB
+  beaconix-probe-2.1.2.tar.gz          23.5 KiB
+  beaconix-probe-latest.tar.gz         23.5 KiB
+  beaconix-probe-scf-2.1.2.zip         31.0 KiB
+  install.sh                           8.6 KiB
   latest.json                          publish manifest
   SHA256SUMS                           checksums
+  version.json                         history (2 version(s))
+```
+
+只重打包当前版本、不累加：
+
+```bash
+pnpm probe:pack -- --no-bump
 ```
 
 ### 构建后自动校验
@@ -211,6 +235,62 @@ RELEASE.json
 构建是可复现的：归档内所有时间戳取自 git 提交时间（`sourceDate`），不写构建
 机器的当前时间；同样的提交 + 同样的版本号会得到同样的字节。
 
+### 4.4 `version.json` 与 `probes/releases/`
+
+每次 `pnpm probe:pack` 会：
+
+1. 读取 `probes/releases/version.json`（首次打包时从 `dist/version.json` 迁移）；
+2. 累加/更新当前版本条目；
+3. 写回 `probes/releases/version.json` 和 `dist/version.json`；
+4. 把本次产物复制到 `probes/releases/<version>/`。
+
+```json
+{
+    "updatedAt": "2026-10-19T09:45:05Z",
+    "versions": [
+        {
+            "version": "2.1.2",
+            "releasedAt": "2026-10-19T09:45:05Z",
+            "channel": "latest",
+            "commit": "3f0c5b3",
+            "sourceDate": "2026-10-18T23:03:48+08:00",
+            "tarball": "beaconix-probe-2.1.2.tar.gz",
+            "sha256": "f30d0c17…",
+            "size": 24059,
+            "scf": {
+                "tarball": "beaconix-probe-scf-2.1.2.zip",
+                "handler": "index.main",
+                "sha256": "35bbe49a…",
+                "size": 31722
+            }
+        }
+    ]
+}
+```
+
+归档目录：
+
+```
+probes/releases/2.1.2/
+├── beaconix-probe-2.1.2.tar.gz
+├── beaconix-probe-latest.tar.gz
+├── beaconix-probe-scf-2.1.2.zip
+├── latest.json
+├── SHA256SUMS
+├── install.sh
+└── version.json
+```
+
+- `versions` **最新在前**；同一版本重复打包会替换该条目，不会重复追加。
+- `releasedAt` 保留首次记录时间，`updatedAt` 是最近一次 pack 的时间。
+- `--no-archive` 只写版本索引，不复制产物；`--releases-dir` 可改归档位置。
+- `pnpm probe:pack:scf` 只更新该版本的 `scf` 字段，并把新 zip 复制到已有归档目录。
+- `.gitignore` 忽略 `probes/releases/*/`（二进制不入库），但保留
+  `probes/releases/version.json`，版本索引可以提交。
+- `dist/version.json` 是给 CDN 上传的副本；清理 `dist` 不会丢历史（历史在
+  `probes/releases/version.json`）。
+- `version.json` **不参与安装链路**，缺失不影响 `install.sh` 或容器启动。
+
 ---
 
 ## 5. 发布到下载源
@@ -225,21 +305,23 @@ RELEASE.json
 | `beaconix-probe-scf-2.1.0.zip` | `https://get.beaconix.app/probe/beaconix-probe-scf-2.1.0.zip` | 长缓存（同上） |
 | `latest.json` | `https://get.beaconix.app/probe/latest.json` | **必须短缓存**（60s 或 no-cache）；安装器带 `?ts=` 主动绕过缓存 |
 | `SHA256SUMS` | `https://get.beaconix.app/probe/SHA256SUMS` | 短缓存 |
+| `version.json` | `https://get.beaconix.app/probe/version.json` | 短缓存（发布历史，非安装依赖） |
 | `install.sh` | `https://get.beaconix.app/install.sh` | 短缓存（它是入口脚本，改一次要尽快生效） |
 
 ```bash
 # 示例：rclone
-rclone copy probes/agent/dist/beaconix-probe-2.1.0.tar.gz   r2:beaconix/probe/
-rclone copy probes/agent/dist/beaconix-probe-scf-2.1.0.zip  r2:beaconix/probe/
+rclone copy probes/agent/dist/beaconix-probe-2.1.1.tar.gz   r2:beaconix/probe/
+rclone copy probes/agent/dist/beaconix-probe-scf-2.1.1.zip  r2:beaconix/probe/
 rclone copy probes/agent/dist/SHA256SUMS                    r2:beaconix/probe/
+rclone copy probes/agent/dist/version.json                  r2:beaconix/probe/
 rclone copy probes/agent/dist/latest.json                   r2:beaconix/probe/
 # 别名可选，但建议保持最新（老客户端 / manifest 不可达时会用到）
 rclone copy probes/agent/dist/beaconix-probe-latest.tar.gz  r2:beaconix/probe/
 rclone copy probes/agent/dist/install.sh                    r2:beaconix/
 ```
 
-**上传顺序**：具体版本文件 → `SHA256SUMS` → `latest.json` → `latest` 别名 →
-`install.sh`。安装链路只依赖前三个；别名是兼容回退，晚传也不影响新安装。
+**上传顺序**：具体版本文件 → `SHA256SUMS` → `version.json` → `latest.json` →
+`latest` 别名 → `install.sh`。安装链路只依赖前四个；别名是兼容回退，晚传也不影响新安装。
 
 发布后校验：
 

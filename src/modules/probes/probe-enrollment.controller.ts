@@ -99,11 +99,12 @@ export class ProbeEnrollmentController {
     @HttpCode(HttpStatus.OK)
     @ApiBearerAuth('access-token')
     @ApiOperation({
-        summary: 'Approve an enrollment and create the probe (JWT + ADMIN)',
+        summary: 'Approve an enrollment; SUPER_ADMIN may create a SYSTEM probe',
     })
     @ApiBody({ type: ApproveEnrollmentDto })
     @ApiOkResponse({
-        description: '{ probeId, organizationId, status }',
+        description:
+            '{ probeId, organizationId, scope, status } (organizationId is null for SYSTEM)',
     })
     @ApiBadRequestResponse({
         description: 'Unknown, expired or already settled user code',

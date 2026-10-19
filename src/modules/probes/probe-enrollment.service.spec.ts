@@ -3,7 +3,11 @@ import {
     NotFoundException,
     UnauthorizedException,
 } from '@nestjs/common';
-import { GlobalRole, ProbeProvider } from '../../generated/prisma/enums';
+import {
+    GlobalRole,
+    ProbeProvider,
+    ProbeScope,
+} from '../../generated/prisma/enums';
 import { ProbeEnrollmentService } from './probe-enrollment.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { RedisService } from '../../infra/redis/redis.service';
@@ -12,6 +16,7 @@ import type { ProbesService } from './probes.service';
 function createService() {
     const prisma = {
         membership: { findFirst: jest.fn() },
+        probe: { create: jest.fn() },
     };
     const redis = {
         get: jest.fn(),
@@ -228,6 +233,61 @@ describe('ProbeEnrollmentService', () => {
             });
 
             expect(prisma.membership.findFirst).not.toHaveBeenCalled();
+        });
+
+        it('lets a super admin enroll a system probe', async () => {
+            const { service, prisma, redis, probesService } = createService();
+            redis.get.mockResolvedValue('dc-1');
+            redis.getJson.mockResolvedValue(
+                deviceState({
+                    client: { hostname: 'host-01', platform: 'linux/x64' },
+                }),
+            );
+            prisma.probe.create.mockResolvedValue({ id: 'sys-1' });
+
+            const result = await service.approve(
+                'admin',
+                GlobalRole.SUPER_ADMIN,
+                {
+                    userCode: 'ABCD',
+                    scope: ProbeScope.SYSTEM,
+                },
+            );
+
+            expect(probesService.create).not.toHaveBeenCalled();
+            expect(prisma.probe.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        scope: ProbeScope.SYSTEM,
+                        organizationId: null,
+                        name: expect.stringContaining('host-01'),
+                    }),
+                }),
+            );
+            expect(redis.setJson).toHaveBeenCalledWith(
+                expect.stringContaining('probe:enroll:cred:'),
+                expect.objectContaining({ probeId: 'sys-1' }),
+                60,
+            );
+            expect(result).toMatchObject({
+                probeId: 'sys-1',
+                organizationId: null,
+                scope: ProbeScope.SYSTEM,
+                status: 'approved',
+            });
+        });
+
+        it('rejects a system probe from a non-super-admin', async () => {
+            const { service, prisma } = createService();
+
+            await expect(
+                service.approve('user-1', GlobalRole.USER, {
+                    userCode: 'ABCD',
+                    scope: ProbeScope.SYSTEM,
+                }),
+            ).rejects.toThrow(ForbiddenException);
+
+            expect(prisma.probe.create).not.toHaveBeenCalled();
         });
     });
 

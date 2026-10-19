@@ -1,9 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import { ProbeScope, ProbeStatus } from '../../../generated/prisma/enums';
 import { ProbeEntity } from '../../probes/entities';
-import { hashSecret, secretPrefixOf } from '../../probes/probe-secret.util';
+import { createSystemProbeRecord } from '../../probes/system-probe-create.util';
 import { CreateSystemProbeDto, UpdateSystemProbeDto } from './dto';
 import { SystemProbeScheduler } from './system-probe-scheduler';
 
@@ -15,27 +14,10 @@ export class SystemProbesService {
     ) {}
 
     async create(dto: CreateSystemProbeDto): Promise<ProbeEntity> {
-        const secret = this.generateSecret();
-
-        const probe = await this.prisma.probe.create({
-            data: {
-                scope: ProbeScope.SYSTEM,
-                organizationId: null,
-                name: dto.name,
-                provider: dto.provider,
-                region: dto.region,
-                callbackUrl: dto.callbackUrl,
-                enabled: dto.enabled ?? true,
-                maxTenants: dto.maxTenants ?? 0,
-                priority: dto.priority ?? 0,
-                secrets: {
-                    create: {
-                        secretHash: hashSecret(secret),
-                        secretPrefix: secretPrefixOf(secret),
-                    },
-                },
-            },
-        });
+        const { probe, secret } = await createSystemProbeRecord(
+            this.prisma,
+            dto,
+        );
 
         await this.systemProbeScheduler.rebalance();
 
@@ -112,10 +94,6 @@ export class SystemProbesService {
         }
 
         return probe;
-    }
-
-    private generateSecret(): string {
-        return `sys_${randomBytes(32).toString('hex')}`;
     }
 
     private toEntity(

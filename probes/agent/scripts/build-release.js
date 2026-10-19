@@ -48,6 +48,7 @@ const REPO_ROOT = path.resolve(AGENT_DIR, '..', '..');
 const PKG = require(path.join(AGENT_DIR, 'package.json'));
 
 const DEFAULT_OUT_DIR = path.join(AGENT_DIR, 'dist');
+const DEFAULT_RELEASES_DIR = path.join(REPO_ROOT, 'probes', 'releases');
 const DEFAULT_BASE_URL = 'https://get.beaconix.app/probe';
 const DEFAULT_INSTALL_URL = 'https://get.beaconix.app/install.sh';
 
@@ -55,6 +56,7 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /** Top-level payload entries that ship to probe hosts. */
 const PAYLOAD_ENTRIES = ['index.js', 'bin', 'src', 'functions', 'install', 'package.json'];
+const VERSION_HISTORY_NAME = 'version.json';
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'test', '.git']);
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db', 'package-lock.json']);
 
@@ -67,6 +69,11 @@ Options:
   --out <dir>        Output directory (default: probes/agent/dist)
   --base-url <url>   Public base URL of the published tarballs
   --install-url <u>  Installer URL written into latest.json
+  --bump <part>      Auto-increment package.json: patch (default), minor, major
+  --no-bump          Keep the current package.json version as-is
+  --version <x.y.z>  Set an explicit version instead of bumping
+  --releases-dir <d> Release archive directory (default: probes/releases)
+  --no-archive       Record history but do not copy artifacts into releases/
   --no-scf           Do not build the Tencent SCF zip
   --scf-only         Only build the Tencent SCF zip (other artifacts untouched)
   --latest           Always publish the "latest" alias and latest.json
@@ -75,8 +82,10 @@ Options:
   --no-verify        Skip the post-build archive verification
   -h, --help         Show this help
 
-The version always comes from probes/agent/package.json — the same file
-src/version.js requires at runtime.`;
+The version lives in probes/agent/package.json — the same file
+src/version.js requires at runtime. "pack" bumps it by default; "--scf-only"
+keeps it unless --bump/--version is given explicitly. Each release is archived
+under probes/releases/<version>/ and indexed in probes/releases/version.json.`;
 
 function stripTrailingSlash(value) {
     return String(value).replace(/\/+$/, '');
@@ -92,11 +101,16 @@ function requireValue(argv, index, option) {
 function parseArgs(argv) {
     const opts = {
         outDir: DEFAULT_OUT_DIR,
+        releasesDir: DEFAULT_RELEASES_DIR,
         baseUrl: DEFAULT_BASE_URL,
         installUrl: DEFAULT_INSTALL_URL,
         includeScf: true,
         scfOnly: false,
         latest: 'auto',
+        bump: 'patch',
+        bumpExplicit: false,
+        version: undefined,
+        archive: true,
         requireClean: false,
         verify: true,
         help: false,
@@ -112,6 +126,22 @@ function parseArgs(argv) {
             opts.baseUrl = stripTrailingSlash(requireValue(argv, ++i, arg));
         } else if (arg === '--install-url') {
             opts.installUrl = requireValue(argv, ++i, arg);
+        } else if (arg === '--bump') {
+            opts.bump = requireValue(argv, ++i, arg);
+            if (!['patch', 'minor', 'major'].includes(opts.bump)) {
+                throw new Error('--bump must be patch, minor or major');
+            }
+            opts.bumpExplicit = true;
+        } else if (arg === '--no-bump') {
+            opts.bump = 'none';
+            opts.bumpExplicit = true;
+        } else if (arg === '--version') {
+            opts.version = requireValue(argv, ++i, arg);
+            opts.bumpExplicit = true;
+        } else if (arg === '--releases-dir') {
+            opts.releasesDir = path.resolve(requireValue(argv, ++i, arg));
+        } else if (arg === '--no-archive') {
+            opts.archive = false;
         } else if (arg === '--no-scf') {
             opts.includeScf = false;
         } else if (arg === '--scf-only') {
@@ -585,8 +615,132 @@ function formatBytes(bytes) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-function resetOutDir(dir) {
+function bumpSemver(version, part) {
+    const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+    if (!match) throw new Error(`Cannot bump invalid version: ${version}`);
+
+    let major = Number(match[1]);
+    let minor = Number(match[2]);
+    let patch = Number(match[3]);
+
+    if (part === 'major') {
+        major += 1;
+        minor = 0;
+        patch = 0;
+    } else if (part === 'minor') {
+        minor += 1;
+        patch = 0;
+    } else {
+        patch += 1;
+    }
+
+    return `${major}.${minor}.${patch}`;
+}
+
+function writePackageVersion(version) {
+    const pkgPath = path.join(AGENT_DIR, 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    pkg.version = version;
+    fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 4)}\n`);
+    PKG.version = version;
+}
+
+function resolveVersion(opts) {
+    if (opts.version) {
+        if (!SEMVER.test(opts.version)) {
+            throw new Error(`Invalid --version value: ${opts.version}`);
+        }
+        writePackageVersion(opts.version);
+        return opts.version;
+    }
+
+    // `--scf-only` repackages the current version unless a bump is explicit.
+    const shouldBump =
+        opts.bump !== 'none' && (!opts.scfOnly || opts.bumpExplicit);
+    if (!shouldBump) return PKG.version;
+
+    const next = bumpSemver(PKG.version, opts.bump);
+    writePackageVersion(next);
+    return next;
+}
+
+function loadHistory(opts) {
+    const fromReleases = readVersionHistory(opts.releasesDir);
+    if (fromReleases.versions.length > 0) return fromReleases;
+    return readVersionHistory(opts.outDir);
+}
+
+function writeHistories(opts, history) {
+    fs.mkdirSync(opts.releasesDir, { recursive: true });
+    writeVersionHistory(opts.releasesDir, history);
+    writeVersionHistory(opts.outDir, history);
+}
+
+function archiveRelease(opts, version, files) {
+    if (!opts.archive) return null;
+
+    const dir = path.join(opts.releasesDir, version);
     fs.mkdirSync(dir, { recursive: true });
+    for (const file of files) {
+        const source = path.join(opts.outDir, file);
+        if (fs.existsSync(source)) {
+            fs.copyFileSync(source, path.join(dir, file));
+        }
+    }
+    return dir;
+}
+
+function archiveScfRelease(opts, version, zipName) {
+    if (!opts.archive) return null;
+
+    const dir = path.join(opts.releasesDir, version);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(path.join(opts.outDir, zipName), path.join(dir, zipName));
+    fs.copyFileSync(
+        path.join(opts.outDir, VERSION_HISTORY_NAME),
+        path.join(dir, VERSION_HISTORY_NAME),
+    );
+    return dir;
+}
+
+function utcTimestamp() {
+    return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function readVersionHistory(dir) {
+    try {
+        const parsed = JSON.parse(
+            fs.readFileSync(path.join(dir, VERSION_HISTORY_NAME), 'utf8'),
+        );
+        return {
+            updatedAt:
+                typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
+            versions: Array.isArray(parsed.versions) ? parsed.versions : [],
+        };
+    } catch {
+        return { updatedAt: null, versions: [] };
+    }
+}
+
+function writeVersionHistory(dir, history) {
+    fs.writeFileSync(
+        path.join(dir, VERSION_HISTORY_NAME),
+        `${JSON.stringify(history, null, 4)}\n`,
+    );
+}
+
+/** Newest first, one entry per version (a rebuild replaces its entry). */
+function recordVersion(history, entry) {
+    return {
+        updatedAt: utcTimestamp(),
+        versions: [
+            entry,
+            ...history.versions.filter((item) => item.version !== entry.version),
+        ],
+    };
+}
+
+function resetOutDir(dir) {    fs.mkdirSync(dir, { recursive: true });
     // Clear the contents instead of removing the directory itself: on Windows a
     // lingering handle on the directory makes rmSync(dir) fail with EPERM.
     for (const name of fs.readdirSync(dir)) {
@@ -625,7 +779,7 @@ function buildScfArchive(entries, epochSeconds, verify) {
     return { zip, scfEntries };
 }
 
-function buildScfOnly(opts, entries, source, version) {
+function buildScfOnly(opts, entries, source, version, previousVersion) {
     if (!opts.includeScf) {
         throw new Error('--scf-only conflicts with --no-scf');
     }
@@ -640,13 +794,32 @@ function buildScfOnly(opts, entries, source, version) {
     const zipName = `beaconix-probe-scf-${version}.zip`;
     fs.writeFileSync(path.join(opts.outDir, zipName), zip);
 
+    const history = loadHistory(opts);
+    const scf = {
+        tarball: zipName,
+        handler: 'index.main',
+        sha256: sha256(zip),
+        size: zip.length,
+    };
+    const existing = history.versions.find((item) => item.version === version);
+    const entry = existing
+        ? { ...existing, scf }
+        : { version, releasedAt: utcTimestamp(), scf };
+    const updatedHistory = recordVersion(history, entry);
+    writeHistories(opts, updatedHistory);
+    const archiveDir = archiveScfRelease(opts, version, zipName);
+
     return {
         scfOnly: true,
         version,
+        previousVersion,
         zipName,
         zipSize: zip.length,
-        zipSha: sha256(zip),
+        zipSha: scf.sha256,
         entries: scfEntries.length,
+        historyCount: updatedHistory.versions.length,
+        releasesDir: opts.releasesDir,
+        archiveDir,
         outDir: opts.outDir,
     };
 }
@@ -662,18 +835,20 @@ function build(opts) {
     assertCleanIfRequested(opts);
     assertSafeOutDir(opts.outDir);
 
+    const previousVersion = PKG.version;
+    const version = resolveVersion(opts);
     const source = readSourceMeta();
     const entries = buildEntries(source);
-    const version = PKG.version;
 
     if (opts.scfOnly) {
-        return buildScfOnly(opts, entries, source, version);
+        return buildScfOnly(opts, entries, source, version, previousVersion);
     }
 
     const tarName = `beaconix-probe-${version}.tar.gz`;
     const latestTarName = 'beaconix-probe-latest.tar.gz';
     const zipName = `beaconix-probe-scf-${version}.zip`;
     const publishLatestAlias = publishLatest(opts);
+    const previousHistory = loadHistory(opts);
 
     resetOutDir(opts.outDir);
 
@@ -700,7 +875,12 @@ function build(opts) {
         );
         fs.writeFileSync(path.join(opts.outDir, zipName), zip);
         artifacts.push({ name: zipName, size: zip.length });
-        zipInfo = { name: zipName, size: zip.length, entries: scfEntries.length };
+        zipInfo = {
+            name: zipName,
+            size: zip.length,
+            sha256: sha256(zip),
+            entries: scfEntries.length,
+        };
     }
 
     const installerSource = path.join(AGENT_DIR, 'install', 'install.sh');
@@ -760,29 +940,73 @@ function build(opts) {
         `${sums.join('\n')}\n`,
     );
 
+    const previousEntry = previousHistory.versions.find(
+        (item) => item.version === version,
+    );
+    const historyEntry = {
+        version,
+        releasedAt: previousEntry?.releasedAt || utcTimestamp(),
+        channel: manifest.channel,
+        commit: source.commit,
+        sourceDate: source.sourceDate,
+        tarball: tarName,
+        sha256: tarSha,
+        size: tarball.length,
+    };
+    if (zipInfo) {
+        historyEntry.scf = {
+            tarball: zipInfo.name,
+            handler: 'index.main',
+            sha256: zipInfo.sha256,
+            size: zipInfo.size,
+        };
+    }
+    const updatedHistory = recordVersion(previousHistory, historyEntry);
+    writeHistories(opts, updatedHistory);
+    const archiveDir = archiveRelease(opts, version, [
+        tarName,
+        ...(publishLatestAlias ? [latestTarName] : []),
+        ...(zipInfo ? [zipName] : []),
+        'latest.json',
+        'SHA256SUMS',
+        'install.sh',
+        VERSION_HISTORY_NAME,
+    ]);
+
     return {
         version,
+        previousVersion,
         tarName,
         latestTarName: publishLatestAlias ? latestTarName : null,
         zipName: zipInfo ? zipName : null,
         manifest,
         artifacts,
         outDir: opts.outDir,
+        releasesDir: opts.releasesDir,
+        archiveDir,
         baseUrl: opts.baseUrl,
         installUrl: opts.installUrl,
         source,
+        historyCount: updatedHistory.versions.length,
     };
 }
 
 function printSummary(result) {
     if (result.scfOnly) {
         console.log(`Beacon probe agent SCF package ${result.version}`);
+        if (result.version !== result.previousVersion) {
+            console.log(`Version: ${result.previousVersion} -> ${result.version}`);
+        }
         console.log(`Output: ${result.outDir}`);
+        if (result.archiveDir) {
+            console.log(`Archive: ${result.archiveDir}`);
+        }
         console.log('');
         console.log(
             `  ${result.zipName.padEnd(36)} ${formatBytes(result.zipSize)}`,
         );
         console.log(`  sha256 ${result.zipSha}`);
+        console.log(`  history versions: ${result.historyCount}`);
         console.log('');
         console.log('Tencent SCF console:');
         console.log('  Runtime:  Node.js 18 / 20 / 22');
@@ -799,7 +1023,13 @@ function printSummary(result) {
     console.log(
         `Beacon probe agent ${result.version} (${result.manifest.channel}, ${result.source.commit})`,
     );
+    if (result.version !== result.previousVersion) {
+        console.log(`Version: ${result.previousVersion} -> ${result.version}`);
+    }
     console.log(`Output: ${result.outDir}`);
+    if (result.archiveDir) {
+        console.log(`Archive: ${result.archiveDir}`);
+    }
     console.log('');
 
     for (const artifact of result.artifacts) {
@@ -813,6 +1043,9 @@ function printSummary(result) {
         );
     }
     console.log('  SHA256SUMS                           checksums');
+    console.log(
+        `  ${VERSION_HISTORY_NAME.padEnd(36)} history (${result.historyCount} version(s))`,
+    );
     console.log('');
     console.log('Upload all files above so that they resolve as:');
     console.log(`  ${result.baseUrl}/${result.tarName}`);
@@ -825,6 +1058,7 @@ function printSummary(result) {
     if (result.latestTarName) {
         console.log(`  ${result.baseUrl}/latest.json`);
     }
+    console.log(`  ${result.baseUrl}/${VERSION_HISTORY_NAME}`);
     console.log(`  ${result.installUrl}`);
     console.log('');
     console.log('Verify a published release with:');

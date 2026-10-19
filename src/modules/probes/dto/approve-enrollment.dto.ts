@@ -6,7 +6,7 @@ import {
     IsString,
     MaxLength,
 } from 'class-validator';
-import { ProbeProvider } from '../../../generated/prisma/enums';
+import { ProbeProvider, ProbeScope } from '../../../generated/prisma/enums';
 
 /** Confirmation submitted by the web confirmation page after the user approves. */
 export class ApproveEnrollmentDto {
@@ -16,10 +16,23 @@ export class ApproveEnrollmentDto {
     @MaxLength(32)
     userCode: string;
 
-    @ApiProperty({ description: 'Organization the probe is created in' })
+    @ApiPropertyOptional({
+        enum: ProbeScope,
+        default: ProbeScope.TENANT,
+        description:
+            'SYSTEM requires SUPER_ADMIN; TENANT requires organizationId',
+    })
+    @IsOptional()
+    @IsEnum(ProbeScope)
+    scope?: ProbeScope;
+
+    @ApiPropertyOptional({
+        description: 'Organization the probe is created in (TENANT only)',
+    })
+    @IsOptional()
     @IsString()
     @IsNotEmpty()
-    organizationId: string;
+    organizationId?: string;
 
     @ApiPropertyOptional({ example: 'Tokyo probe' })
     @IsOptional()

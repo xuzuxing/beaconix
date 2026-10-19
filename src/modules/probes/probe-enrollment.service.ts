@@ -13,9 +13,14 @@ import {
     GlobalRole,
     MembershipRole,
     ProbeProvider,
+    ProbeScope,
 } from '../../generated/prisma/enums';
 import { ProbesService } from './probes.service';
 import { hashSecret } from './probe-secret.util';
+import {
+    createSystemProbeRecord,
+    type SystemProbeInput,
+} from './system-probe-create.util';
 import type {
     ApproveEnrollmentDto,
     CreateEnrollTokenDto,
@@ -63,6 +68,7 @@ interface DeviceState {
     status: 'pending' | 'approved' | 'denied';
     userCodeHash: string;
     client: EnrollmentClient;
+    scope?: ProbeScope;
     organizationId?: string;
     probeId?: string;
     createdAt: string;
@@ -195,9 +201,98 @@ export class ProbeEnrollmentService {
         globalRole: GlobalRole,
         dto: ApproveEnrollmentDto,
     ) {
-        await this.assertCanApprove(userId, globalRole, dto.organizationId);
+        const scope = dto.scope ?? ProbeScope.TENANT;
+        let tenantOrgId: string | undefined;
 
-        const userCodeHash = hashSecret(normalizeUserCode(dto.userCode));
+        if (scope === ProbeScope.SYSTEM) {
+            if (globalRole !== GlobalRole.SUPER_ADMIN) {
+                throw new ForbiddenException(
+                    'Only SUPER_ADMIN can enroll a system probe',
+                );
+            }
+        } else {
+            tenantOrgId = dto.organizationId;
+            if (!tenantOrgId) {
+                throw new BadRequestException(
+                    'organizationId is required for a tenant probe',
+                );
+            }
+            await this.assertCanApprove(userId, globalRole, tenantOrgId);
+        }
+
+        const { deviceCode, state } = await this.resolvePendingDevice(
+            dto.userCode,
+        );
+
+        let probeId: string;
+        let secret: string;
+        let organizationId: string | null = null;
+
+        if (scope === ProbeScope.SYSTEM) {
+            const created = await createSystemProbeRecord(
+                this.prisma,
+                this.buildSystemCreateDto({
+                    name: dto.name,
+                    provider: dto.provider,
+                    region: dto.region,
+                    client: state.client,
+                }),
+            );
+            probeId = created.probe.id;
+            secret = created.secret;
+        } else {
+            const probe = await this.probesService.create(
+                tenantOrgId!,
+                this.buildCreateDto({
+                    name: dto.name,
+                    provider: dto.provider,
+                    region: dto.region,
+                    client: state.client,
+                }),
+                userId,
+            );
+
+            if (!probe.secret) {
+                throw new Error('Probe creation did not return a secret');
+            }
+            probeId = probe.id;
+            secret = probe.secret;
+            organizationId = tenantOrgId!;
+        }
+
+        await this.redis.setJson(
+            `${CRED_PREFIX}${deviceCode}`,
+            {
+                probeId,
+                secret,
+                apiUrl: this.publicApiUrl(),
+            } satisfies EnrollmentCredential,
+            CREDENTIAL_TTL_SECONDS,
+        );
+
+        await this.redis.setJson(
+            `${DC_PREFIX}${deviceCode}`,
+            {
+                ...state,
+                status: 'approved',
+                scope,
+                ...(organizationId ? { organizationId } : {}),
+                probeId,
+            } satisfies DeviceState,
+            DEVICE_CODE_TTL_SECONDS,
+        );
+
+        return {
+            probeId,
+            organizationId,
+            scope,
+            status: 'approved' as const,
+        };
+    }
+
+    /** Reads the user code and verifies the request is still pending. */
+    private async resolvePendingDevice(userCode: string) {
+        const userCodeHash = hashSecret(normalizeUserCode(userCode));
         const deviceCode = await this.redis.get(`${UC_PREFIX}${userCodeHash}`);
         if (!deviceCode) {
             throw new BadRequestException('Unknown or expired user code');
@@ -213,47 +308,7 @@ export class ProbeEnrollmentService {
             );
         }
 
-        const probe = await this.probesService.create(
-            dto.organizationId,
-            this.buildCreateDto({
-                name: dto.name,
-                provider: dto.provider,
-                region: dto.region,
-                client: state.client,
-            }),
-            userId,
-        );
-
-        if (!probe.secret) {
-            throw new Error('Probe creation did not return a secret');
-        }
-
-        await this.redis.setJson(
-            `${CRED_PREFIX}${deviceCode}`,
-            {
-                probeId: probe.id,
-                secret: probe.secret,
-                apiUrl: this.publicApiUrl(),
-            } satisfies EnrollmentCredential,
-            CREDENTIAL_TTL_SECONDS,
-        );
-
-        await this.redis.setJson(
-            `${DC_PREFIX}${deviceCode}`,
-            {
-                ...state,
-                status: 'approved',
-                organizationId: dto.organizationId,
-                probeId: probe.id,
-            } satisfies DeviceState,
-            DEVICE_CODE_TTL_SECONDS,
-        );
-
-        return {
-            probeId: probe.id,
-            organizationId: dto.organizationId,
-            status: 'approved' as const,
-        };
+        return { deviceCode, state };
     }
 
     // -- Path B: web-issued one-time install token -----------------------
@@ -381,6 +436,29 @@ export class ProbeEnrollmentService {
             // satisfies the schema and identifies the enrolled host.
             callbackUrl: `https://probe.beaconix.app/${encodeURIComponent(host)}`,
             enabled: true,
+        };
+    }
+
+    private buildSystemCreateDto(input: {
+        name?: string;
+        provider?: ProbeProvider;
+        region?: string;
+        client: EnrollmentClient;
+    }): SystemProbeInput {
+        const host =
+            input.client.hostname ||
+            input.client.client ||
+            randomBytes(4).toString('hex');
+
+        return {
+            name: input.name || `System probe (${host})`,
+            provider: input.provider ?? ProbeProvider.CUSTOM,
+            region: input.region || input.client.platform || 'unknown',
+            // Probes are outbound-only; the callback URL is a placeholder.
+            callbackUrl: `https://probe.beaconix.app/${encodeURIComponent(host)}`,
+            enabled: true,
+            maxTenants: 0,
+            priority: 0,
         };
     }
 
