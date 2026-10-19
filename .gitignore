@@ -66,6 +66,10 @@ scripts/probe.json
 # Probe agent release artifacts (built by scripts/build-release.js)
 probes/agent/dist/
 
+# Version archives: keep the index (version.json), not the tarballs/zip
+probes/releases/*/
+!probes/releases/version.json
+
 # Probe agent docker-compose credentials (template: probes/agent/probe.env.example)
 probes/agent/probe.env
 

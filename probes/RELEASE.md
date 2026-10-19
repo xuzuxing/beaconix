@@ -16,9 +16,9 @@ node probes/agent/scripts/build-release.js
 
 ## 1. 发布物与消费方
 
-产物名不是随便起的——仓库里已经有多处代码按固定名字、固定布局去取文件。默认布局是
-**版本目录**（`--layout versioned`）：不可变产物放在 `<base>/<version>/`，根目录只留
-移动指针（`latest.json`、`version.json`、`latest` 别名）与 `install.sh`。
+产物名不是随便起的——仓库里已经有多处代码按固定名字、固定布局去取文件。唯一的发布布局是
+**版本目录**：不可变产物放在 `<base>/<version>/`，根目录只留移动指针
+（`latest.json`、`version.json`、`latest` 别名）与 `install.sh`。
 
 ```
 https://get.beaconix.app/
@@ -27,7 +27,6 @@ https://get.beaconix.app/
     ├── latest.json                              # 指针清单：最新稳定版
     ├── version.json                             # 发布历史
     ├── beaconix-probe-latest.tar.gz             # 兼容别名（仅 manifest 不可达时回退）
-    ├── beaconix-probe-<version>.tar.gz          # 扁平兼容副本（--compat-flat）
     └── <version>/
         ├── beaconix-probe-<version>.tar.gz      # 不可变产物
         ├── beaconix-probe-scf-<version>.zip
@@ -38,7 +37,6 @@ https://get.beaconix.app/
 | 产物 | 谁消费 | 硬约束 |
 | --- | --- | --- |
 | `<version>/beaconix-probe-<version>.tar.gz` | `install/install.sh`、`docker-entrypoint.sh` | 解压后**根目录**必须是 `bin/`、`src/`…（安装器直接 `tar -xzf … -C /opt/beaconix-probe`，不剥前缀目录） |
-| `beaconix-probe-<version>.tar.gz`（扁平） | 缓存了旧版 `install.sh` 的机器 | 与版本目录里的 tar 字节级一致；过渡期兼容副本，1–2 个版本后可关（`--no-compat-flat`） |
 | `beaconix-probe-latest.tar.gz` | `install.sh`（manifest 不可达时的回退） | 与最新稳定版 tar 字节级一致 |
 | `<version>/beaconix-probe-scf-<version>.zip` | 腾讯云 SCF「上传代码包」 | 根目录含 `index.js`、`functions/scf.js` 与 `src/`；控制台 handler 填 `index.main` |
 | `latest.json` | `install.sh`、`docker-entrypoint.sh`、`src/commands/self-update.js` | 至少含 `version`、`sha256`、`installUrl`；`tarball` 指向版本目录 |
@@ -53,9 +51,8 @@ https://get.beaconix.app/
 
 **三个不变量**（任一被破坏，线上安装或升级就会静默失败）：
 
-1. **路径**：`<base>/<version>/beaconix-probe-<version>.tar.gz`（`--layout flat` 时是
-   `<base>/beaconix-probe-<version>.tar.gz`）。`$VERSION` 默认由 `latest.json` 解析，
-   也可以用 `install.sh --version` / `PROBE_VERSION` 显式指定。
+1. **路径**：`<base>/<version>/beaconix-probe-<version>.tar.gz`。`$VERSION` 默认由
+   `latest.json` 解析，也可以用 `install.sh --version` / `PROBE_VERSION` 显式指定。
 2. **压缩包根布局**：`bin/beaconix-probe.js` 必须在归档根，且 `package.json`
    必须一起打包（`src/version.js` 通过 `require('../package.json')` 读版本）。
 3. **`latest.json` 字段**：安装器（`install.sh` 与容器 entrypoint）用它解析
@@ -132,8 +129,6 @@ pnpm probe:pack:scf
 | `--out <dir>` | `probes/agent/dist` | 输出目录（每次构建会先清空，已加进 `.gitignore`） |
 | `--releases-dir <dir>` | `probes/releases` | 版本归档目录，每个版本一个子目录 |
 | `--no-archive` | 关 | 只写版本索引，不复制产物到 `releases/` |
-| `--layout <name>` | `versioned` | `versioned`：产物在 `dist/<version>/`；`flat`：沿用旧的扁平布局 |
-| `--compat-flat` / `--no-compat-flat` | 开（`versioned` 时） | 是否额外产出根目录扁平副本，供缓存了旧版 `install.sh` 的机器使用 |
 | `--bump <part>` | `patch` | 自动累加 `package.json`：`patch` / `minor` / `major` |
 | `--no-bump` | 关 | 保持当前版本重打包 |
 | `--version <x.y.z>` | — | 显式指定版本（优先于 bump） |
@@ -150,13 +145,11 @@ pnpm probe:pack:scf
 ```
 Beacon probe agent 2.1.2 (latest, 3f0c5b3)
 Version: 2.1.1 -> 2.1.2
-Layout: versioned
 Output: probes/agent/dist
 Archive: probes/releases/2.1.2
 
   2.1.2/beaconix-probe-2.1.2.tar.gz    23.5 KiB
   beaconix-probe-latest.tar.gz         23.5 KiB
-  beaconix-probe-2.1.2.tar.gz (compat) 23.5 KiB
   2.1.2/beaconix-probe-scf-2.1.2.zip   31.0 KiB
   install.sh                           8.6 KiB
   latest.json                          pointer to this version
@@ -185,7 +178,7 @@ pnpm probe:pack -- --no-bump
 3. 直接运行解压出来的 CLI 的 `version`，比对是否等于 `package.json` 的版本；
 4. 把生成的 SCF zip 解析回来，逐条校验 CRC 与解压后长度（保证上传到云厂商不会坏包）；
 5. 检查 `install.sh` 仍在按 `<base>/<version>/beaconix-probe-<version>.tar.gz` 下载
-   （`--layout flat` 时检查旧扁平拼法），防止契约漂移；同时确认它仍在解析 `latest.json`。
+   （防止契约漂移），同时确认它仍在解析 `latest.json`。
 
 > 校验第 1 步需要系统里有 `tar`。没有 `tar` 时只跳过这一步并打印 warning，其余检查照常。
 
@@ -267,7 +260,7 @@ RELEASE.json
 }
 ```
 
-- `layout` 记录发布布局（`versioned` / `flat`）；安装器不依赖它，只用于排查与校验。
+- `layout` 恒为 `versioned`，记录发布布局；安装器不依赖它，只用于排查与校验。
 - `tarball` / `scf.tarball` 是绝对地址，但安装器**先按 `BEACON_DOWNLOAD_BASE` 拼版本目录**，
   拿不到才用 manifest 里的绝对地址——镜像部署不会被拉回官方域名。
 - 预发布（`2.1.2-beta.1`）不写根 `latest.json`，但版本目录里仍然有 `<version>/latest.json`。
@@ -308,8 +301,7 @@ RELEASE.json
 }
 ```
 
-`tarball` / `scf.tarball` 是**相对下载根**的路径（`--layout flat` 时就是裸文件名），
-和根 `SHA256SUMS` 里的写法一致。
+`tarball` / `scf.tarball` 是**相对下载根**的路径，和根 `SHA256SUMS` 里的写法一致。
 
 归档目录（`probes/releases/<version>/`，天然自洽的一份快照）：
 
@@ -338,7 +330,51 @@ probes/releases/2.1.2/
 
 ## 5. 发布到下载源
 
-`pnpm probe:pack` 产出的 `probes/agent/dist/` 已经就是下载根的镜像，整目录同步即可：
+### 一键同步（推荐）
+
+```bash
+pnpm probe:pack      # 构建：自动 bump + 归档到 probes/releases/<version>/
+pnpm probe:publish   # 上传：顺序、缓存头、幂等、上传后校验都内置
+pnpm probe:verify    # 线上校验
+```
+
+`publish-release.js` 直接走 S3 API（项目已依赖 `@aws-sdk/client-s3`，无需装 rclone / aws CLI）：
+
+| 变量 | 说明 |
+| --- | --- |
+| `PROBE_R2_ENDPOINT` | R2 的 S3 endpoint，形如 `https://<accountid>.r2.cloudflarestorage.com` |
+| `PROBE_R2_BUCKET` | 发布桶（**必填**） |
+| `PROBE_R2_ACCESS_KEY_ID` / `PROBE_R2_SECRET_ACCESS_KEY` | R2 令牌 |
+| `PROBE_R2_REGION` | 默认 `auto` |
+| `PROBE_R2_PREFIX` | 默认 `probe` |
+| `PROBE_R2_FORCE_PATH_STYLE` | MinIO / 自建 S3 时设 `1` |
+
+- 变量可放 `.env`（脚本会自动加载仓库根 `.env`），也可用 `--env-file` 指定。
+- 回退到 `STORAGE_OSS_*` 时必须显式加 `--allow-storage-bucket`，防止把发布物传进附件桶。
+- 常用参数：`--dry-run`（只打印计划）、`--force`（重传 immutable 产物）、`--version 2.1.2`（只传某版本）、`--no-installer`、`--install-key <key>`。
+- **上传顺序**：版本目录 → `version.json` → `latest.json` → `latest` 别名 → `install.sh`。中途失败时线上仍指向旧版本，可直接重跑。
+- **幂等**：`<version>/**` 大小一致就跳过；指针类（`latest.json`、`version.json`、`install.sh`、别名）每次都重传。
+- **上传后校验**：逐个 HeadObject 比对大小，失败即非零退出（`--no-verify` 可跳过）。
+
+行为示例：
+
+```
+Publishing probes/agent/dist -> s3://beaconix/probe
+Versions: 2.1.2
+
+  = probe/2.1.2/beaconix-probe-2.1.2.tar.gz    24.3 KiB  unchanged
+  + probe/version.json                          734 B  public, max-age=60, must-revalidate
+  + probe/latest.json                           681 B  public, max-age=60, must-revalidate
+  + probe/beaconix-probe-latest.tar.gz        24.3 KiB  public, max-age=300
+  + install.sh (bucket root)                  10.9 KiB  public, max-age=60, must-revalidate
+
+Done: 4 uploaded, 4 unchanged
+Verified 8 object(s) with HeadObject.
+```
+
+### 手工同步（rclone / aws cli）
+
+`probes/agent/dist/` 已经就是下载根的镜像，整目录同步即可：
 
 ```bash
 rclone copy probes/agent/dist/ r2:beaconix/probe/      # 版本目录 + 根指针
@@ -352,28 +388,27 @@ rclone copy probes/agent/dist/install.sh r2:beaconix/   # 入口脚本在桶根
 | `2.1.2/latest.json` | `https://get.beaconix.app/probe/2.1.2/latest.json` | 长缓存（该版本自洽，安装链路不读） |
 | `2.1.2/SHA256SUMS` | `https://get.beaconix.app/probe/2.1.2/SHA256SUMS` | 长缓存 |
 | `beaconix-probe-latest.tar.gz` | `https://get.beaconix.app/probe/beaconix-probe-latest.tar.gz` | 短缓存；**只作为 manifest 不可达时的回退**，缓存旧了不影响安装 |
-| `beaconix-probe-2.1.2.tar.gz`（扁平副本） | `https://get.beaconix.app/probe/beaconix-probe-2.1.2.tar.gz` | 长缓存；供缓存了旧版 `install.sh` 的机器，过渡期后可用 `--no-compat-flat` 关闭 |
 | `latest.json` | `https://get.beaconix.app/probe/latest.json` | **必须短缓存**（60s 或 no-cache）；安装器带 `?ts=` 主动绕过缓存 |
 | `SHA256SUMS` | `https://get.beaconix.app/probe/SHA256SUMS` | 短缓存（路径相对下载根） |
 | `version.json` | `https://get.beaconix.app/probe/version.json` | 短缓存（发布历史，非安装依赖） |
 | `install.sh` | `https://get.beaconix.app/install.sh` | 短缓存（它是入口脚本，改一次要尽快生效） |
 
 **上传顺序**：版本目录产物 → `<version>/SHA256SUMS` → `<version>/latest.json` →
-`version.json` → 根 `latest.json` → `latest` 别名 → 扁平兼容副本 → `install.sh`。
-安装链路只依赖版本目录与根 `latest.json`；别名/兼容副本属于回退路径，晚传不影响新安装。
+`version.json` → 根 `latest.json` → `latest` 别名 → `install.sh`。
+安装链路只依赖版本目录与根 `latest.json`；别名属于回退路径，晚传不影响新安装。
 
 发布后校验：
 
 ```bash
 pnpm probe:verify
-# 等价于 node probes/agent/scripts/verify-release.js [--base-url <url>] [--layout auto|versioned|flat]
+# 等价于 node probes/agent/scripts/verify-release.js [--base-url <url>]
 
 # 手工检查也可以：
 curl -fsSL https://get.beaconix.app/probe/latest.json | head -20
 curl -fsSL https://get.beaconix.app/probe/SHA256SUMS | sha256sum -c --ignore-missing
 ```
 
-`verify-release.js` 的判定（`--layout auto` 先试版本目录，再回退扁平布局）：
+`verify-release.js` 的判定：
 
 | 检查 | 级别 | 说明 |
 | --- | --- | --- |
@@ -399,7 +434,7 @@ rclone copy probes/releases/2.1.1/beaconix-probe-2.1.1.tar.gz \
     r2:beaconix/probe/beaconix-probe-latest.tar.gz
 ```
 
-清理旧版本时删掉 `probe/<version>/` 一个目录即可；扁平兼容副本按文件名删。
+清理旧版本时删掉 `probe/<version>/` 一个目录即可。
 
 ---
 
@@ -413,7 +448,7 @@ rclone copy probes/releases/2.1.1/beaconix-probe-2.1.1.tar.gz \
    ├─────────────────────────────────────▶│                                        │
    │  GET /probe/<version>/beaconix-probe-<version>.tar.gz                          │
    ├─────────────────────────────────────▶│                                        │
-   │  （404 时回退：manifest 绝对地址 → 扁平副本 → latest 别名）                      │
+   │  （版本目录 404 时回退：manifest 绝对地址 → latest 别名）                        │
    │  sha256 校验（manifest 或 <version>/SHA256SUMS） → 解压到 /opt/beaconix-probe   │
    │  建 beaconix 用户 + systemd unit      │                                        │
    │  systemctl start → beaconix-probe run │                                        │
@@ -449,7 +484,7 @@ rclone copy probes/releases/2.1.1/beaconix-probe-2.1.1.tar.gz \
 
 镜像本身**不含 agent 代码**：容器首次启动时由 `probes/docker-entrypoint.sh`
 按与 `install.sh` 相同的解析链把已发布产物下载到 `/data/agent`（版本目录 →
-manifest 绝对地址 → 扁平副本 → `latest` 别名），然后交给 `run`；`run` 发现没有凭据
+manifest 绝对地址 → `latest` 别名），然后交给 `run`；`run` 发现没有凭据
 就自动发起设备码授权，把验证链接和用户码打到 `docker logs`，批准后自动进入正常业务。
 之后重启复用 `/data` 卷里的安装和凭据，不再下载、不再登录。
 
@@ -610,7 +645,7 @@ tag 版本与 `package.json` 一致（可在 step 里加一条断言）。
 | 容器日志出现 `curl: (22) … 404` / `curl: (6) Could not resolve host` | 下载源不可达，或该版本文件不存在 | 检查 `BEACON_DOWNLOAD_BASE` 与 `PROBE_VERSION`（预发布不写根 `latest.json`） |
 | 容器重建后又要求登录 | `/data` 没挂持久卷 | `-v beacon-probe-data:/data`（compose 已配命名卷） |
 | 容器每次安装后还是旧版本（日志显示 `installed to … (2.0.0)`） | `latest.json` 被 CDN 缓存成旧版本，或下载源缺少对应的版本目录 | 安装器已带 `?ts=` 绕过缓存并优先按版本目录取包；确认 `pnpm probe:verify` 为全 OK，必要时手动刷新 `latest.json` 缓存 |
-| 安装日志出现 `is unavailable; trying the next source` 但最终成功 | 该来源缺失（版本目录 / 扁平副本 / 别名其中之一） | 正常回退；若最终装到的版本不对，跑 `pnpm probe:verify` 定位缺失产物 |
+| 安装日志出现 `is unavailable; trying the next source` 但最终成功 | 该来源缺失（版本目录 / manifest 绝对地址 / 别名其中之一） | 正常回退；若最终装到的版本不对，跑 `pnpm probe:verify` 定位缺失产物 |
 | 容器日志 `Missing probe credential(s)` | 未登录就用透传子命令跑了 `run` | 先不带参数启动完成登录，或设置 `PROBE_ENROLL_TOKEN` |
 | `run` 长时间停在 `Waiting for approval` | 网页上还没确认，或链接已过期（10 分钟） | 重新打开链接；过期后进程退出，systemd / restart 策略会重新出码 |
 

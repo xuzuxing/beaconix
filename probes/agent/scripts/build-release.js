@@ -57,7 +57,6 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 /** Top-level payload entries that ship to probe hosts. */
 const PAYLOAD_ENTRIES = ['index.js', 'bin', 'src', 'functions', 'install', 'package.json'];
 const VERSION_HISTORY_NAME = 'version.json';
-const LAYOUTS = ['versioned', 'flat'];
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'test', '.git']);
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db', 'package-lock.json']);
 
@@ -75,9 +74,6 @@ Options:
   --version <x.y.z>  Set an explicit version instead of bumping
   --releases-dir <d> Release archive directory (default: probes/releases)
   --no-archive       Record history but do not copy artifacts into releases/
-  --layout <name>    versioned (default): dist/<version>/…, flat: everything at the root
-  --compat-flat      Also publish a flat beaconix-probe-<version>.tar.gz copy
-  --no-compat-flat   Do not publish the flat compatibility copy
   --no-scf           Do not build the Tencent SCF zip
   --scf-only         Only build the Tencent SCF zip (other artifacts untouched)
   --latest           Always publish the "latest" alias and latest.json
@@ -91,8 +87,9 @@ src/version.js requires at runtime. "pack" bumps it by default; "--scf-only"
 keeps it unless --bump/--version is given explicitly. Each release is archived
 under probes/releases/<version>/ and indexed in probes/releases/version.json.
 
-With --layout versioned (default) the output directory mirrors the download
-root that install.sh and the container entrypoint expect:
+The output directory mirrors the download root that install.sh and the
+container entrypoint expect — one immutable directory per version, with only
+the moving pointers at the root:
 
   <out>/<version>/beaconix-probe-<version>.tar.gz
   <out>/<version>/beaconix-probe-scf-<version>.zip
@@ -101,8 +98,7 @@ root that install.sh and the container entrypoint expect:
   <out>/latest.json                    pointer to the newest stable version
   <out>/version.json                   release history
   <out>/beaconix-probe-latest.tar.gz   alias, only used when the manifest is down
-  <out>/install.sh                     uploaded to the bucket root
-  <out>/beaconix-probe-<version>.tar.gz  flat compatibility copy (--compat-flat)`;
+  <out>/install.sh                     uploaded to the bucket root`;
 
 function stripTrailingSlash(value) {
     return String(value).replace(/\/+$/, '');
@@ -128,8 +124,6 @@ function parseArgs(argv) {
         bumpExplicit: false,
         version: undefined,
         archive: true,
-        layout: 'versioned',
-        compatFlat: true,
         requireClean: false,
         verify: true,
         help: false,
@@ -161,15 +155,6 @@ function parseArgs(argv) {
             opts.releasesDir = path.resolve(requireValue(argv, ++i, arg));
         } else if (arg === '--no-archive') {
             opts.archive = false;
-        } else if (arg === '--layout') {
-            opts.layout = requireValue(argv, ++i, arg);
-            if (!LAYOUTS.includes(opts.layout)) {
-                throw new Error(`--layout must be ${LAYOUTS.join(' or ')}`);
-            }
-        } else if (arg === '--compat-flat') {
-            opts.compatFlat = true;
-        } else if (arg === '--no-compat-flat') {
-            opts.compatFlat = false;
         } else if (arg === '--no-scf') {
             opts.includeScf = false;
         } else if (arg === '--scf-only') {
@@ -186,10 +171,6 @@ function parseArgs(argv) {
             throw new Error(`Unknown option: ${arg}`);
         }
     }
-
-    // In the flat layout the versioned tarball already lives at the root, so a
-    // separate compatibility copy would just duplicate the same bytes.
-    if (opts.layout === 'flat') opts.compatFlat = false;
 
     return opts;
 }
@@ -619,36 +600,17 @@ function verifyTarball(tarPath, expectedVersion) {
     }
 }
 
-function verifyInstaller(opts) {
+function verifyInstaller() {
     const installerPath = path.join(AGENT_DIR, 'install', 'install.sh');
     const script = fs.readFileSync(installerPath, 'utf8');
     // `<base>/<version>/beaconix-probe-<version>.tar.gz`
     const versionedPattern =
         /\/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\/beaconix-probe-\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\.tar\.gz/;
-    // `<base>/beaconix-probe-<version>.tar.gz` (legacy flat layout only)
-    const flatPattern =
-        /beaconix-probe-\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\.tar\.gz/;
 
-    if (opts.layout === 'versioned') {
-        if (!versionedPattern.test(script)) {
-            throw new Error(
-                'install/install.sh no longer downloads `<base>/<version>/beaconix-probe-<version>.tar.gz`; ' +
-                    'update this script and the release docs before publishing',
-            );
-        }
-    } else {
-        if (!flatPattern.test(script)) {
-            throw new Error(
-                'install/install.sh does not download `beaconix-probe-<version>.tar.gz`; ' +
-                    'pass --layout versioned or update the installer',
-            );
-        }
-        // The installer tries `<base>/<version>/` first and falls back to these
-        // flat files, so a flat release still installs — it just skips the
-        // immutable per-version directory.
-        console.warn(
-            'warning: --layout flat publishes without <version>/ directories; ' +
-                'installers try the versioned URL first and fall back to the flat copy',
+    if (!versionedPattern.test(script)) {
+        throw new Error(
+            'install/install.sh no longer downloads `<base>/<version>/beaconix-probe-<version>.tar.gz`; ' +
+                'update this script and the release docs before publishing',
         );
     }
     if (!/latest\.json/.test(script)) {
@@ -673,14 +635,12 @@ function formatBytes(bytes) {
 
 /** Directory holding a version's immutable artifacts inside the output root. */
 function versionOutDir(opts, version) {
-    return opts.layout === 'versioned'
-        ? path.join(opts.outDir, version)
-        : opts.outDir;
+    return path.join(opts.outDir, version);
 }
 
-/** Artifact path relative to the download root: `2.1.2/…` or just `…`. */
-function releasePath(opts, version, name) {
-    return opts.layout === 'versioned' ? `${version}/${name}` : name;
+/** Artifact path relative to the download root: `2.1.2/…`. */
+function releasePath(version, name) {
+    return `${version}/${name}`;
 }
 
 function bumpSemver(version, part) {
@@ -875,7 +835,7 @@ function buildScfOnly(opts, entries, source, version, previousVersion) {
 
     const history = loadHistory(opts);
     const scf = {
-        tarball: releasePath(opts, version, zipName),
+        tarball: releasePath(version, zipName),
         handler: 'index.main',
         sha256: sha256(zip),
         size: zip.length,
@@ -892,7 +852,6 @@ function buildScfOnly(opts, entries, source, version, previousVersion) {
         scfOnly: true,
         version,
         previousVersion,
-        layout: opts.layout,
         zipName,
         zipRel: scf.tarball,
         zipPath: path.join(outDir, zipName),
@@ -946,19 +905,13 @@ function build(opts) {
     const tarPath = path.join(outVersionDir, tarName);
     fs.writeFileSync(tarPath, tarball);
 
-    const tarRel = releasePath(opts, version, tarName);
+    const tarRel = releasePath(version, tarName);
     const artifacts = [{ name: tarRel, size: tarball.length }];
 
     if (publishLatestAlias) {
         const aliasPath = path.join(opts.outDir, latestTarName);
         fs.writeFileSync(aliasPath, tarball);
         artifacts.push({ name: latestTarName, size: tarball.length });
-    }
-
-    if (opts.compatFlat) {
-        // Installers cached by a CDN or by the user still ask for the flat URL.
-        fs.writeFileSync(path.join(opts.outDir, tarName), tarball);
-        artifacts.push({ name: `${tarName} (compat)`, size: tarball.length });
     }
 
     let zipInfo;
@@ -976,13 +929,13 @@ function build(opts) {
             entries: scfEntries.length,
         };
         artifacts.push({
-            name: releasePath(opts, version, zipName),
+            name: releasePath(version, zipName),
             size: zip.length,
         });
     }
 
     const installerSource = path.join(AGENT_DIR, 'install', 'install.sh');
-    verifyInstaller(opts);
+    verifyInstaller();
     fs.copyFileSync(installerSource, path.join(opts.outDir, 'install.sh'));
     artifacts.push({
         name: 'install.sh',
@@ -994,12 +947,12 @@ function build(opts) {
     }
 
     const tarSha = sha256(tarball);
-    const zipRel = zipInfo ? releasePath(opts, version, zipName) : null;
+    const zipRel = zipInfo ? releasePath(version, zipName) : null;
     const manifest = {
         name: PKG.name,
         version,
         channel: publishLatestAlias ? 'latest' : 'prerelease',
-        layout: opts.layout,
+        layout: 'versioned',
         tarball: `${opts.baseUrl}/${tarRel}`,
         installUrl: opts.installUrl,
         sha256: tarSha,
@@ -1036,14 +989,13 @@ function build(opts) {
     );
 
     // Root checksums carry paths relative to the download root, so a single
-    // `sha256sum -c` verifies a mirrored directory in either layout.
+    // `sha256sum -c` verifies a mirrored directory.
     const sums = [
         `${tarSha}  ${tarRel}`,
         `${sha256(fs.readFileSync(path.join(opts.outDir, 'install.sh')))}  install.sh`,
     ];
     if (publishLatestAlias) sums.push(`${tarSha}  ${latestTarName}`);
     if (zipInfo) sums.push(`${zipInfo.sha256}  ${zipRel}`);
-    if (opts.compatFlat) sums.push(`${tarSha}  ${tarName}`);
     fs.writeFileSync(
         path.join(opts.outDir, 'SHA256SUMS'),
         `${sums.join('\n')}\n`,
@@ -1098,9 +1050,6 @@ function build(opts) {
     return {
         version,
         previousVersion,
-        layout: opts.layout,
-        compatFlat: opts.compatFlat,
-        versionDir: opts.layout === 'versioned' ? version : null,
         tarName,
         tarRel,
         zipRel,
@@ -1153,7 +1102,6 @@ function printSummary(result) {
     if (result.version !== result.previousVersion) {
         console.log(`Version: ${result.previousVersion} -> ${result.version}`);
     }
-    console.log(`Layout: ${result.layout}`);
     console.log(`Output: ${result.outDir}`);
     if (result.archiveDir) {
         console.log(`Archive: ${result.archiveDir}`);
@@ -1170,14 +1118,12 @@ function printSummary(result) {
             '  (pre-release: no root latest.json / latest alias — installed agents stay put)',
         );
     }
-    if (result.versionDir) {
-        console.log(
-            `  ${`${result.versionDir}/SHA256SUMS`.padEnd(36)} version-local checksums`,
-        );
-        console.log(
-            `  ${`${result.versionDir}/latest.json`.padEnd(36)} manifest describing this version`,
-        );
-    }
+    console.log(
+        `  ${`${result.version}/SHA256SUMS`.padEnd(36)} version-local checksums`,
+    );
+    console.log(
+        `  ${`${result.version}/latest.json`.padEnd(36)} manifest describing this version`,
+    );
     console.log('  SHA256SUMS                           root checksums (paths from the root)');
     console.log(
         `  ${VERSION_HISTORY_NAME.padEnd(36)} history (${result.historyCount} version(s))`,
@@ -1204,7 +1150,7 @@ function printSummary(result) {
     console.log('');
     console.log('Cache headers:');
     console.log(
-        `  ${result.baseUrl}/${result.versionDir || '<version>'}/**  immutable (max-age=31536000)`,
+        `  ${result.baseUrl}/${result.version}/**  immutable (max-age=31536000)`,
     );
     console.log('  latest.json / version.json / install.sh        max-age=60');
     console.log('');

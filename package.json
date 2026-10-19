@@ -48,6 +48,7 @@
     "probe:pack": "node probes/agent/scripts/build-release.js",
     "probe:pack:scf": "node probes/agent/scripts/build-release.js --scf-only",
     "probe:verify": "node probes/agent/scripts/verify-release.js",
+    "probe:publish": "node probes/agent/scripts/publish-release.js",
     "probe:test": "node --test \"probes/agent/test/*.test.js\""
   },
   "dependencies": {

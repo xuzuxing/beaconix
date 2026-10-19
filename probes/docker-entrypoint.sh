@@ -10,8 +10,10 @@
 #
 #   1. <base>/<version>/beaconix-probe-<version>.tar.gz
 #   2. manifest `tarball` (absolute URL written by build-release.js)
-#   3. <base>/beaconix-probe-<version>.tar.gz     (flat, compat copy)
-#   4. <base>/beaconix-probe-latest.tar.gz        (moving alias)
+#   3. <base>/beaconix-probe-latest.tar.gz        (moving alias)
+#
+# There is no flat compatibility path; if none of the three answers, the
+# container refuses to start from a partial download.
 #
 # Keep this block in sync with probes/agent/install/install.sh.
 #
@@ -69,9 +71,6 @@ candidate_urls() {
     fi
     if [ -n "$MANIFEST_TARBALL" ]; then
         printf '%s\n' "$MANIFEST_TARBALL"
-    fi
-    if [ "$RESOLVED_VERSION" != "latest" ]; then
-        printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-$RESOLVED_VERSION.tar.gz"
     fi
     printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-latest.tar.gz"
 }

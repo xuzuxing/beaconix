@@ -1,15 +1,21 @@
 {
-    "updatedAt": "2026-10-19T12:03:47Z",
+    "updatedAt": "2026-10-19T15:31:46Z",
     "versions": [
         {
-            "version": "2.1.1",
-            "releasedAt": "2026-10-19T04:52:56Z",
+            "version": "2.1.2",
+            "releasedAt": "2026-10-19T15:24:33Z",
             "channel": "latest",
-            "commit": "219262c",
-            "sourceDate": "2026-10-19T19:43:23+08:00",
-            "tarball": "beaconix-probe-2.1.1.tar.gz",
-            "sha256": "dae7417cfda5920b85132c8d28d719253a0ecb73e486effdd9040fe80c6df3b6",
-            "size": 24914
+            "commit": "ea927d9",
+            "sourceDate": "2026-10-19T23:23:01+08:00",
+            "tarball": "2.1.2/beaconix-probe-2.1.2.tar.gz",
+            "sha256": "116956367312cbe3529503cd171367eab05d206af88a1b25b3df29ac2c8c5da5",
+            "size": 24899,
+            "scf": {
+                "tarball": "2.1.2/beaconix-probe-scf-2.1.2.zip",
+                "handler": "index.main",
+                "sha256": "73014397fd5203ef78e10bb901d406dcecdc0ea7af52af15661f0a08f8ce647b",
+                "size": 31886
+            }
         }
     ]
 }

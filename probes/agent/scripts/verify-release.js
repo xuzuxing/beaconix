@@ -4,8 +4,7 @@
 /**
  * Verify that a probe release is internally consistent at its download URL.
  *
- * With the versioned layout (build-release.js default) the install chain has
- * these moving parts, and they must all agree:
+ * The install chain has these moving parts, and they must all agree:
  *
  *   latest.json                                  -> { version, sha256, tarball }
  *   <version>/beaconix-probe-<version>.tar.gz    -> the immutable build
@@ -16,24 +15,21 @@
  *
  * A release whose manifest, versioned tarball, or installer disagree silently
  * keeps every `install.sh` / container start on the old agent, so check it after
- * every upload (`pnpm probe:verify`). `--layout flat` still verifies releases
- * published with the legacy flat layout.
+ * every upload (`pnpm probe:verify`). The versioned layout is the only one
+ * published: a missing `<version>/` directory is a hard failure.
  *
  * Usage:
- *   node probes/agent/scripts/verify-release.js [--base-url <url>]
- *        [--layout auto|versioned|flat] [--no-scf]
+ *   node probes/agent/scripts/verify-release.js [--base-url <url>] [--no-scf]
  */
 
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 
 const DEFAULT_BASE_URL = 'https://get.beaconix.app/probe';
-const LAYOUTS = ['auto', 'versioned', 'flat'];
 
 function parseArgs(argv) {
     const opts = {
         baseUrl: DEFAULT_BASE_URL,
-        layout: 'auto',
         checkScf: true,
         help: false,
     };
@@ -45,12 +41,6 @@ function parseArgs(argv) {
         } else if (arg === '--base-url') {
             if (i + 1 >= argv.length) throw new Error('--base-url needs a value');
             opts.baseUrl = argv[++i].replace(/\/+$/, '');
-        } else if (arg === '--layout') {
-            if (i + 1 >= argv.length) throw new Error('--layout needs a value');
-            opts.layout = argv[++i];
-            if (!LAYOUTS.includes(opts.layout)) {
-                throw new Error(`--layout must be ${LAYOUTS.join(', ')}`);
-            }
         } else if (arg === '--no-scf') {
             opts.checkScf = false;
         } else {
@@ -131,8 +121,7 @@ async function main(argv) {
     if (opts.help) {
         console.log(
             'Verify a published probe release.\n\n' +
-                '  node probes/agent/scripts/verify-release.js [--base-url <url>]\n' +
-                '       [--layout auto|versioned|flat] [--no-scf]\n',
+                '  node probes/agent/scripts/verify-release.js [--base-url <url>] [--no-scf]\n',
         );
         return;
     }
@@ -155,37 +144,10 @@ async function main(argv) {
     check(Boolean(manifest.sha256), 'latest.json sha256', manifest.sha256 || 'missing');
     check(Boolean(manifest.installUrl), 'latest.json installUrl', manifest.installUrl);
 
-    // ---- layout + payload ------------------------------------------------
-    // The installer tries the versioned URL first, so the verifier does too and
-    // only falls back to the legacy flat path when that is what is published.
+    // ---- payload ---------------------------------------------------------
     const versionedTarballUrl = `${base}/${version}/beaconix-probe-${version}.tar.gz`;
-    const flatTarballUrl = `${base}/beaconix-probe-${version}.tar.gz`;
-    let layout = opts.layout;
-    let tarballUrl = null;
-    let versionTarball = null;
-
-    if (layout !== 'flat') {
-        versionTarball = await fetchOptional(versionedTarballUrl);
-        if (versionTarball) {
-            tarballUrl = versionedTarballUrl;
-            layout = 'versioned';
-        } else if (layout === 'versioned') {
-            check(false, 'versioned tarball', `${versionedTarballUrl} is missing`);
-        }
-    }
-    if (!versionTarball && layout !== 'versioned') {
-        versionTarball = await fetchOptional(flatTarballUrl);
-        if (versionTarball) {
-            tarballUrl = flatTarballUrl;
-            check(
-                true,
-                'layout flat (legacy)',
-                `${flatTarballUrl} — publish <version>/ directories instead`,
-                { soft: opts.layout === 'auto' },
-            );
-            layout = 'flat';
-        }
-    }
+    const versionTarball = await fetchOptional(versionedTarballUrl);
+    const tarballUrl = versionedTarballUrl;
 
     let versionSums = null;
     if (versionTarball) {
@@ -219,47 +181,41 @@ async function main(argv) {
             );
         }
     } else {
-        check(
-            false,
-            'release tarball',
-            `neither ${versionedTarballUrl} nor ${flatTarballUrl} is available`,
-        );
+        check(false, 'release tarball', `${versionedTarballUrl} is missing`);
     }
 
     // ---- per-version manifest + checksums --------------------------------
-    if (layout === 'versioned') {
-        const versionManifestBytes = await fetchOptional(`${base}/${version}/latest.json`);
-        if (versionManifestBytes) {
-            try {
-                const versionManifest = JSON.parse(versionManifestBytes.toString('utf8'));
-                check(
-                    versionManifest.version === version &&
-                        versionManifest.sha256 === manifest.sha256,
-                    `${version}/latest.json matches the root manifest`,
-                    versionManifest.version === version ? 'version + sha256 agree' : versionManifest.version,
-                );
-            } catch (err) {
-                check(false, `${version}/latest.json`, err.message);
-            }
-        } else {
-            check(false, `${version}/latest.json`, 'missing', { soft: true });
+    const versionManifestBytes = await fetchOptional(`${base}/${version}/latest.json`);
+    if (versionManifestBytes) {
+        try {
+            const versionManifest = JSON.parse(versionManifestBytes.toString('utf8'));
+            check(
+                versionManifest.version === version &&
+                    versionManifest.sha256 === manifest.sha256,
+                `${version}/latest.json matches the root manifest`,
+                versionManifest.version === version ? 'version + sha256 agree' : versionManifest.version,
+            );
+        } catch (err) {
+            check(false, `${version}/latest.json`, err.message);
         }
+    } else {
+        check(false, `${version}/latest.json`, 'missing', { soft: true });
+    }
 
-        const sumsBytes = await fetchOptional(`${base}/${version}/SHA256SUMS`);
-        if (sumsBytes) {
-            versionSums = parseSums(sumsBytes.toString('utf8'));
-            const expected = versionSums.get(`beaconix-probe-${version}.tar.gz`);
-            check(Boolean(expected), `${version}/SHA256SUMS lists the tarball`, expected || 'missing');
-            if (expected && versionTarball) {
-                check(
-                    expected === sha256(versionTarball),
-                    `${version}/SHA256SUMS tarball sha256`,
-                    expected,
-                );
-            }
-        } else {
-            check(false, `${version}/SHA256SUMS`, 'missing', { soft: true });
+    const sumsBytes = await fetchOptional(`${base}/${version}/SHA256SUMS`);
+    if (sumsBytes) {
+        versionSums = parseSums(sumsBytes.toString('utf8'));
+        const expected = versionSums.get(`beaconix-probe-${version}.tar.gz`);
+        check(Boolean(expected), `${version}/SHA256SUMS lists the tarball`, expected || 'missing');
+        if (expected && versionTarball) {
+            check(
+                expected === sha256(versionTarball),
+                `${version}/SHA256SUMS tarball sha256`,
+                expected,
+            );
         }
+    } else {
+        check(false, `${version}/SHA256SUMS`, 'missing', { soft: true });
     }
 
     // ---- compatibility alias ---------------------------------------------
@@ -303,14 +259,12 @@ async function main(argv) {
                     versionSums.get(scfName),
                 );
             }
-            if (layout === 'versioned') {
-                check(
-                    manifest.scf.tarball.includes(`/${version}/`),
-                    'scf tarball lives in the version directory',
-                    manifest.scf.tarball,
-                    { soft: true },
-                );
-            }
+            check(
+                manifest.scf.tarball.includes(`/${version}/`),
+                'scf tarball lives in the version directory',
+                manifest.scf.tarball,
+                { soft: true },
+            );
         } else {
             check(false, 'scf zip', `${manifest.scf.tarball} is not reachable`);
         }
@@ -324,20 +278,11 @@ async function main(argv) {
         check(/latest\.json/.test(installer), 'install.sh resolves latest.json', installerUrl);
         const versionedPattern =
             /\/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\/beaconix-probe-\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\.tar\.gz/;
-        if (layout === 'versioned') {
-            check(
-                versionedPattern.test(installer),
-                'install.sh downloads <base>/<version>/<tarball>',
-                installerUrl,
-            );
-        } else {
-            check(
-                versionedPattern.test(installer) ||
-                    /beaconix-probe-[^"'`]*\.tar\.gz/.test(installer),
-                'install.sh download pattern',
-                installerUrl,
-            );
-        }
+        check(
+            versionedPattern.test(installer),
+            'install.sh downloads <base>/<version>/<tarball>',
+            installerUrl,
+        );
     } else {
         check(false, 'install.sh', `${installerUrl} is not reachable`);
     }
@@ -378,7 +323,7 @@ async function main(argv) {
         return;
     }
 
-    console.log(`Release ${version} (${layout}) is consistent at ${base}`);
+    console.log(`Release ${version} is consistent at ${base}`);
 }
 
 main(process.argv.slice(2)).catch((err) => {

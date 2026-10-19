@@ -30,7 +30,7 @@ probes/agent/
 ├── functions/scf.js         # 单次执行实现
 ├── install/                 # install.sh 与 systemd unit 模板
 ├── scripts/build-release.js # 发布打包（自动 bump / 版本目录归档 / latest.json / version.json）
-├── scripts/verify-release.js # 发布后校验（按 versioned / flat 布局逐项检查）
+├── scripts/verify-release.js # 发布后校验（版本目录布局逐项检查）
 ├── docker-entrypoint.sh     # 容器入口（首次下载安装 + 登录）
 ├── docker-compose.yml       # 容器部署（运行时下载安装 + 登录，配套 probe.env.example）
 ├── releases/                # 版本归档（pack 时写入；version.json 入库，二进制不入库）
@@ -53,7 +53,7 @@ curl -fsSL https://get.beaconix.app/install.sh | sudo sh
 
 安装器先读 `<base>/latest.json` 拿到版本与 sha256，再从
 `<base>/<version>/beaconix-probe-<version>.tar.gz` 下载不可变产物；manifest 不可达时
-依次回退到版本目录、扁平兼容副本与 `latest` 别名（契约见 [RELEASE.md §5](RELEASE.md)）。
+依次回退到 manifest 里的绝对地址与 `latest` 别名（契约见 [RELEASE.md §5](RELEASE.md)）。
 `BEACON_DOWNLOAD_BASE` 可整体替换下载基址（镜像 / 灰度环境），`BEACON_INSTALL_URL`
 用于覆盖安装脚本地址本身。
 
@@ -143,6 +143,11 @@ pnpm probe:test
 pnpm probe:pack
 # 只打腾讯云 SCF 代码包（默认不累加版本）
 pnpm probe:pack:scf
+
+# 一键同步到 R2（顺序 / 缓存头 / 幂等 / 上传后校验内置，支持 --dry-run）
+pnpm probe:publish
+# 线上校验
+pnpm probe:verify
 
 # 本地调试 SCF 入口
 BEACON_API_URL=https://api.example.com/api \

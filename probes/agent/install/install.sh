@@ -9,14 +9,14 @@
 #
 # The payload is resolved through `<download-base>/latest.json` (version +
 # sha256 + tarball) and fetched from the immutable
-# `<download-base>/<version>/beaconix-probe-<version>.tar.gz` URL. Resolution
-# degrades in this order, so an unreachable manifest or a CDN still serving the
-# previous layout cannot pin this install:
+# `<download-base>/<version>/beaconix-probe-<version>.tar.gz` URL:
 #
 #   1. <download-base>/<version>/beaconix-probe-<version>.tar.gz
 #   2. manifest `tarball` (absolute URL written by build-release.js)
-#   3. <download-base>/beaconix-probe-<version>.tar.gz   (flat, compat copy)
-#   4. <download-base>/beaconix-probe-latest.tar.gz      (moving alias)
+#   3. <download-base>/beaconix-probe-latest.tar.gz   (moving alias)
+#
+# Nothing else is published: there is no flat compatibility path. If none of the
+# three sources answers, the installer fails loudly instead of guessing.
 #
 # The configured download base wins over the manifest's absolute URL, so a
 # mirror that overrides BEACON_DOWNLOAD_BASE never falls back to the public host.
@@ -238,9 +238,6 @@ candidate_urls() {
     fi
     if [ -n "$manifest_tarball" ]; then
         printf '%s\n' "$manifest_tarball"
-    fi
-    if [ "$resolved_version" != "latest" ]; then
-        printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-$resolved_version.tar.gz"
     fi
     printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-latest.tar.gz"
 }

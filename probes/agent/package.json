@@ -1,6 +1,6 @@
 {
     "name": "@beaconix/probe-agent",
-    "version": "2.1.1",
+    "version": "2.1.2",
     "description": "Beacon probe agent CLI (zero runtime dependencies)",
     "private": true,
     "license": "MIT",
