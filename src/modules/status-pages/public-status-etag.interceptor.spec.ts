@@ -64,6 +64,25 @@ describe('PublicStatusEtagInterceptor', () => {
         );
     });
 
+    it('ignores the `_t` cache buster appended by mobile clients', async () => {
+        const { context, next, response } = fixture({
+            tz: 'Asia/Shanghai',
+            _t: '1792407963319',
+        });
+
+        const body = await firstValueFrom(
+            interceptor.intercept(context, next) as never,
+        );
+
+        expect(body).toEqual(
+            expect.objectContaining({ data: { slug: 'acme-status' } }),
+        );
+        expect(response.setHeader).toHaveBeenCalledWith(
+            'ETag',
+            expect.stringContaining('W/"'),
+        );
+    });
+
     it('answers 304 without a body when the tag matches', async () => {
         const first = fixture({ tz: 'UTC' });
         await firstValueFrom(

@@ -11,6 +11,7 @@ import type { Observable } from 'rxjs';
 import { toIsoString } from '../../common/utils/date.util';
 import {
     etagMatches,
+    isIgnoredQueryParameter,
     weakEtag,
 } from '../monitoring/monitoring-etag.interceptor';
 
@@ -41,9 +42,10 @@ export class PublicStatusEtagInterceptor implements NestInterceptor {
         if (
             Object.entries(request.query).some(
                 ([key, value]) =>
-                    !PublicStatusEtagInterceptor.ALLOWED_QUERY.includes(key) ||
-                    typeof value !== 'string' ||
-                    !value,
+                    !isIgnoredQueryParameter(key) &&
+                    (!PublicStatusEtagInterceptor.ALLOWED_QUERY.includes(key) ||
+                        typeof value !== 'string' ||
+                        !value),
             )
         ) {
             throw new BadRequestException(

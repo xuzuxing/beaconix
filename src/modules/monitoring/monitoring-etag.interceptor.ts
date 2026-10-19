@@ -11,6 +11,17 @@ import type { Request, Response } from 'express';
 import { map } from 'rxjs/operators';
 import type { Observable } from 'rxjs';
 
+/**
+ * Cache-busting parameters clients append to bypass URL caches: mobile web
+ * views and Axios wrappers add `_t=<timestamp>` to every request. They cannot
+ * change the payload, so they are ignored instead of rejected.
+ */
+export const IGNORED_QUERY_PARAMETERS = ['_t'];
+
+export function isIgnoredQueryParameter(key: string) {
+    return IGNORED_QUERY_PARAMETERS.includes(key);
+}
+
 export function weakEtag(body: unknown) {
     return `W/"${createHash('sha256').update(JSON.stringify(body)).digest('hex')}"`;
 }
@@ -43,9 +54,10 @@ export class MonitoringEtagInterceptor implements NestInterceptor {
         if (
             Object.entries(request.query).some(
                 ([key, value]) =>
-                    !allowed.includes(key) ||
-                    typeof value !== 'string' ||
-                    !value,
+                    !isIgnoredQueryParameter(key) &&
+                    (!allowed.includes(key) ||
+                        typeof value !== 'string' ||
+                        !value),
             )
         ) {
             throw new BadRequestException(
