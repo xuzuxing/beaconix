@@ -1150,13 +1150,13 @@ Runtime-tunable platform settings live in the `settings` table and can be manage
 
 | Group | Setting key | Default | Description |
 |---|---|---:|---|
-| system | `system.siteName` | `Beacon` | Product name in browser titles, emails and status pages |
+| system | `system.siteName` | `Beaconix` | Product name in browser titles, emails and status pages |
 | system | `system.siteDescription` | 云监控与状态页平台 | Blurb shown on the login and status pages |
-| system | `system.logoUrl` | empty | Header/login logo URL; empty falls back to the built-in icon |
+| system | `system.logoUrl` | empty | Header/login/email logo URL (184×50 PNG); empty falls back to the built-in Beaconix logo |
 | system | `system.faviconUrl` | empty | Browser tab icon URL; empty falls back to the built-in icon |
-| system | `system.footerCopyright` | `© 2026 Beacon` | Footer copyright line |
+| system | `system.footerCopyright` | `© 2026 Beaconix` | Footer copyright line |
 | system | `system.icpLicense` | empty | ICP filing number for deployments in mainland China |
-| system | `system.supportEmail` | `support@beacon.example.com` | Contact address shown in the footer and emails |
+| system | `system.supportEmail` | `contacts@beaconix.app` | Contact address shown in the footer and emails |
 | system | `system.defaultLocale` | `zh-CN` | Default UI language: `zh-CN` or `en-US` |
 | system | `system.maintenanceMode` | `false` | Blocks everyone but platform SUPER_ADMINs |
 | smtp | `smtp.host` | empty | SMTP host for system mail; empty means no SMTP is configured |

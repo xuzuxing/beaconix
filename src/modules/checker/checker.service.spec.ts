@@ -1028,6 +1028,10 @@ describe('CheckerService', () => {
                 ['DNS', dnsChecker],
                 ['PING', pingChecker],
             ] as const) {
+                // 批次 id 是 `monitorId:startedAt(ms)`：两次执行若落在同一毫秒，
+                // 第二次会被当成仍在打开的同一批次而只结算一次。这里让时间前进
+                // 几毫秒，保证两次调用各自形成独立批次。
+                await new Promise((resolve) => setTimeout(resolve, 2));
                 prisma.monitor.findFirst.mockResolvedValue({
                     ...monitorRow,
                     type,

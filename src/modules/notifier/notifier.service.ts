@@ -651,7 +651,7 @@ export class NotifierService {
     private buildTestPayload(orgId: string): NotificationPayload {
         return {
             monitorId: 'test-notification',
-            monitorName: 'Beacon test notification',
+            monitorName: 'Beaconix test notification',
             monitorType: 'HTTP',
             target: 'https://example.com/health',
             organizationId: orgId,

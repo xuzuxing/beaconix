@@ -53,7 +53,7 @@ export class PaymentService {
             outTradeNo: order.orderNo,
             totalFee: order.amount,
             payerId: dto.openid,
-            body: `Beacon plan order ${order.orderNo}`,
+            body: `Beaconix plan order ${order.orderNo}`,
         });
 
         await this.prisma.payment.upsert({

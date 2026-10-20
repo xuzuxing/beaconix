@@ -2,7 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsOptional, MinLength, MaxLength } from 'class-validator';
 
 export class UpdateProjectDto {
-    @ApiPropertyOptional({ example: 'Beacon Backend v2' })
+    @ApiPropertyOptional({ example: 'Beaconix Backend v2' })
     @IsOptional()
     @IsString()
     @MinLength(1)

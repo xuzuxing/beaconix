@@ -12,11 +12,14 @@ import {
 import type { AppConfig, ResendConfig } from '../../config';
 import { escapeHtml } from '../../common/utils/otp.util';
 import { SettingsService } from '../settings';
+import { BUILTIN_LOGO_DATA_URI } from './email-logo';
 
 /** 邮件版式使用的站点品牌信息，来自平台配置的 `system.*` */
 export interface EmailBranding {
     siteName: string;
     supportEmail: string;
+    /** 站点 Logo 地址；`system.logoUrl` 为空时是内置 PNG 的 data URI */
+    logoUrl: string;
 }
 
 /** 一次发送选定的通道与发件人 */
@@ -24,6 +27,16 @@ export interface MailRoute {
     transport: MailTransport;
     fromAddress: string;
 }
+
+/** 邮件版式共用的配色 */
+const NOTIFY_COLORS = {
+    primary: '#00a4ff',
+    heading: '#13181d',
+    text: '#333333',
+    muted: '#999999',
+    border: '#cccccc',
+    danger: '#e54545',
+} as const;
 
 @Injectable()
 export class EmailService {
@@ -142,23 +155,29 @@ export class EmailService {
      */
     private async branding(): Promise<EmailBranding> {
         try {
-            const [siteName, supportEmail] = await Promise.all([
+            const [siteName, supportEmail, logoUrl] = await Promise.all([
                 this.settingsService.getString(
                     'system.siteName',
                     this.defaultSiteName,
                 ),
                 this.settingsService.getString('system.supportEmail', ''),
+                this.settingsService.getString('system.logoUrl', ''),
             ]);
 
             return {
                 siteName: siteName.trim() || this.defaultSiteName,
                 supportEmail: supportEmail.trim(),
+                logoUrl: logoUrl.trim() || BUILTIN_LOGO_DATA_URI,
             };
         } catch (error) {
             this.logger.warn(
                 `Failed to resolve email branding, falling back to environment defaults: ${String(error)}`,
             );
-            return { siteName: this.defaultSiteName, supportEmail: '' };
+            return {
+                siteName: this.defaultSiteName,
+                supportEmail: '',
+                logoUrl: BUILTIN_LOGO_DATA_URI,
+            };
         }
     }
 
@@ -231,28 +250,119 @@ export class EmailService {
         return `${safeName} <${safeEmail}>`;
     }
 
-    private readonly logoUrl =
-        'https://0dmx1q3s0v.ufs.sh/f/FhSkiVUnN75kwe9Bf1c3QUqFZpGr2Xd9WySPfb4NCtVKmcJv';
-
-    private wrapInLayout(body: string, branding: EmailBranding): string {
+    /**
+     * 全站邮件统一的版式：浅灰底 (#f7f8fa) + 品牌头 + 蓝色细线 + 白色内容卡
+     * + 居中页脚。全部用表格 + 内联样式，兼容主流邮件客户端。
+     * 左右留白靠 3% / 3.2% 的空单元格，而不是 margin —— QQ 邮箱、Outlook
+     * 对 `margin:auto` 的居中支持不一致，用表格天然可靠。
+     */
+    private wrapNotificationLayout(
+        body: string,
+        branding: EmailBranding,
+    ): string {
         const siteName = escapeHtml(branding.siteName);
-        const contact = branding.supportEmail
-            ? `<p style="color: #9ca3af; font-size: 12px; margin: 8px 0 0;">Contact: <a href="mailto:${escapeHtml(branding.supportEmail)}" style="color: #6366F1;">${escapeHtml(branding.supportEmail)}</a></p>`
+        const supportEmail = escapeHtml(branding.supportEmail);
+        const contact = supportEmail
+            ? `如需帮助，请联系 <a href="mailto:${supportEmail}" style="color: ${NOTIFY_COLORS.primary}; text-decoration: none;">${supportEmail}</a>。`
             : '';
+        const fontFamily =
+            "'helvetica neue', PingFangSC-Light, arial, 'microsoft yahei ui', 'microsoft yahei', simsun, sans-serif";
+
         return `
-            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb;">
-                <div style="background: linear-gradient(135deg, #4F46E5 0%, #6366F1 100%); padding: 32px 24px; text-align: center;">
-                    <img src="${this.logoUrl}" alt="${siteName}" width="48" height="48" style="border-radius: 10px; margin-bottom: 12px;" />
-                    <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 600;">${siteName}</h1>
-                </div>
-                <div style="padding: 32px 24px;">
-                    ${body}
-                </div>
-                <div style="padding: 16px 24px; background: #f9fafb; text-align: center; border-top: 1px solid #e5e7eb;">
-                    <p style="color: #9ca3af; font-size: 12px; margin: 0;">&copy; ${new Date().getFullYear()} ${siteName}. All rights reserved.</p>
-                    ${contact}
-                </div>
+            <div style="word-break: break-all; box-sizing: border-box; text-align: center; min-width: 320px; max-width: 660px; border: 1px solid #f6f6f6; background-color: #f7f8fa; margin: 0 auto; padding: 20px 0 30px; font-family: ${fontFamily};">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-weight: 300; margin-bottom: 10px; border-collapse: collapse;">
+                    <tr>
+                        <td style="width: 3%; max-width: 30px;"></td>
+                        <td style="max-width: 600px;">
+                            <a href="${escapeHtml(this.webUrl)}" target="_blank" style="text-decoration: none;">
+                                <img border="0" src="${escapeHtml(branding.logoUrl)}" alt="${siteName}" height="36" style="height: 36px; max-width: 200px; width: auto; display: block;" />
+                            </a>
+                            <p style="height: 2px; background-color: ${NOTIFY_COLORS.primary}; border: 0; font-size: 0; padding: 0; width: 100%; margin: 20px 0 0;"></p>
+                            <div style="background-color: #ffffff; padding: 23px 0 20px; box-shadow: 0 1px 1px 0 rgba(122, 55, 55, 0.2); text-align: left;">
+                                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-weight: 300; margin-bottom: 10px; border-collapse: collapse; text-align: left;">
+                                    <tr>
+                                        <td style="width: 3.2%; max-width: 30px;"></td>
+                                        <td style="max-width: 480px; text-align: left;">${body}</td>
+                                        <td style="width: 3.2%; max-width: 30px;"></td>
+                                    </tr>
+                                </table>
+                            </div>
+                            <div style="text-align: center; font-size: 12px; line-height: 18px; color: ${NOTIFY_COLORS.muted};">
+                                <p style="text-align: center; margin: 20px auto 14px; font-size: 12px; color: ${NOTIFY_COLORS.muted};">此为系统邮件，请勿直接回复。${contact}</p>
+                                <p style="max-width: 100%; margin: 0 auto; font-size: 12px; color: ${NOTIFY_COLORS.muted}; text-align: center; line-height: 22px;">Copyright &copy; ${new Date().getFullYear()} ${siteName}.<br />All Rights Reserved.</p>
+                            </div>
+                        </td>
+                        <td style="width: 3%; max-width: 30px;"></td>
+                    </tr>
+                </table>
             </div>`;
+    }
+
+    /** 通知正文标题（20px 粗体，与卡片上沿留出 16px） */
+    private noticeTitle(text: string): string {
+        return `<h1 style="font-weight: bold; font-size: 20px; line-height: 36px; margin: 0 0 16px; color: ${NOTIFY_COLORS.heading};">${text}</h1>`;
+    }
+
+    /** 通知正文称呼行 */
+    private greeting(name?: string): string {
+        const who = name ? `，${name}` : '';
+        return `<p style="font-size: 14px; color: ${NOTIFY_COLORS.text}; line-height: 24px; margin: 0;">您好${who}！</p>`;
+    }
+
+    /** 通知正文段落，段间距 6px、长串强制断行 */
+    private paragraph(html: string): string {
+        return `<p style="font-size: 14px; color: ${NOTIFY_COLORS.text}; line-height: 24px; margin: 6px 0 0; overflow-wrap: break-word; word-break: break-all;">${html}</p>`;
+    }
+
+    /** 次要提示（12px 灰）/ 风险提示（12px 红） */
+    private noticeHint(
+        html: string,
+        tone: 'muted' | 'danger' = 'muted',
+    ): string {
+        const color =
+            tone === 'danger' ? NOTIFY_COLORS.danger : NOTIFY_COLORS.muted;
+        return `<p style="font-size: 12px; color: ${color}; line-height: 22px; margin: 12px 0 0;">${html}</p>`;
+    }
+
+    /** 键值数据表：1px 灰边、标签列浅灰底 */
+    private dataTable(rows: Array<[string, string]>): string {
+        const cells = rows
+            .map(
+                ([label, value]) =>
+                    `<tr><td style="padding: 5px; border: 1px solid ${NOTIFY_COLORS.border}; background-color: #f7f8fa; color: #666666; width: 32%;">${label}</td><td style="padding: 5px; border: 1px solid ${NOTIFY_COLORS.border};">${value}</td></tr>`,
+            )
+            .join('');
+        return `<table cellpadding="5" cellspacing="0" border="1" bordercolor="${NOTIFY_COLORS.border}" style="font-size: 14px; table-layout: fixed; word-break: break-word; width: 100%; border-collapse: collapse; margin-top: 16px;">${cells}</table>`;
+    }
+
+    /** 通栏主按钮：16px / 45px 行高 / 3px 圆角 */
+    private button(label: string, url: string): string {
+        return `<p style="margin: 20px 0 0;"><a href="${url}" target="_blank" style="font-size: 16px; line-height: 45px; display: block; background-color: ${NOTIFY_COLORS.primary}; color: #ffffff; text-align: center; text-decoration: none; border-radius: 3px;">${label}</a></p>`;
+    }
+
+    /** 引用块，用于工单回复等引用内容 */
+    private quote(html: string): string {
+        return `<div style="font-size: 14px; line-height: 24px; color: ${NOTIFY_COLORS.text}; margin: 16px 0 0; padding: 12px 16px; background-color: #f7f8fa; border-left: 3px solid ${NOTIFY_COLORS.primary}; overflow-wrap: break-word; word-break: break-all;">${html}</div>`;
+    }
+
+    /** 正文落款，通知类邮件统一追加在正文末尾 */
+    private signOff(siteName: string): string {
+        return `<p style="font-size: 14px; line-height: 26px; margin: 32px 0 0; word-wrap: break-word; word-break: break-all;">此致<br /><strong>${siteName} 团队</strong></p>`;
+    }
+
+    /** 分割线：正文里区分「主操作」与「备用方式」 */
+    private divider(): string {
+        return `<p style="height: 1px; background-color: ${NOTIFY_COLORS.border}; border: 0; font-size: 0; padding: 0; width: 100%; margin: 20px 0 0; opacity: 0.6;"></p>`;
+    }
+
+    /** 验证码：居中大号等宽数字块 */
+    private codeBlock(code: string): string {
+        return `<div style="margin: 16px 0 0; padding: 16px 0; background-color: #f7f8fa; border: 1px solid #eaedf0; border-radius: 3px; text-align: center;"><span style="font-family: Consolas, Menlo, 'Courier New', monospace; font-size: 26px; font-weight: bold; letter-spacing: 6px; color: ${NOTIFY_COLORS.heading};">${code}</span></div>`;
+    }
+
+    /** 长文本块（邀请链接、邀请码）：等宽小字 + 强断行 */
+    private plainBlock(text: string): string {
+        return `<div style="margin: 8px 0 0; padding: 10px 12px; background-color: #f7f8fa; border: 1px solid #eaedf0; border-radius: 3px; font-family: Consolas, Menlo, 'Courier New', monospace; font-size: 13px; line-height: 22px; color: #475467; overflow-wrap: break-word; word-break: break-all;">${text}</div>`;
     }
 
     private buildEmail<T extends EmailTemplate>(
@@ -268,18 +378,26 @@ export class EmailService {
                     payload as EmailPayloadMap[EmailTemplate.NOTIFICATION];
                 result = {
                     subject: notice.title,
-                    html: `<h2>${escapeHtml(notice.title)}</h2><p>${escapeHtml(notice.body).replace(/\n/g, '<br/>')}</p>`,
+                    html: [
+                        this.noticeTitle(escapeHtml(notice.title)),
+                        this.greeting(),
+                        this.paragraph(
+                            escapeHtml(notice.body).replace(/\n/g, '<br />'),
+                        ),
+                    ].join(''),
                 };
                 break;
             }
             case EmailTemplate.INVITATION:
                 result = this.buildInvitationEmail(
                     payload as EmailPayloadMap[EmailTemplate.INVITATION],
+                    escapeHtml(branding.siteName),
                 );
                 break;
             case EmailTemplate.WELCOME:
                 result = this.buildWelcomeEmail(
                     payload as EmailPayloadMap[EmailTemplate.WELCOME],
+                    escapeHtml(branding.siteName),
                 );
                 break;
             case EmailTemplate.PASSWORD_RESET:
@@ -305,6 +423,7 @@ export class EmailService {
             case EmailTemplate.EMAIL_VERIFICATION:
                 result = this.buildEmailVerificationEmail(
                     payload as EmailPayloadMap[EmailTemplate.EMAIL_VERIFICATION],
+                    escapeHtml(branding.siteName),
                 );
                 break;
             case EmailTemplate.PASSWORD_RESET_OTP:
@@ -353,12 +472,16 @@ export class EmailService {
 
         return {
             subject: result.subject,
-            html: this.wrapInLayout(result.html, branding),
+            html: this.wrapNotificationLayout(
+                result.html + this.signOff(escapeHtml(branding.siteName)),
+                branding,
+            ),
         };
     }
 
     private buildInvitationEmail(
         payload: EmailPayloadMap[EmailTemplate.INVITATION],
+        siteName: string,
     ) {
         const orgName = escapeHtml(payload.orgName);
         const inviterName = escapeHtml(payload.inviterName);
@@ -367,29 +490,46 @@ export class EmailService {
             `${this.webUrl}/invitations/${payload.token}`,
         );
         return {
-            subject: `You've been invited to join ${payload.orgName}`,
-            html: `
-                <h2>You're invited!</h2>
-                <p><strong>${inviterName}</strong> has invited you to join <strong>${orgName}</strong> on Beacon.</p>
-                <p><a href="${inviteUrl}" style="background:#4F46E5; color:#fff; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block;">Accept Invitation</a></p>
-                <p>Or open this link in your browser:<br/><span style="word-break:break-all;">${inviteUrl}</span></p>
-                <p>You can also use the following token to accept your invitation:</p>
-                <p style="font-size:18px; font-weight:bold; background:#f4f4f4; padding:12px; border-radius:6px; display:inline-block;">${token}</p>
-                <br/><p>If you didn't expect this invitation, you can safely ignore this email.</p>
-            `,
+            subject: `邀请你加入「${payload.orgName}」`,
+            html: [
+                this.noticeTitle('组织邀请'),
+                this.greeting(),
+                this.paragraph(
+                    `<strong>${inviterName}</strong> 邀请你加入 <strong>${orgName}</strong>，接受后即可参与该组织的项目与协作。`,
+                ),
+                this.button('接受邀请', inviteUrl),
+                this.divider(),
+                this.paragraph(
+                    '如果按钮无法点击，请复制以下链接到浏览器打开：',
+                ),
+                this.plainBlock(inviteUrl),
+                this.paragraph('也可以使用以下邀请码接受邀请：'),
+                this.plainBlock(token),
+                this.noticeHint(
+                    `本邀请由 ${siteName} 发出。如果这不是你预期的邀请，忽略这封邮件即可。`,
+                ),
+            ].join(''),
         };
     }
 
-    private buildWelcomeEmail(payload: EmailPayloadMap[EmailTemplate.WELCOME]) {
+    private buildWelcomeEmail(
+        payload: EmailPayloadMap[EmailTemplate.WELCOME],
+        siteName: string,
+    ) {
         const name = escapeHtml(payload.name);
         const orgName = escapeHtml(payload.orgName);
         return {
-            subject: `Welcome to ${payload.orgName}!`,
-            html: `
-                <h2>Welcome, ${name}!</h2>
-                <p>You've successfully joined <strong>${orgName}</strong> on Beacon.</p>
-                <p>You can now collaborate with your team, manage projects, and track tasks.</p>
-            `,
+            subject: `欢迎加入「${payload.orgName}」`,
+            html: [
+                this.noticeTitle('欢迎加入'),
+                this.greeting(name),
+                this.paragraph(
+                    `你已成功加入 <strong>${orgName}</strong>，现在可以协同管理项目、跟踪任务进度，并查看监控与告警。`,
+                ),
+                this.noticeHint(
+                    `如需帮助，可随时联系 ${siteName} 的支持团队。`,
+                ),
+            ].join(''),
         };
     }
 
@@ -399,14 +539,24 @@ export class EmailService {
         const name = escapeHtml(payload.name);
         const resetUrl = escapeHtml(payload.resetUrl);
         return {
-            subject: 'Reset your password',
-            html: `
-                <h2>Password Reset Request</h2>
-                <p>Hi ${name},</p>
-                <p>We received a request to reset your password. Click the link below to set a new password:</p>
-                <p><a href="${resetUrl}" style="background:#4F46E5; color:#fff; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block;">Reset Password</a></p>
-                <p>If you didn't request this, you can safely ignore this email.</p>
-            `,
+            subject: '重置密码',
+            html: [
+                this.noticeTitle('重置密码'),
+                this.greeting(name),
+                this.paragraph(
+                    '我们收到了重置账号密码的请求。点击下方按钮即可设置新密码：',
+                ),
+                this.button('重置密码', resetUrl),
+                this.divider(),
+                this.paragraph(
+                    '如果按钮无法点击，请复制以下链接到浏览器打开：',
+                ),
+                this.plainBlock(resetUrl),
+                this.noticeHint(
+                    '如果不是你本人操作，忽略这封邮件即可，账号密码不会发生变更。',
+                    'danger',
+                ),
+            ].join(''),
         };
     }
 
@@ -417,13 +567,18 @@ export class EmailService {
         const taskTitle = escapeHtml(payload.taskTitle);
         const taskUrl = escapeHtml(payload.taskUrl);
         return {
-            subject: `Task assigned: ${payload.taskTitle}`,
-            html: `
-                <h2>New Task Assigned</h2>
-                <p>Hi ${name},</p>
-                <p>You've been assigned a new task: <strong>${taskTitle}</strong></p>
-                <p><a href="${taskUrl}" style="background:#4F46E5; color:#fff; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block;">View Task</a></p>
-            `,
+            subject: `新任务指派：${payload.taskTitle}`,
+            html: [
+                this.noticeTitle('新任务指派'),
+                this.greeting(name),
+                this.paragraph(
+                    `有一项新任务已指派给您：<strong>${taskTitle}</strong>。`,
+                ),
+                this.button('查看任务详情', taskUrl),
+                this.noticeHint(
+                    '请登录工作台查看任务要求与截止时间，并及时更新任务状态。',
+                ),
+            ].join(''),
         };
     }
 
@@ -435,13 +590,20 @@ export class EmailService {
         const projectKey = escapeHtml(payload.projectKey);
         const dueDate = escapeHtml(payload.dueDate);
         return {
-            subject: `Task due soon: ${payload.taskTitle}`,
-            html: `
-                <h2>Task Due Soon</h2>
-                <p>Hi ${name},</p>
-                <p>Your task <strong>${projectKey}-${payload.taskNumber} ${taskTitle}</strong> is due on <strong>${dueDate}</strong>.</p>
-                <p>Please make sure to complete it before the deadline.</p>
-            `,
+            subject: `任务即将到期：${payload.taskTitle}`,
+            html: [
+                this.noticeTitle('任务即将到期'),
+                this.greeting(name),
+                this.paragraph('您有一项任务即将到达截止时间，请及时处理。'),
+                this.dataTable([
+                    ['任务编号', `${projectKey}-${payload.taskNumber}`],
+                    ['任务名称', taskTitle],
+                    ['到期时间', dueDate],
+                ]),
+                this.noticeHint(
+                    '如无法按期完成，建议提前与项目负责人沟通并调整排期。',
+                ),
+            ].join(''),
         };
     }
 
@@ -453,32 +615,45 @@ export class EmailService {
         const projectKey = escapeHtml(payload.projectKey);
         const dueDate = escapeHtml(payload.dueDate);
         return {
-            subject: `Task overdue: ${payload.taskTitle}`,
-            html: `
-                <h2>Task Overdue</h2>
-                <p>Hi ${name},</p>
-                <p>Your task <strong>${projectKey}-${payload.taskNumber} ${taskTitle}</strong> was due on <strong>${dueDate}</strong> and is now overdue.</p>
-                <p>Please complete it as soon as possible.</p>
-            `,
+            subject: `任务已逾期：${payload.taskTitle}`,
+            html: [
+                this.noticeTitle('任务已逾期'),
+                this.greeting(name),
+                this.paragraph(
+                    '您有一项任务已超过截止时间仍未完成，请尽快处理。',
+                ),
+                this.dataTable([
+                    ['任务编号', `${projectKey}-${payload.taskNumber}`],
+                    ['任务名称', taskTitle],
+                    ['到期时间', dueDate],
+                ]),
+                this.noticeHint(
+                    '若任务已完成，请及时在系统中更新状态，以免影响项目进度统计。',
+                    'danger',
+                ),
+            ].join(''),
         };
     }
 
     private buildEmailVerificationEmail(
         payload: EmailPayloadMap[EmailTemplate.EMAIL_VERIFICATION],
+        siteName: string,
     ) {
         const name = escapeHtml(payload.name);
         const code = escapeHtml(payload.code);
         return {
-            subject: 'Verify your email address',
-            html: `
-                <h2>Email Verification</h2>
-                <p>Hi ${name},</p>
-                <p>Thank you for signing up for Beacon. Use the following code to verify your email address:</p>
-                <div style="text-align: center; margin: 24px 0;">
-                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; background: #f4f4f5; padding: 16px 32px; border-radius: 8px; display: inline-block; font-family: monospace;">${code}</span>
-                </div>
-                <p style="color: #6b7280; font-size: 14px;">This code expires in ${payload.expiresInMinutes} minutes. If you didn't create an account, you can safely ignore this email.</p>
-            `,
+            subject: '邮箱验证码',
+            html: [
+                this.noticeTitle('邮箱验证'),
+                this.greeting(name),
+                this.paragraph(
+                    `感谢注册 ${siteName}。请使用以下验证码完成邮箱验证：`,
+                ),
+                this.codeBlock(code),
+                this.noticeHint(
+                    `验证码 ${payload.expiresInMinutes} 分钟内有效。如果不是你本人操作，忽略这封邮件即可。`,
+                ),
+            ].join(''),
         };
     }
 
@@ -488,16 +663,19 @@ export class EmailService {
         const name = escapeHtml(payload.name);
         const code = escapeHtml(payload.code);
         return {
-            subject: 'Reset your password',
-            html: `
-                <h2>Password Reset</h2>
-                <p>Hi ${name},</p>
-                <p>We received a request to reset your password. Use the following code to proceed:</p>
-                <div style="text-align: center; margin: 24px 0;">
-                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; background: #f4f4f5; padding: 16px 32px; border-radius: 8px; display: inline-block; font-family: monospace;">${code}</span>
-                </div>
-                <p style="color: #6b7280; font-size: 14px;">This code expires in ${payload.expiresInMinutes} minutes. If you didn't request a password reset, you can safely ignore this email.</p>
-            `,
+            subject: '密码重置验证码',
+            html: [
+                this.noticeTitle('重置密码'),
+                this.greeting(name),
+                this.paragraph(
+                    '我们收到了重置账号密码的请求。请使用以下验证码继续操作：',
+                ),
+                this.codeBlock(code),
+                this.noticeHint(
+                    `验证码 ${payload.expiresInMinutes} 分钟内有效。如果不是你本人操作，忽略这封邮件即可，账号密码不会发生变更。`,
+                    'danger',
+                ),
+            ].join(''),
         };
     }
 
@@ -512,17 +690,23 @@ export class EmailService {
         const latency = escapeHtml(payload.latency);
         const checkedAt = escapeHtml(payload.checkedAt);
         return {
-            subject: `[${payload.status}] ${payload.monitorName} is not healthy`,
-            html: `
-                <h2>Monitor alert</h2>
-                <p><strong>${monitorName}</strong> reported <strong>${status}</strong> (was ${previousStatus}).</p>
-                <table style="width:100%; border-collapse:collapse; font-size:14px;">
-                    <tr><td style="padding:6px 0; color:#6b7280;">Target</td><td style="padding:6px 0;">${target}</td></tr>
-                    <tr><td style="padding:6px 0; color:#6b7280;">Latency</td><td style="padding:6px 0;">${latency}</td></tr>
-                    <tr><td style="padding:6px 0; color:#6b7280;">Error</td><td style="padding:6px 0;">${error}</td></tr>
-                    <tr><td style="padding:6px 0; color:#6b7280;">Checked at</td><td style="padding:6px 0;">${checkedAt}</td></tr>
-                </table>
-            `,
+            subject: `【${payload.status}】${payload.monitorName} 监控告警`,
+            html: [
+                this.noticeTitle('监控告警'),
+                this.greeting(),
+                this.paragraph(
+                    `监控项 <strong>${monitorName}</strong> 状态异常（当前 <strong>${status}</strong>，此前为 ${previousStatus}）。`,
+                ),
+                this.dataTable([
+                    ['监控目标', target],
+                    ['响应耗时', latency],
+                    ['错误信息', error],
+                    ['检测时间', checkedAt],
+                ]),
+                this.noticeHint(
+                    '请尽快排查服务可用性；恢复正常后系统会再次发送通知。',
+                ),
+            ].join(''),
         };
     }
 
@@ -536,16 +720,22 @@ export class EmailService {
         const latency = escapeHtml(payload.latency);
         const checkedAt = escapeHtml(payload.checkedAt);
         return {
-            subject: `[RECOVERED] ${payload.monitorName} is back up`,
-            html: `
-                <h2>Monitor recovered</h2>
-                <p><strong>${monitorName}</strong> is healthy again (<strong>${status}</strong>, was ${previousStatus}).</p>
-                <table style="width:100%; border-collapse:collapse; font-size:14px;">
-                    <tr><td style="padding:6px 0; color:#6b7280;">Target</td><td style="padding:6px 0;">${target}</td></tr>
-                    <tr><td style="padding:6px 0; color:#6b7280;">Latency</td><td style="padding:6px 0;">${latency}</td></tr>
-                    <tr><td style="padding:6px 0; color:#6b7280;">Checked at</td><td style="padding:6px 0;">${checkedAt}</td></tr>
-                </table>
-            `,
+            subject: `【恢复】${payload.monitorName} 已恢复正常`,
+            html: [
+                this.noticeTitle('服务已恢复'),
+                this.greeting(),
+                this.paragraph(
+                    `监控项 <strong>${monitorName}</strong> 已恢复正常（当前 <strong>${status}</strong>，此前为 ${previousStatus}）。`,
+                ),
+                this.dataTable([
+                    ['监控目标', target],
+                    ['响应耗时', latency],
+                    ['检测时间', checkedAt],
+                ]),
+                this.noticeHint(
+                    '本条为恢复通知，如仍有异常请复核监控配置与目标服务。',
+                ),
+            ].join(''),
         };
     }
 
@@ -555,14 +745,19 @@ export class EmailService {
         const name = escapeHtml(payload.name);
         const changedAt = escapeHtml(payload.changedAt);
         return {
-            subject: 'Two-factor authentication enabled',
-            html: `
-                <h2>Two-factor authentication enabled</h2>
-                <p>Hi ${name},</p>
-                <p>Two-factor authentication was just <strong>enabled</strong> on your Beacon account.</p>
-                <p style="color:#6b7280; font-size:14px;">Time: ${changedAt}</p>
-                <p style="color:#dc2626; font-size:14px;">If this wasn't you, disable 2FA immediately and reset your password.</p>
-            `,
+            subject: '两步验证已开启',
+            html: [
+                this.noticeTitle('两步验证已开启'),
+                this.greeting(name),
+                this.paragraph(
+                    '您的账号已成功开启两步验证，登录时将需要额外的动态验证码。',
+                ),
+                this.dataTable([['操作时间', changedAt]]),
+                this.noticeHint(
+                    '如果这不是您本人的操作，请立即重置密码并联系管理员。',
+                    'danger',
+                ),
+            ].join(''),
         };
     }
 
@@ -572,14 +767,19 @@ export class EmailService {
         const name = escapeHtml(payload.name);
         const changedAt = escapeHtml(payload.changedAt);
         return {
-            subject: 'Two-factor authentication disabled',
-            html: `
-                <h2>Two-factor authentication disabled</h2>
-                <p>Hi ${name},</p>
-                <p>Two-factor authentication was just <strong>disabled</strong> on your Beacon account.</p>
-                <p style="color:#6b7280; font-size:14px;">Time: ${changedAt}</p>
-                <p style="color:#dc2626; font-size:14px;">If this wasn't you, re-enable 2FA and reset your password immediately.</p>
-            `,
+            subject: '两步验证已关闭',
+            html: [
+                this.noticeTitle('两步验证已关闭'),
+                this.greeting(name),
+                this.paragraph(
+                    '您的账号已关闭两步验证，账号安全等级将随之降低。',
+                ),
+                this.dataTable([['操作时间', changedAt]]),
+                this.noticeHint(
+                    '如果这不是您本人的操作，请立即重置密码并重新开启两步验证。',
+                    'danger',
+                ),
+            ].join(''),
         };
     }
 
@@ -590,17 +790,22 @@ export class EmailService {
         const usedAt = escapeHtml(payload.usedAt);
         const ipAddress = escapeHtml(payload.ipAddress);
         return {
-            subject: 'A two-factor recovery code was used',
-            html: `
-                <h2>Recovery code used</h2>
-                <p>Hi ${name},</p>
-                <p>One of your two-factor recovery codes was just used to sign in. Please confirm this was you.</p>
-                <table style="width:100%; border-collapse:collapse; font-size:14px;">
-                    <tr><td style="padding:6px 0; color:#6b7280;">Time</td><td style="padding:6px 0;">${usedAt}</td></tr>
-                    <tr><td style="padding:6px 0; color:#6b7280;">IP address</td><td style="padding:6px 0;">${ipAddress}</td></tr>
-                </table>
-                <p style="color:#dc2626; font-size:14px;">If this wasn't you, reset your password and regenerate your recovery codes immediately.</p>
-            `,
+            subject: '两步验证恢复码已被使用',
+            html: [
+                this.noticeTitle('恢复码已被使用'),
+                this.greeting(name),
+                this.paragraph(
+                    '您的账号刚刚使用了一次两步验证恢复码登录，请确认是否为本人操作。',
+                ),
+                this.dataTable([
+                    ['使用时间', usedAt],
+                    ['IP 地址', ipAddress],
+                ]),
+                this.noticeHint(
+                    '如果这不是您本人的操作，请立即重置密码并重新生成恢复码。',
+                    'danger',
+                ),
+            ].join(''),
         };
     }
 
@@ -609,18 +814,20 @@ export class EmailService {
     ) {
         const name = escapeHtml(payload.name);
         const subject = escapeHtml(payload.subject);
-        const body = escapeHtml(payload.body).replace(/\n/g, '<br/>');
+        const body = escapeHtml(payload.body).replace(/\n/g, '<br />');
         const ticketUrl = escapeHtml(payload.ticketUrl);
         return {
-            subject: `New reply on ticket #${payload.ticketNumber}`,
-            html: `
-                <h2>New reply on your ticket</h2>
-                <p>Hi ${name},</p>
-                <p>The support team replied to <strong>#${payload.ticketNumber} ${subject}</strong>:</p>
-                <blockquote style="margin:16px 0; padding:12px 16px; background:#f9fafb; border-left:3px solid #4F46E5; color:#374151;">${body}</blockquote>
-                <p><a href="${ticketUrl}" style="background:#4F46E5; color:#fff; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block;">View Ticket</a></p>
-                <p style="color:#6b7280; font-size:14px;">Reply from the ticket page if you still need help.</p>
-            `,
+            subject: `工单 #${payload.ticketNumber} 有新回复`,
+            html: [
+                this.noticeTitle('工单有新回复'),
+                this.greeting(name),
+                this.paragraph(
+                    `支持团队回复了您的工单 <strong>#${payload.ticketNumber} ${subject}</strong>：`,
+                ),
+                this.quote(body),
+                this.button('查看工单', ticketUrl),
+                this.noticeHint('如需继续沟通，请直接在工单页面回复。'),
+            ].join(''),
         };
     }
 
@@ -630,16 +837,31 @@ export class EmailService {
         const name = escapeHtml(payload.name);
         const subject = escapeHtml(payload.subject);
         const status = escapeHtml(payload.status);
+        const statusText =
+            payload.status === 'RESOLVED'
+                ? '已解决'
+                : payload.status === 'CLOSED'
+                  ? '已关闭'
+                  : status;
         const ticketUrl = escapeHtml(payload.ticketUrl);
         return {
-            subject: `Ticket #${payload.ticketNumber} is now ${payload.status}`,
-            html: `
-                <h2>Ticket ${status}</h2>
-                <p>Hi ${name},</p>
-                <p>Your ticket <strong>#${payload.ticketNumber} ${subject}</strong> was marked as <strong>${status}</strong>.</p>
-                <p><a href="${ticketUrl}" style="background:#4F46E5; color:#fff; padding:10px 20px; text-decoration:none; border-radius:6px; display:inline-block;">View Ticket</a></p>
-                <p style="color:#6b7280; font-size:14px;">If you need more help, reply on the ticket and it will be reopened.</p>
-            `,
+            subject: `工单 #${payload.ticketNumber} ${statusText}`,
+            html: [
+                this.noticeTitle('工单状态更新'),
+                this.greeting(name),
+                this.paragraph(
+                    `您的工单状态已变更为 <strong>${statusText}</strong>。`,
+                ),
+                this.dataTable([
+                    ['工单编号', `<strong>#${payload.ticketNumber}</strong>`],
+                    ['工单标题', subject],
+                    ['当前状态', statusText],
+                ]),
+                this.button('查看工单', ticketUrl),
+                this.noticeHint(
+                    '如果问题仍未解决，可在工单中继续回复，工单将重新打开。',
+                ),
+            ].join(''),
         };
     }
 }

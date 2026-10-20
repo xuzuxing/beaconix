@@ -14,6 +14,6 @@ export const resendConfig = registerAs('resend', (): ResendConfig => {
             'RESEND_FROM_EMAIL',
             'noreply@mail.khaledsaeed.tech',
         ),
-        fromName: optionalEnv('RESEND_FROM_NAME', 'Beacon'),
+        fromName: optionalEnv('RESEND_FROM_NAME', 'Beaconix'),
     };
 });

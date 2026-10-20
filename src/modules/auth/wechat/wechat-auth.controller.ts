@@ -53,7 +53,7 @@ export class WechatAuthController {
     @ApiOperation({
         summary: 'WeChat website QR scan login',
         description:
-            'Exchanges the `code` WeChat appended to the website-app redirect URL after a successful scan, then returns Beacon auth tokens. New WeChat users are provisioned automatically with a starter organization.',
+            'Exchanges the `code` WeChat appended to the website-app redirect URL after a successful scan, then returns Beaconix auth tokens. New WeChat users are provisioned automatically with a starter organization.',
     })
     @ApiBody({ type: WechatWebLoginDto })
     @ApiOkResponse({
@@ -101,7 +101,7 @@ export class WechatAuthController {
     @ApiOperation({
         summary: 'WeChat mini program login (code2Session)',
         description:
-            'Exchanges the `wx.login()` code via WeChat `jscode2session`, then returns Beacon auth tokens. New WeChat users are provisioned automatically with a starter organization.',
+            'Exchanges the `wx.login()` code via WeChat `jscode2session`, then returns Beaconix auth tokens. New WeChat users are provisioned automatically with a starter organization.',
     })
     @ApiBody({ type: WechatMiniProgramLoginDto })
     @ApiOkResponse({

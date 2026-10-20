@@ -537,7 +537,7 @@ describe('NotifierService', () => {
             expect(senders.feishu.send).toHaveBeenCalledWith(
                 channelRow,
                 expect.objectContaining({
-                    monitorName: 'Beacon test notification',
+                    monitorName: 'Beaconix test notification',
                     event: 'DOWN',
                 }),
             );

@@ -7,7 +7,7 @@ export class TwoFactorSetupEntity {
 
     @ApiProperty({
         example:
-            'otpauth://totp/Beacon:john@example.com?secret=...&issuer=Beacon',
+            'otpauth://totp/Beaconix:john@example.com?secret=...&issuer=Beaconix',
     })
     otpauthUrl: string;
 

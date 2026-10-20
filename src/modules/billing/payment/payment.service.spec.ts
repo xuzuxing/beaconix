@@ -74,7 +74,7 @@ describe('PaymentService', () => {
                 outTradeNo: 'BWABC123',
                 totalFee: 2900,
                 payerId: 'o_xxx',
-                body: 'Beacon plan order BWABC123',
+                body: 'Beaconix plan order BWABC123',
             });
             expect(result).toEqual(payParams);
             expect(prisma.payment.upsert).toHaveBeenCalledWith(

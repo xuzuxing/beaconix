@@ -8,14 +8,14 @@ import {
 } from 'class-validator';
 
 export class CreateProjectDto {
-    @ApiProperty({ example: 'Beacon Backend', description: 'Project name' })
+    @ApiProperty({ example: 'Beaconix Backend', description: 'Project name' })
     @IsString()
     @MinLength(1)
     @MaxLength(100)
     name: string;
 
     @ApiPropertyOptional({
-        example: 'Backend API for the Beacon platform',
+        example: 'Backend API for the Beaconix platform',
         description: 'Project description',
     })
     @IsOptional()

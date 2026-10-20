@@ -53,6 +53,6 @@ describe('resendConfig', () => {
         const config = loadConfig();
 
         expect(config.fromEmail).toBe('noreply@mail.khaledsaeed.tech');
-        expect(config.fromName).toBe('Beacon');
+        expect(config.fromName).toBe('Beaconix');
     });
 });

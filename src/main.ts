@@ -84,7 +84,7 @@ async function bootstrap() {
 
     // Swagger
     const swaggerConfig = new DocumentBuilder()
-        .setTitle('Beacon API')
+        .setTitle('Beaconix API')
         .setDescription('Multi-tenant project management platform API')
         .setVersion('1.0')
         .addBearerAuth(

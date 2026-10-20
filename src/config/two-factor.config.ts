@@ -28,7 +28,7 @@ function optionalInt(key: string, fallback: number): number {
  * rather than silently falling back to storing TOTP secrets in plaintext.
  */
 export const twoFactorConfig = registerAs('twoFactor', (): TwoFactorConfig => ({
-    issuer: optionalEnv('TWO_FACTOR_ISSUER', 'Beacon'),
+    issuer: optionalEnv('TWO_FACTOR_ISSUER', 'Beaconix'),
     secretKey: requireEnv('TWO_FACTOR_SECRET_KEY'),
     challengeTtlSeconds: optionalInt('TWO_FACTOR_CHALLENGE_TTL_SECONDS', 300),
     setupTtlSeconds: optionalInt('TWO_FACTOR_SETUP_TTL_SECONDS', 600),

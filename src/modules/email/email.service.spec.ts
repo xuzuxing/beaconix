@@ -118,7 +118,7 @@ describe('EmailService', () => {
 
             expect(output).toContain('[DEV]');
             expect(output).toContain(payload.to);
-            expect(output).toContain('Verify your email address');
+            expect(output).toContain('邮箱验证码');
             expect(output).toContain(payload.code);
         });
     });
@@ -137,7 +137,7 @@ describe('EmailService', () => {
                 expect.objectContaining({
                     from: 'Beacon <noreply@test.dev>',
                     to: payload.to,
-                    subject: 'Verify your email address',
+                    subject: '邮箱验证码',
                 }),
             );
         });
@@ -162,6 +162,43 @@ describe('EmailService', () => {
             expect(message.from).toBe('Acme Monitor <noreply@test.dev>');
             expect(message.html).toContain('Acme Monitor');
             expect(message.html).toContain('mailto:ops@acme.test');
+        });
+
+        it('inlines the built-in logo when no logo URL is configured', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            const { service, emails } = createService();
+
+            await service.send(EmailTemplate.NOTIFICATION, {
+                to: 'zuxing@example.com',
+                title: '项目有新的动态',
+                body: '张三 评论了任务 BEA-1',
+            });
+
+            const { html } = emails.send.mock.calls[0][0] as { html: string };
+            expect(html).toContain('src="data:image/png;base64,');
+        });
+
+        it('uses the configured logo URL instead of the inlined one', async () => {
+            jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                () => undefined,
+            );
+            const { service, emails } = createService({
+                settings: {
+                    'system.logoUrl': 'https://cdn.example.test/logo.png',
+                },
+            });
+
+            await service.send(EmailTemplate.NOTIFICATION, {
+                to: 'zuxing@example.com',
+                title: '项目有新的动态',
+                body: '张三 评论了任务 BEA-1',
+            });
+
+            const { html } = emails.send.mock.calls[0][0] as { html: string };
+            expect(html).toContain('src="https://cdn.example.test/logo.png"');
+            expect(html).not.toContain('data:image/png;base64,');
         });
 
         it('links the invitation email to the web client with its token', async () => {
@@ -259,7 +296,7 @@ describe('EmailService', () => {
                 expect.objectContaining({
                     from: 'Beacon <bot@example.com>',
                     to: payload.to,
-                    subject: 'Verify your email address',
+                    subject: '邮箱验证码',
                 }),
             );
             expect(close).toHaveBeenCalled();

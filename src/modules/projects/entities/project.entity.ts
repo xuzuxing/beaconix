@@ -5,10 +5,10 @@ export class ProjectEntity {
     @ApiProperty({ example: 'uuid-here' })
     id: string;
 
-    @ApiProperty({ example: 'Beacon Backend' })
+    @ApiProperty({ example: 'Beaconix Backend' })
     name: string;
 
-    @ApiPropertyOptional({ example: 'Backend API for Beacon' })
+    @ApiPropertyOptional({ example: 'Backend API for Beaconix' })
     description: string | null;
 
     @ApiProperty({ enum: ['ACTIVE', 'ARCHIVED'], example: 'ACTIVE' })

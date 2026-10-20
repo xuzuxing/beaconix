@@ -13,7 +13,7 @@ export type InvitationAccessMode = 'ALL_PROJECTS' | 'SELECTED_PROJECTS';
  * inviter's display name.
  */
 export class InvitationPreviewEntity {
-    @ApiProperty({ example: 'Beacon' })
+    @ApiProperty({ example: 'Beaconix' })
     organizationName: string;
 
     @ApiProperty({ example: 'beaconix' })

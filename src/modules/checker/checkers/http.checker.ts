@@ -135,7 +135,7 @@ export class HttpChecker implements CheckerStrategy {
                 redirect: 'follow',
                 signal: controller.signal,
                 headers: {
-                    'user-agent': 'Beacon-Monitor/1.0',
+                    'user-agent': 'Beaconix-Monitor/1.0',
                     accept: '*/*',
                 },
             });

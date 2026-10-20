@@ -304,7 +304,7 @@ describe('SettingsService', () => {
             'system.siteName',
             'system.supportEmail',
         ]);
-        expect(snapshot['system.siteName']).toBe('Beacon');
+        expect(snapshot['system.siteName']).toBe('Beaconix');
         expect(snapshot['system.maintenanceMode']).toBe(false);
     });
 
