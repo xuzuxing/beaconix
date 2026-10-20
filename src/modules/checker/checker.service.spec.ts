@@ -1,6 +1,7 @@
 import { mockProjectAccess } from '../../common/authorization/access-test.fixture';
 import { NotFoundException } from '@nestjs/common';
 import type { Queue } from 'bullmq';
+import { Prisma } from '../../generated/prisma/client';
 import {
     buildRoundId,
     CheckerService,
@@ -90,6 +91,18 @@ function createService() {
         monitor: { findFirst: jest.fn(), findMany: jest.fn() },
         checkLog: {
             create: jest.fn(({ data }: { data: Record<string, unknown> }) => {
+                // Mirrors the `(monitorId, roundId)` unique index.
+                const taken = [...rounds.values()].some(
+                    (existing) =>
+                        existing.monitorId === data.monitorId &&
+                        existing.roundId === data.roundId,
+                );
+                if (taken) {
+                    throw new Prisma.PrismaClientKnownRequestError('unique', {
+                        code: 'P2002',
+                        clientVersion: 'test',
+                    });
+                }
                 const row = {
                     observationId: null,
                     evaluated: true,
@@ -472,6 +485,47 @@ describe('CheckerService', () => {
                 },
             });
             expect(execution.applied).toBe(true);
+        });
+
+        it('does not let a system probe rescue a protected batch', async () => {
+            const {
+                service,
+                prisma,
+                stateService,
+                httpChecker,
+                systemProbeScheduler,
+            } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            systemProbeScheduler.getAssignedProbes.mockResolvedValue(['sys-1']);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('sys-1', true),
+            ]);
+            httpChecker.check.mockResolvedValue({
+                ...checkResult,
+                success: false,
+                failureKind: 'ASSERTION',
+                error: 'HTTP keyword assertion failed',
+            });
+
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+
+            expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+            expect(
+                systemProbeScheduler.getAssignedProbes,
+            ).not.toHaveBeenCalled();
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: false,
+                failureKind: 'ASSERTION',
+                rescuedByProbe: false,
+                aggregation: {
+                    protected: true,
+                    protectedReason: 'ASSERTION',
+                    decision: 'FALLBACK_LOCAL',
+                },
+            });
         });
 
         it('keeps the local verdict when no tenant probe is bound', async () => {
@@ -861,6 +915,50 @@ describe('CheckerService', () => {
             );
             expect(sunkRoundIds).toContain('monitor-1:1699999999000');
             expect(sunkRoundIds).toHaveLength(2);
+        });
+
+        it('keeps the previous batch open until its deadline', async () => {
+            const { service, prisma, stateService, rounds } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.findMany.mockResolvedValue([]);
+            seedRound(rounds, {
+                roundId: 'monitor-1:running',
+                checkedAt: new Date(Date.now() - 5_000),
+            });
+
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+
+            // A manual check must not decide the previous batch on partial
+            // evidence; its deadline job still owns it.
+            const settledRoundIds = stateService.settle.mock.calls.map(
+                (call) => call[1],
+            );
+            expect(settledRoundIds).not.toContain('monitor-1:running');
+            expect(settledRoundIds).toHaveLength(1);
+        });
+
+        it('re-anchors the batch when its round id is taken', async () => {
+            const { service, prisma, stateService } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.findMany.mockResolvedValue([]);
+            prisma.checkLog.create.mockImplementationOnce(() => {
+                throw new Prisma.PrismaClientKnownRequestError('unique', {
+                    code: 'P2002',
+                    clientVersion: 'test',
+                });
+            });
+
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+
+            // The run is not dropped: the second anchor carries a suffix.
+            expect(stateService.settle).toHaveBeenCalledTimes(1);
+            expect(stateService.settle.mock.calls[0][1]).toContain('~');
         });
     });
 

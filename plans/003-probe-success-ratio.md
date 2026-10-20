@@ -974,8 +974,9 @@ git status --short
    `localSuccess=true, success=false, failureKind='AGGREGATE'`。
 4. **`beginRound` 与 `CheckLog.meta` 额外保存本地证据**：
    `localSsl`、`localFailureReason`、`localBodyContains`（以及协议的 meta 的 `ruleEvidence`）。
-   没有这三项，结算时就无法恢复 SSL 证据、CONNECTIVITY 证据与 `bodyContains` 规则上下文；
-   `StateService.settle` 会把 `aggregation.settledAt` 覆盖为真实结算时刻，保证时 `appliedAt` 一致。
+   没有这三项，结算时就无法恢复 SSL 证据、CONNECTIVITY 证据与 `bodyContains` 规则上下文。
+   `aggregation.settledAt` 由 `CheckerService` 在结算前生成，`StateService.settle`
+   原样写入（与本进程内的 `appliedAt` 相差毫秒级），不做二次覆盖。
 5. **`CheckerService.settleRound` 返回 `{ outcome, execution }`**（第 8.4 节的 `SettleOutcome` 扩展），
    让本地执行与探针回调共用同一入口时仍能返回 `CheckExecution`。
 6. **未结算批次行仍计入 `monitor-insights` 与 `getSummary` 的窗口统计**（第 9 节只要求
@@ -983,6 +984,19 @@ git status --short
    在最坏情况下滞后一个 interval 才与最终判定一致；`rescued` 统计不受否决样本影响（否决时
    `rescuedByProbe=false`）。这是 8.5/12.1 里「状态与告警滞后一个 interval」的同一代价；
    不改动 `monitoring` 模块。
+7. **`ingestProbeReportForMonitor` 不再做「近期回调过滤」**（第 11 节要求保留）。
+   批次级幂等（`CheckLog.appliedAt` + 唯一索引）已覆盖「多个回调只结算一次」，
+   `probeReportDedupWindowMs` 现在只用于 `roundId` 归属窗口
+   （`roundAttributionWindowMs = interval*1000 + fold`）。
+8. **`roundId` 在毫秒碰撞时追加后缀**（第 6.1 节只给了
+   `${monitorId}:${epochMs}`）。同一 monitor 的两轮检查可能落在同一毫秒，
+   唯一索引会拒绝第二轮，因此 `beginRound` 在同一批次 id 被占用时改用
+   `${roundId}~${randomUUID()}` 重新锚定（最多 3 次），不再静默丢弃该轮检查。
+   `roundId` 只被当作不透明键使用（`probes` 归属、样本过滤、结算入口），不解析其内容。
+9. **只有已到期的旧批次才在 `beginRound` 里强制结算**（第 6.3 节假设
+   「下一轮本地检查开始时上一批必然已到期」）。手动「立即检测」不受 `interval`
+   约束，因此 `settleStaleRounds` 增加 `now - checkedAt >= interval` 判定：
+   未到期的旧批次留给截止任务，避免按部分证据把它判成失败。
 ### 18.2 验证记录
 
 - `pnpm prisma:generate`、`pnpm build`、`pnpm lint`、`git diff --check`：退出 0；
@@ -1016,3 +1030,35 @@ git status --short
 - 本文件在 2026-10-18 的写入过程中损坏（979 处字符的第三字节被替换为 `?`，另有少量换行丢失），
   已按上下文逐处修复并校验为合法 UTF-8（30 组代码围栏闭合、无替换字符残留）。
   个别标点与空格是依据上下文重建的，与原稿措辞可能略有差异。
+
+## 19. 复审与缺陷修复（2026-10-20）
+
+对 18 节落地结果做复核后修正了三处偏差，其余实现与第 3、8、9 节一致。
+
+### 19.1 已修复
+
+1. **受保护批次曾被系统探针救回（回归旧行为）**。`settleRound` 的兜底分支只判断
+   `evaluation === null && effectiveProbeCount === 0`，没有排除 `guards.protected`；
+   受保护批次不采样租户探针，`effectiveProbeCount` 恒为 0，于是 `ASSERTION` /
+   `evaluated=false` / 不兼容协议的本地失败仍会查询系统探针并可能被翻成成功
+   （实测 `decision: 'RESCUED'`、`success: true`）。与第 8.2 节「不等探针、不查探针」
+   及旧 `evaluateResult` 的保护块都不符。现改为
+   `evaluation === null && effectiveProbeCount === 0 && !guards.protected`。
+2. **同一毫秒的两轮检查会丢掉第二轮**（见 18.1 偏差 8）。`beginRound` 现在在同一
+   `roundId` 被唯一索引占用时追加 `~<uuid>` 重新锚定（最多 3 次），`execute` 用返回的
+   实际批次 id 结算。`checker.service.spec.ts` 的 console mock 也补上了唯一约束模拟，
+   原先因此偶发失败的 `routes DNS and PING monitors through the registry without
+   probe aggregation` 现在稳定通过。
+3. **手动检测会提前结算未到期的上一批**（见 18.1 偏差 9）。`settleStaleRounds` 只在
+   `now - checkedAt >= interval` 时强制结算，未到期的批次交给 `monitor-settle` 截止任务。
+
+### 19.2 验证记录
+
+- 新增用例：`does not let a system probe rescue a protected batch`、
+  `keeps the previous batch open until its deadline`、
+  `re-anchors the batch when its round id is taken`（`checker.service.spec.ts`）。
+- `npx jest --runInBand`：147 suites / 1972 tests 全部通过（修复前 1967 tests 中 1 条失败）。
+- `npx tsc --noEmit`：退出 0（此前记录的 `test/project-access/fixtures.ts` 两条既有错误
+  当前已不存在）。
+- 未复跑：`pnpm test:monitor:postgres`（需专用一次性库 `MONITOR_TEST_DATABASE_URL`）、
+  `pnpm lint`（会 `--fix` 改动工作区）、`pnpm build`。仍未部署。

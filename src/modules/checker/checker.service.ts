@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
     BadRequestException,
     Injectable,
@@ -57,6 +58,9 @@ import { monitoringProjection } from '../../common/authorization/monitoring-proj
 const PROBE_RESULT_WINDOW_INTERVALS = 2;
 const PROBE_RESULT_MIN_WINDOW_MS = 2 * 60 * 1000;
 const PROBE_RESULT_MAX_WINDOW_MS = 15 * 60 * 1000;
+
+/** How often a batch id collision is retried before the run is dropped. */
+const ROUND_ANCHOR_ATTEMPTS = 3;
 
 /**
  * How long a probe report stays usable for a batch. It scales with the monitor
@@ -550,9 +554,15 @@ export class CheckerService {
         const fallbackLocal = evaluation === null;
         let systemRescue = false;
 
-        if (evaluation === null && effectiveProbeCount === 0) {
+        if (
+            evaluation === null &&
+            effectiveProbeCount === 0 &&
+            !guards.protected
+        ) {
             // No tenant probe is bound: the legacy system probe rescue still
-            // applies to a failing local check.
+            // applies to a failing local check. A protected batch (assertion,
+            // unevaluated, unsupported protocol, certificate policy) keeps the
+            // local verdict and never consults any probe.
             if (
                 !localVerdict.success &&
                 (await this.systemProbeRescue(monitor, log.checkedAt))
@@ -703,7 +713,7 @@ export class CheckerService {
         localResult: CheckResult;
         guards: AggregationGuards;
         ruleOutcome: RuleOutcome;
-    }): Promise<MonitorStateModel | null> {
+    }): Promise<{ state: MonitorStateModel; roundId: string } | null> {
         const {
             monitor,
             roundId,
@@ -713,9 +723,8 @@ export class CheckerService {
             ruleOutcome,
         } = input;
 
-        // The previous batch is due by now; settle it first so `failCount`
-        // advances in batch order.
-        await this.settleStaleRounds(monitor.id, roundId);
+        // Close any expired batch first so `failCount` advances in batch order.
+        await this.settleStaleRounds(monitor, roundId);
 
         const evaluated = localResult.evaluated !== false;
         const meta = {
@@ -745,90 +754,112 @@ export class CheckerService {
             },
         };
 
-        try {
-            return await this.prisma.$transaction(async (tx) => {
-                await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitor.id} FOR UPDATE`;
-                await tx.checkLog.create({
-                    data: {
-                        monitorId: monitor.id,
-                        monitorRefId: monitor.id,
-                        organizationId: monitor.organizationId,
-                        projectId: monitor.projectId,
-                        monitorType: monitor.type,
-                        configRevision: monitor.configRevision,
-                        serviceVerdict: localResult.serviceVerdict ?? null,
-                        localServiceVerdict: localResult.serviceVerdict ?? null,
-                        sslVerdict: localResult.sslVerdict ?? null,
-                        success: localResult.success,
-                        localSuccess: localResult.success,
-                        rescuedByProbe: false,
-                        latency: localResult.latency,
-                        error: localResult.error,
-                        statusCode: localResult.statusCode ?? null,
-                        ruleMatched: ruleOutcome.ruleMatched,
-                        ruleGroupIds: ruleOutcome.ruleGroupIds,
-                        source: CheckSource.LOCAL,
-                        checkedAt: startedAt,
-                        revision: monitor.revision,
-                        evaluated,
-                        failureKind: localResult.failureKind ?? null,
-                        meta: meta,
-                        roundId,
-                        appliedAt: null,
-                    },
+        for (let attempt = 0; attempt < ROUND_ANCHOR_ATTEMPTS; attempt += 1) {
+            // Two checks of one monitor can start in the same millisecond; the
+            // unique index then rejects the second batch. Suffix that one
+            // instead of dropping the run.
+            const anchoredRoundId =
+                attempt === 0 ? roundId : `${roundId}~${randomUUID()}`;
+
+            try {
+                const state = await this.prisma.$transaction(async (tx) => {
+                    await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitor.id} FOR UPDATE`;
+                    await tx.checkLog.create({
+                        data: {
+                            monitorId: monitor.id,
+                            monitorRefId: monitor.id,
+                            organizationId: monitor.organizationId,
+                            projectId: monitor.projectId,
+                            monitorType: monitor.type,
+                            configRevision: monitor.configRevision,
+                            serviceVerdict: localResult.serviceVerdict ?? null,
+                            localServiceVerdict:
+                                localResult.serviceVerdict ?? null,
+                            sslVerdict: localResult.sslVerdict ?? null,
+                            success: localResult.success,
+                            localSuccess: localResult.success,
+                            rescuedByProbe: false,
+                            latency: localResult.latency,
+                            error: localResult.error,
+                            statusCode: localResult.statusCode ?? null,
+                            ruleMatched: ruleOutcome.ruleMatched,
+                            ruleGroupIds: ruleOutcome.ruleGroupIds,
+                            source: CheckSource.LOCAL,
+                            checkedAt: startedAt,
+                            revision: monitor.revision,
+                            evaluated,
+                            failureKind: localResult.failureKind ?? null,
+                            meta: meta,
+                            roundId: anchoredRoundId,
+                            appliedAt: null,
+                        },
+                    });
+
+                    // Status, failCount, connectivity and availability are written
+                    // by the settlement only: a pending row must not advance them.
+                    return tx.monitorState.upsert({
+                        where: { monitorId: monitor.id },
+                        create: {
+                            monitorId: monitor.id,
+                            lastCheckAt: evaluated ? startedAt : null,
+                            lastLocalCheckAt: startedAt,
+                            executionBlockedReason: evaluated
+                                ? null
+                                : localResult.error,
+                        },
+                        update: {
+                            lastCheckAt: evaluated ? startedAt : undefined,
+                            lastLocalCheckAt: startedAt,
+                            executionBlockedReason: evaluated
+                                ? null
+                                : localResult.error,
+                        },
+                    });
                 });
 
-                // Status, failCount, connectivity and availability are written
-                // by the settlement only: a pending row must not advance them.
-                return tx.monitorState.upsert({
-                    where: { monitorId: monitor.id },
-                    create: {
-                        monitorId: monitor.id,
-                        lastCheckAt: evaluated ? startedAt : null,
-                        lastLocalCheckAt: startedAt,
-                        executionBlockedReason: evaluated
-                            ? null
-                            : localResult.error,
-                    },
-                    update: {
-                        lastCheckAt: evaluated ? startedAt : undefined,
-                        lastLocalCheckAt: startedAt,
-                        executionBlockedReason: evaluated
-                            ? null
-                            : localResult.error,
-                    },
-                });
-            });
-        } catch (caught) {
-            // `(monitorId, roundId)` is unique: a concurrent run anchored the
-            // same batch first.
-            if (
-                caught instanceof Prisma.PrismaClientKnownRequestError &&
-                caught.code === 'P2002'
-            ) {
-                return null;
+                return { state, roundId: anchoredRoundId };
+            } catch (caught) {
+                // `(monitorId, roundId)` is unique: that batch id is taken.
+                if (
+                    !(caught instanceof Prisma.PrismaClientKnownRequestError) ||
+                    caught.code !== 'P2002'
+                ) {
+                    throw caught;
+                }
+                if (attempt === ROUND_ANCHOR_ATTEMPTS - 1) return null;
             }
-            throw caught;
         }
+
+        return null;
     }
 
-    /** Settles batches of this monitor that an earlier run left open. */
+    /** Settles open batches of this monitor whose deadline already passed. */
     private async settleStaleRounds(
-        monitorId: string,
+        monitor: MonitorModel,
         currentRoundId: string,
     ): Promise<void> {
         const stale = await this.prisma.checkLog.findMany({
-            where: { monitorId, roundId: { not: null }, appliedAt: null },
-            select: { roundId: true },
+            where: {
+                monitorId: monitor.id,
+                roundId: { not: null },
+                appliedAt: null,
+            },
+            select: { roundId: true, checkedAt: true },
         });
+        const deadlineMs = monitor.interval * 1000;
 
         for (const row of stale) {
             if (!row.roundId || row.roundId === currentRoundId) continue;
+            // A manual check can start before the previous batch expires; leave
+            // it to the deadline job instead of judging partial evidence.
+            if (Date.now() - row.checkedAt.getTime() < deadlineMs) continue;
             try {
-                await this.settleRound(monitorId, row.roundId, { force: true });
+                await this.settleRound(monitor.id, row.roundId, {
+                    force: true,
+                });
             } catch (error) {
                 this.logger.warn(
-                    `Failed to settle stale round ${row.roundId} of monitor ${monitorId}: ${(error as Error).message}`,
+                    `Failed to settle stale round ${row.roundId} of monitor ${monitor.id}: ${(error as Error).message}`,
                 );
             }
         }
@@ -1056,7 +1087,7 @@ export class CheckerService {
             };
         }
 
-        const state = await this.beginRound({
+        const anchor = await this.beginRound({
             monitor,
             roundId,
             startedAt,
@@ -1064,18 +1095,21 @@ export class CheckerService {
             guards,
             ruleOutcome,
         });
-        if (!state) {
+        if (!anchor) {
             return this.pendingExecution(monitor, localResult, null);
         }
 
         // Protected batches settle right away; the others either reach quorum
-        // here or close at the deadline job.
+        // here or close at the deadline job. The anchored id may carry a suffix
+        // when two checks started in the same millisecond.
         const settlement = guards.protected
-            ? await this.settleRound(monitor.id, roundId, { force: true })
-            : await this.settleRound(monitor.id, roundId);
+            ? await this.settleRound(monitor.id, anchor.roundId, {
+                  force: true,
+              })
+            : await this.settleRound(monitor.id, anchor.roundId);
         const execution =
             settlement.execution ??
-            this.pendingExecution(monitor, localResult, state);
+            this.pendingExecution(monitor, localResult, anchor.state);
 
         await this.writeExecution(monitor, execution, trigger, {
             previousStatus: execution.previousStatus,
