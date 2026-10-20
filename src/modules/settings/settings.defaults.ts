@@ -667,6 +667,99 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         max: 5,
         integer: true,
     },
+
+    // ── 支付宝（仅支付场景）──────────────────────────────────────────
+    // 只有支付一种用途，因此 key 用两层、不声明 section：推断规则会看到
+    // 「组内 key 不足三段」而整组平铺，正好符合预期。
+    // 注意：计费流程尚未接入支付宝渠道（PaymentChannel 目前只有 WECHAT），
+    // 这些项是接入前的凭证准备，运行时还没有消费方。
+    {
+        key: 'alipay.appId',
+        name: '应用 APPID',
+        group: 'alipay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '支付宝开放平台应用的 APPID：创建应用后可在控制台查看，用于下单与回调校验。',
+    },
+    {
+        key: 'alipay.privateKey',
+        name: '应用私钥',
+        group: 'alipay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '应用私钥（RSA2）：可粘贴 PEM 全文，也可填服务器上的私钥文件路径，用于请求签名。保存后不回显。',
+    },
+    {
+        key: 'alipay.publicKey',
+        name: '支付宝公钥',
+        group: 'alipay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '支付宝公钥：可粘贴 PEM 全文，也可填文件路径，用于校验回调与接口响应的签名。注意不是「应用公钥」。',
+    },
+    {
+        key: 'alipay.gateway',
+        name: '网关地址',
+        group: 'alipay',
+        value: 'https://openapi.alipay.com/gateway.do',
+        valueType: SettingValueType.STRING,
+        description:
+            '支付宝开放平台网关；开启沙箱环境时改用沙箱网关，无需手动修改此处。',
+        url: true,
+    },
+    {
+        key: 'alipay.signType',
+        name: '签名算法',
+        group: 'alipay',
+        value: 'RSA2',
+        valueType: SettingValueType.STRING,
+        description:
+            '请求与验签使用的算法。新应用一律用 RSA2（推荐）；RSA 仅用于兼容早期应用。',
+        allowedValues: ['RSA2', 'RSA'],
+        optionLabels: { RSA2: 'RSA2（推荐）', RSA: 'RSA（兼容旧应用）' },
+    },
+    {
+        key: 'alipay.sandbox',
+        name: '沙箱环境',
+        group: 'alipay',
+        value: false,
+        valueType: SettingValueType.BOOLEAN,
+        description:
+            '开启后走支付宝沙箱网关，用于联调；沙箱仍会真实调用支付宝接口，与「模拟支付」不同。',
+    },
+    {
+        key: 'alipay.notifyUrl',
+        name: '异步通知地址',
+        group: 'alipay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '支付宝服务器异步通知（notify_url）的公网 HTTPS 地址，需与网关放行路径一致。',
+        url: true,
+    },
+    {
+        key: 'alipay.returnUrl',
+        name: '同步跳转地址',
+        group: 'alipay',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            '支付完成后浏览器跳回的地址（return_url），通常指向前端订单结果页。',
+        url: true,
+    },
+    {
+        key: 'alipay.mock',
+        name: '模拟支付',
+        group: 'alipay',
+        value: true,
+        valueType: SettingValueType.BOOLEAN,
+        description:
+            '开启后不调用支付宝接口，直接返回模拟支付参数，便于无凭证时联调；开始真实收款前必须关闭。',
+    },
 ];
 
 /**

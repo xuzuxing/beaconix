@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsEnum, IsOptional } from 'class-validator';
 import { IsCuid } from '../../../../common/decorators/is-cuid.decorator';
+import { PlanCycle } from '../../../../generated/prisma/enums';
 
 export class CreateOrderDto {
     @ApiProperty({
@@ -11,13 +12,11 @@ export class CreateOrderDto {
     planId: string;
 
     @ApiPropertyOptional({
-        example: 30,
+        enum: PlanCycle,
         description:
-            'Purchase duration in days. Defaults to the plan duration.',
+            "Billing cycle to buy. Defaults to the plan's cheapest enabled cycle. The term's own price and duration are used, so clients cannot pick an arbitrary number of days.",
     })
     @IsOptional()
-    @IsInt()
-    @Min(1)
-    @Max(3650)
-    durationDays?: number;
+    @IsEnum(PlanCycle)
+    cycle?: PlanCycle;
 }

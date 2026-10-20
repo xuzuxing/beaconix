@@ -1,3 +1,4 @@
+import { PaymentChannel, PaymentStatus } from '../../../generated/prisma/enums';
 import { PaymentService } from './payment.service';
 import type { PrismaService } from '../../../infra/database/prisma.service';
 import type { PaymentProviderFactory } from './payment-provider.factory';
@@ -29,6 +30,7 @@ function createService() {
         payment: {
             upsert: jest.fn(),
             findFirst: jest.fn(),
+            findUnique: jest.fn(),
         },
         $transaction: jest.fn(),
     };
@@ -82,6 +84,68 @@ describe('PaymentService', () => {
                         channel: 'WECHAT',
                         amount: 2900,
                     }),
+                }),
+            );
+        });
+
+        it('refuses to switch channels once a payment has succeeded', async () => {
+            const { service, prisma, paymentProviderFactory } = createService();
+            prisma.order.findUnique.mockResolvedValue(order);
+            prisma.membership.findUnique.mockResolvedValue({ id: 'member-1' });
+            prisma.payment.findUnique.mockResolvedValue({
+                channel: PaymentChannel.WECHAT,
+                status: PaymentStatus.SUCCESS,
+            });
+
+            await expect(
+                service.createPayment('order-1', 'user-1', {
+                    openid: 'o_xxx',
+                    // ALIPAY 会随后续迁移加入枚举，这里先按渠道断言行为
+                    channel: 'ALIPAY' as PaymentChannel,
+                }),
+            ).rejects.toThrow('Order already paid via WECHAT');
+
+            // 覆盖记录会让原渠道的回调按 channel 查不到它，必须在调 provider 之前拦下
+            expect(paymentProviderFactory.get).not.toHaveBeenCalled();
+            expect(prisma.payment.upsert).not.toHaveBeenCalled();
+        });
+
+        it('refuses a repeat payment on the channel that already succeeded', async () => {
+            const { service, prisma } = createService();
+            prisma.order.findUnique.mockResolvedValue(order);
+            prisma.membership.findUnique.mockResolvedValue({ id: 'member-1' });
+            prisma.payment.findUnique.mockResolvedValue({
+                channel: PaymentChannel.WECHAT,
+                status: PaymentStatus.SUCCESS,
+            });
+
+            await expect(
+                service.createPayment('order-1', 'user-1', { openid: 'o_xxx' }),
+            ).rejects.toThrow('Order is already paid');
+        });
+
+        it('allows switching channels while the previous payment is pending', async () => {
+            const { service, prisma, provider } = createService();
+            prisma.order.findUnique.mockResolvedValue(order);
+            prisma.membership.findUnique.mockResolvedValue({ id: 'member-1' });
+            prisma.payment.findUnique.mockResolvedValue({
+                channel: PaymentChannel.WECHAT,
+                status: PaymentStatus.PENDING,
+            });
+            provider.createPayment.mockResolvedValue({
+                payUrl: 'https://openapi.alipay.com/gateway.do?sign=...',
+            });
+            prisma.payment.upsert.mockResolvedValue({ id: 'payment-1' });
+
+            await service.createPayment('order-1', 'user-1', {
+                openid: 'o_xxx',
+                channel: 'ALIPAY' as PaymentChannel,
+            });
+
+            expect(prisma.payment.upsert).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: { orderId: 'order-1' },
+                    update: expect.objectContaining({ channel: 'ALIPAY' }),
                 }),
             );
         });

@@ -46,6 +46,7 @@ export class PaymentService {
     ) {
         const order = await this.ensureOrderPayable(orderId, userId);
         const channel = dto.channel ?? PaymentChannel.WECHAT;
+        await this.assertChannelSwitchable(order.id, channel);
         const provider = this.paymentProviderFactory.get(channel);
 
         const params = await provider.createPayment({
@@ -217,6 +218,32 @@ export class PaymentService {
     private extractPrepayId(params: PaymentProviderPayParams): string {
         const value = params['package'] ?? params['prepayId'] ?? '';
         return typeof value === 'string' ? value : JSON.stringify(value);
+    }
+
+    /**
+     * 一笔订单只有一条支付记录（`Payment.orderId` 是唯一键），换渠道发起会覆盖它。
+     * 已成功的记录绝不能覆盖：覆盖后原渠道的回调按 `channel` 就查不到这一条，
+     * 幂等与对账都会断线（用户扣了钱、订单却不激活），所以直接拒绝。
+     */
+    private async assertChannelSwitchable(
+        orderId: string,
+        channel: PaymentChannel,
+    ): Promise<void> {
+        const existing = await this.prisma.payment.findUnique({
+            where: { orderId },
+            select: { channel: true, status: true },
+        });
+
+        if (!existing || existing.status !== PaymentStatus.SUCCESS) return;
+
+        // 取成 string：枚举当前只有 WECHAT，`!==` 的 false 分支会被收窄成 never
+        const paidChannel: string = existing.channel;
+
+        throw new BadRequestException(
+            paidChannel === channel
+                ? 'Order is already paid'
+                : `Order already paid via ${paidChannel}`,
+        );
     }
 
     private async ensureOrderPayable(

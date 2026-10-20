@@ -1503,7 +1503,11 @@ model Plan {
   code         String  @unique
   name         String
   description  String?
+  /// 最便宜「启用档位」价格（分）的镜像，真源是 PlanTerm.price。
+  /// 由 AdminPlansService 在写档位时同步，不要单独改。
   price        Int     @default(0)
+  /// 最便宜「启用档位」天数的镜像，真源是 PlanTerm.durationDays。
+  /// 由 AdminPlansService 在写档位时同步，不要单独改。
   durationDays Int     @default(30)
   sortOrder    Int     @default(0)
 
@@ -1528,9 +1532,41 @@ model Plan {
 
   subscriptions Subscription[]
   orders        Order[]
+  terms         PlanTerm[]
 
   @@index([code])
   @@map("plans")
+}
+
+/// 计费周期。时长以 PlanTerm.durationDays 为准（按 30/90/365 天近似）。
+enum PlanCycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+/// 套餐的计费周期档位：一个套餐可以同时卖月付 / 季付 / 年付，各自定价。
+/// `(planId, cycle)` 唯一，因此一个周期在套餐内只有一个价格。
+/// 停用（enabled = false）而不是删除，才能保住历史订单的引用。
+model PlanTerm {
+  id           String    @id @default(cuid())
+  planId       String
+  cycle        PlanCycle
+  durationDays Int
+  /// 该周期档位的价格（分）。
+  price        Int
+  enabled      Boolean   @default(true)
+  sortOrder    Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plan   Plan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@unique([planId, cycle])
+  @@index([planId, enabled, sortOrder])
+  @@map("plan_terms")
 }
 
 // 订阅栈
@@ -1568,7 +1604,11 @@ model Order {
 
   amount       Int
   currency     String @default("CNY")
+  /// 下单时从所选档位（PlanTerm.durationDays）抄下来的快照。
   durationDays Int
+  /// 下单所选周期档位的快照；引入档位之前的历史订单为空。
+  cycle        PlanCycle?
+  termId       String?
 
   status      OrderStatus @default(PENDING)
   paidAt      DateTime?
@@ -1580,6 +1620,7 @@ model Order {
 
   organization Organization  @relation(fields: [organizationId], references: [id])
   plan         Plan          @relation(fields: [planId], references: [id])
+  term         PlanTerm?     @relation(fields: [termId], references: [id])
   user         User          @relation(fields: [userId], references: [id])
   payment      Payment?
   subscription Subscription?
@@ -1587,6 +1628,7 @@ model Order {
   @@index([organizationId])
   @@index([status])
   @@index([expiresAt])
+  @@index([termId])
   @@map("orders")
 }
 

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { Prisma, PrismaClient } from '../src/generated/prisma/client';
-import { MonitorType } from '../src/generated/prisma/enums';
+import { MonitorType, PlanCycle } from '../src/generated/prisma/enums';
 import { missingSettingSeedRows } from '../src/modules/settings/settings.seed';
 import { missingTicketCategorySeeds } from '../src/modules/tickets/ticket-categories.seed';
 
@@ -107,6 +107,14 @@ async function main() {
             minInterval: 60,
             allowTenantProbe: false,
             allowStatusPage: true,
+            // FREE 不过期：一条「永久」档位，仅作为无订阅组织的兜底。
+            terms: [
+                {
+                    cycle: PlanCycle.YEARLY,
+                    durationDays: 36500,
+                    price: 0,
+                },
+            ],
         },
         {
             code: 'PRO',
@@ -125,6 +133,27 @@ async function main() {
             minInterval: 30,
             allowTenantProbe: true,
             allowStatusPage: true,
+            // 月 / 季 / 年三档，季付与年付带折扣。
+            terms: [
+                {
+                    cycle: PlanCycle.MONTHLY,
+                    durationDays: 30,
+                    price: 2900,
+                    sortOrder: 1,
+                },
+                {
+                    cycle: PlanCycle.QUARTERLY,
+                    durationDays: 90,
+                    price: 7900,
+                    sortOrder: 2,
+                },
+                {
+                    cycle: PlanCycle.YEARLY,
+                    durationDays: 365,
+                    price: 29000,
+                    sortOrder: 3,
+                },
+            ],
         },
         {
             code: 'TEAM',
@@ -143,6 +172,26 @@ async function main() {
             minInterval: 10,
             allowTenantProbe: true,
             allowStatusPage: true,
+            terms: [
+                {
+                    cycle: PlanCycle.MONTHLY,
+                    durationDays: 30,
+                    price: 9900,
+                    sortOrder: 1,
+                },
+                {
+                    cycle: PlanCycle.QUARTERLY,
+                    durationDays: 90,
+                    price: 26900,
+                    sortOrder: 2,
+                },
+                {
+                    cycle: PlanCycle.YEARLY,
+                    durationDays: 365,
+                    price: 99000,
+                    sortOrder: 3,
+                },
+            ],
         },
     ];
 
@@ -168,12 +217,22 @@ async function main() {
         console.log('settings: nothing to add');
     }
 
-    for (const plan of plans) {
-        await prisma.plan.upsert({
+    for (const { terms, ...plan } of plans) {
+        const saved = await prisma.plan.upsert({
             where: { code: plan.code },
             update: plan,
             create: plan,
         });
+
+        for (const term of terms) {
+            await prisma.planTerm.upsert({
+                where: {
+                    planId_cycle: { planId: saved.id, cycle: term.cycle },
+                },
+                update: term,
+                create: { planId: saved.id, ...term },
+            });
+        }
     }
 
     // 工单分类（平台级字典）：只补库里还没有的分类名 —— 幂等，且绝不覆盖

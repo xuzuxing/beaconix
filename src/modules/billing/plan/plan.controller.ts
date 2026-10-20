@@ -17,7 +17,11 @@ export class PlanController {
 
     @Get()
     @Public()
-    @ApiOperation({ summary: 'List enabled billing plans' })
+    @ApiOperation({
+        summary: 'List enabled billing plans',
+        description:
+            'Public catalog for the purchase page. Admin edits apply immediately: quota limits are read from the plan row on every check, and a plan disabled via `PATCH /api/admin/plans/{id}` disappears from this list and can no longer be ordered.',
+    })
     @ApiOkResponse({ type: [PlanEntity], description: 'Plan catalog' })
     async findAll(): Promise<PlanEntity[]> {
         return this.planService.findAll();

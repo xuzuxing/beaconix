@@ -8,6 +8,8 @@ import { AdminMetricsController } from './metrics/admin-metrics.controller';
 import { AdminMetricsService } from './metrics/admin-metrics.service';
 import { AdminOrdersController } from './orders/admin-orders.controller';
 import { AdminOrdersService } from './orders/admin-orders.service';
+import { AdminPlansController } from './plans/admin-plans.controller';
+import { AdminPlansService } from './plans/admin-plans.service';
 import { SystemProbesController } from './system-probes/system-probes.controller';
 import { SystemProbeAssignmentStore } from './system-probes/system-probe-assignment.store';
 import { SystemProbeScheduler } from './system-probes/system-probe-scheduler';
@@ -27,6 +29,7 @@ import { AdminTicketsService } from './tickets/admin-tickets.service';
         AdminMetricsController,
         AdminAuditLogsController,
         AdminOrdersController,
+        AdminPlansController,
         AdminTicketsController,
         AdminTicketCategoriesController,
     ],
@@ -38,6 +41,7 @@ import { AdminTicketsService } from './tickets/admin-tickets.service';
         AdminMetricsService,
         AdminAuditLogsService,
         AdminOrdersService,
+        AdminPlansService,
         AdminTicketsService,
         AdminTicketCategoriesService,
     ],

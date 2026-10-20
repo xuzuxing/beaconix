@@ -128,6 +128,42 @@ describe('SettingsService', () => {
         expect(custom.every((item) => item.section === undefined)).toBe(true);
     });
 
+    it('keeps the alipay tab flat, with no sub-sections', async () => {
+        prisma.setting.findMany.mockResolvedValue([]);
+
+        const settings = await service.findAll();
+        const alipay = settings.filter((item) => item.group === 'alipay');
+
+        expect(alipay.map((item) => item.key)).toEqual([
+            'alipay.appId',
+            'alipay.privateKey',
+            'alipay.publicKey',
+            'alipay.gateway',
+            'alipay.signType',
+            'alipay.sandbox',
+            'alipay.notifyUrl',
+            'alipay.returnUrl',
+            'alipay.mock',
+        ]);
+        // 全部两层 key → 推断规则下整组平铺，不会出现只有一个分组的冗余标题
+        expect(alipay.every((item) => item.section === undefined)).toBe(true);
+        // 只有应用私钥是密文项
+        expect(
+            alipay.filter((item) => item.isSecret).map((item) => item.key),
+        ).toEqual(['alipay.privateKey']);
+        // 签名算法给出候选值，供前端渲染下拉
+        expect(
+            alipay.find((item) => item.key === 'alipay.signType')?.options,
+        ).toEqual([
+            { label: 'RSA2（推荐）', value: 'RSA2' },
+            { label: 'RSA（兼容旧应用）', value: 'RSA' },
+        ]);
+        // 模拟支付与微信保持一致的默认：默认开启，避免误真扣款
+        expect(alipay.find((item) => item.key === 'alipay.mock')?.value).toBe(
+            true,
+        );
+    });
+
     it('reports only the values the admin page actually overrode', async () => {
         prisma.setting.findUnique.mockImplementation(
             (args: { where: { key: string } }) => {
@@ -222,6 +258,7 @@ describe('SettingsService', () => {
             'storage',
             'attachments',
             'wechat',
+            'alipay',
         ]);
     });
 
@@ -288,6 +325,8 @@ describe('SettingsService', () => {
             'wechat.pay.mchId',
             'wechat.miniprogram.appSecret',
             'wechat.scanLogin.ttlSeconds',
+            'alipay.privateKey',
+            'alipay.mock',
         ]) {
             expect(snapshot).not.toHaveProperty(key);
         }
@@ -473,6 +512,7 @@ describe('SettingsService', () => {
                 'storage',
                 'attachments',
                 'wechat',
+                'alipay',
             ],
         });
         expect(warnSpy).toHaveBeenCalled();

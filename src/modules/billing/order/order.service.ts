@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
-import { OrderStatus } from '../../../generated/prisma/enums';
+import { OrderStatus, PlanCycle } from '../../../generated/prisma/enums';
 import { CreateOrderDto } from './dto';
 import { OrderEntity } from './entities';
 
@@ -22,19 +22,33 @@ export class OrderService {
     ): Promise<OrderEntity> {
         const plan = await this.prisma.plan.findUnique({
             where: { id: dto.planId },
+            include: {
+                terms: {
+                    where: { enabled: true },
+                    orderBy: [{ sortOrder: 'asc' }, { price: 'asc' }],
+                },
+            },
         });
 
-        if (!plan || !plan.enabled) {
-            throw new NotFoundException('Plan not found or disabled');
+        if (!plan) {
+            throw new NotFoundException('Plan not found');
+        }
+
+        if (!plan.enabled) {
+            throw new BadRequestException({
+                code: 'PLAN_NOT_PURCHASABLE',
+                message: 'plan is not purchasable',
+            });
         }
 
         if (plan.code === 'FREE') {
-            throw new BadRequestException(
-                'The FREE plan does not require a purchase',
-            );
+            throw new BadRequestException({
+                code: 'FREE_PLAN_NOT_PURCHASABLE',
+                message: 'The FREE plan does not require a purchase',
+            });
         }
 
-        const durationDays = dto.durationDays ?? plan.durationDays;
+        const term = this.resolveTerm(plan.terms, dto.cycle);
 
         const order = await this.prisma.order.create({
             data: {
@@ -42,8 +56,10 @@ export class OrderService {
                 organizationId,
                 planId: plan.id,
                 userId,
-                amount: plan.price,
-                durationDays,
+                amount: term.price,
+                durationDays: term.durationDays,
+                cycle: term.cycle,
+                termId: term.id,
                 status: OrderStatus.PENDING,
                 expiresAt: new Date(Date.now() + ORDER_EXPIRY_MS),
             },
@@ -90,6 +106,37 @@ export class OrderService {
     }
 
     // -- Helpers ---------------------------------------------------------
+
+    /**
+     * Picks the cycle the buyer asked for, or the cheapest enabled one when
+     * they did not choose. Price and duration always come from the stored term,
+     * never from the request, so a client cannot buy ten years for the price of
+     * one month.
+     */
+    private resolveTerm<T extends { cycle: PlanCycle }>(
+        terms: T[],
+        cycle?: PlanCycle,
+    ): T {
+        if (terms.length === 0) {
+            throw new BadRequestException({
+                code: 'PLAN_NOT_PURCHASABLE',
+                message: 'plan is not purchasable',
+            });
+        }
+
+        if (!cycle) return terms[0];
+
+        const term = terms.find((candidate) => candidate.cycle === cycle);
+
+        if (!term) {
+            throw new BadRequestException({
+                code: 'PLAN_CYCLE_NOT_AVAILABLE',
+                message: `plan does not offer the ${cycle} cycle`,
+            });
+        }
+
+        return term;
+    }
 
     private async ensureOrderVisible(orderId: string, userId: string) {
         const order = await this.prisma.order.findUnique({
