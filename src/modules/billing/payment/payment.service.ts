@@ -284,6 +284,16 @@ export class PaymentService {
         return order;
     }
 
+    /**
+     * Applies a paid order to the subscription stack:
+     *
+     * - same plan, still valid → extend it (renewal);
+     * - higher plan → freeze every lower active subscription (remaining days are
+     *   kept and restored once the higher plan lapses), new plan starts now;
+     * - same or lower plan while one is active → queue behind it
+     *   (`startsAt` = current expiry), which `EffectivePlanService` already
+     *   honours through its `startsAt <= now` filter.
+     */
     private async activateSubscription(
         tx: Prisma.TransactionClient,
         order: OrderForPayment,
@@ -311,17 +321,94 @@ export class PaymentService {
             return { id: existing.id, expiresAt, renewed: true };
         }
 
-        const expiresAt = new Date(now.getTime() + order.durationDays * dayMs);
+        const [plan, effective] = await Promise.all([
+            tx.plan.findUniqueOrThrow({
+                where: { id: order.planId },
+                select: { sortOrder: true },
+            }),
+            tx.subscription.findFirst({
+                where: {
+                    organizationId: order.organizationId,
+                    status: SubscriptionStatus.ACTIVE,
+                    startsAt: { lte: now },
+                    expiresAt: { gt: now },
+                },
+                include: { plan: { select: { sortOrder: true } } },
+                orderBy: { plan: { sortOrder: 'desc' } },
+            }),
+        ]);
+
+        let startsAt = now;
+
+        if (effective) {
+            if (plan.sortOrder > effective.plan.sortOrder) {
+                await this.pauseLowerSubscriptions(
+                    tx,
+                    order.organizationId,
+                    plan.sortOrder,
+                    now,
+                );
+            } else {
+                // Same or lower tier: take effect when the current one lapses.
+                startsAt = effective.expiresAt;
+            }
+        }
+
+        const expiresAt = new Date(
+            startsAt.getTime() + order.durationDays * dayMs,
+        );
         const subscription = await tx.subscription.create({
             data: {
                 organizationId: order.organizationId,
                 planId: order.planId,
                 status: SubscriptionStatus.ACTIVE,
-                startsAt: now,
+                startsAt,
                 expiresAt,
                 orderId: order.id,
             },
         });
         return { id: subscription.id, expiresAt, renewed: false };
+    }
+
+    /**
+     * Freezes the remaining days of every active subscription below
+     * `sortOrder`. At least one day is kept so a nearly-expired plan never
+     * loses its last slice to rounding.
+     */
+    private async pauseLowerSubscriptions(
+        tx: Prisma.TransactionClient,
+        organizationId: string,
+        sortOrder: number,
+        now: Date,
+    ): Promise<void> {
+        const dayMs = 24 * 60 * 60 * 1000;
+        const lower = await tx.subscription.findMany({
+            where: {
+                organizationId,
+                status: SubscriptionStatus.ACTIVE,
+                startsAt: { lte: now },
+                expiresAt: { gt: now },
+                plan: { sortOrder: { lt: sortOrder } },
+            },
+            select: { id: true, expiresAt: true },
+        });
+
+        for (const subscription of lower) {
+            const pausedRemainingDays = Math.max(
+                1,
+                Math.ceil(
+                    (subscription.expiresAt.getTime() - now.getTime()) / dayMs,
+                ),
+            );
+
+            await tx.subscription.update({
+                where: { id: subscription.id },
+                data: {
+                    status: SubscriptionStatus.PAUSED,
+                    pausedAt: now,
+                    pausedRemainingDays,
+                },
+            });
+        }
     }
 }

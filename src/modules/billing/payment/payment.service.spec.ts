@@ -180,6 +180,11 @@ describe('PaymentService', () => {
                     update: jest.fn(),
                     create: jest.fn(),
                 },
+                plan: {
+                    findUniqueOrThrow: jest
+                        .fn()
+                        .mockResolvedValue({ sortOrder: 2 }),
+                },
             };
             prisma.$transaction.mockImplementation((callback) => callback(tx));
             await service.handleWechatCallback('{}', 'signature');
@@ -219,6 +224,11 @@ describe('PaymentService', () => {
                     findFirst: jest.fn().mockResolvedValue(null),
                     create: jest.fn().mockResolvedValue({ id: 'sub-1' }),
                 },
+                plan: {
+                    findUniqueOrThrow: jest
+                        .fn()
+                        .mockResolvedValue({ sortOrder: 2 }),
+                },
             };
             prisma.$transaction.mockImplementation((callback) => callback(tx));
             notifications.publish.mockRejectedValue(
@@ -254,6 +264,11 @@ describe('PaymentService', () => {
                     findFirst: jest.fn().mockResolvedValue(null),
                     create: jest.fn().mockResolvedValue({ id: 'sub-1' }),
                     update: jest.fn(),
+                },
+                plan: {
+                    findUniqueOrThrow: jest
+                        .fn()
+                        .mockResolvedValue({ sortOrder: 2 }),
                 },
             };
             prisma.$transaction.mockImplementation((fn) => fn(tx));
@@ -304,6 +319,132 @@ describe('PaymentService', () => {
                     resourceId: 'sub-1',
                 }),
                 tx,
+            );
+        });
+
+        it('freezes lower-tier subscriptions when upgrading to a higher plan', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: 'wx-tx-upgrade',
+                trade_state: 'SUCCESS',
+            });
+            prisma.payment.findFirst.mockResolvedValue({
+                id: 'payment-1',
+                orderId: order.id,
+                status: 'PENDING',
+                order: { ...order, planId: 'plan-team', durationDays: 365 },
+            });
+
+            const proExpiry = new Date(Date.now() + 100 * 24 * 60 * 60 * 1000);
+            const tx = {
+                $queryRaw: jest.fn(),
+                payment: {
+                    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+                },
+                order: { update: jest.fn() },
+                plan: {
+                    findUniqueOrThrow: jest
+                        .fn()
+                        .mockResolvedValue({ sortOrder: 3 }),
+                },
+                subscription: {
+                    // 1st: same-plan lookup misses; 2nd: the effective plan is PRO.
+                    findFirst: jest
+                        .fn()
+                        .mockResolvedValueOnce(null)
+                        .mockResolvedValueOnce({
+                            id: 'sub-pro',
+                            expiresAt: proExpiry,
+                            plan: { sortOrder: 2 },
+                        }),
+                    findMany: jest
+                        .fn()
+                        .mockResolvedValue([
+                            { id: 'sub-pro', expiresAt: proExpiry },
+                        ]),
+                    update: jest.fn(),
+                    create: jest.fn().mockResolvedValue({ id: 'sub-team' }),
+                },
+            };
+            prisma.$transaction.mockImplementation((fn) => fn(tx));
+
+            await service.handleWechatCallback('{}', 'signature');
+
+            expect(tx.subscription.update).toHaveBeenCalledWith({
+                where: { id: 'sub-pro' },
+                data: expect.objectContaining({
+                    status: 'PAUSED',
+                    pausedRemainingDays: 100,
+                }),
+            });
+            expect(tx.subscription.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        planId: 'plan-team',
+                        status: 'ACTIVE',
+                    }),
+                }),
+            );
+        });
+
+        it('queues a lower-tier purchase behind the current plan', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: 'wx-tx-downgrade',
+                trade_state: 'SUCCESS',
+            });
+            prisma.payment.findFirst.mockResolvedValue({
+                id: 'payment-1',
+                orderId: order.id,
+                status: 'PENDING',
+                order,
+            });
+
+            const teamExpiry = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000);
+            const tx = {
+                $queryRaw: jest.fn(),
+                payment: {
+                    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+                },
+                order: { update: jest.fn() },
+                plan: {
+                    findUniqueOrThrow: jest
+                        .fn()
+                        .mockResolvedValue({ sortOrder: 2 }),
+                },
+                subscription: {
+                    findFirst: jest
+                        .fn()
+                        .mockResolvedValueOnce(null)
+                        .mockResolvedValueOnce({
+                            id: 'sub-team',
+                            expiresAt: teamExpiry,
+                            plan: { sortOrder: 3 },
+                        }),
+                    findMany: jest.fn(),
+                    update: jest.fn(),
+                    create: jest.fn().mockResolvedValue({ id: 'sub-pro' }),
+                },
+            };
+            prisma.$transaction.mockImplementation((fn) => fn(tx));
+
+            await service.handleWechatCallback('{}', 'signature');
+
+            // Nothing is frozen; the new plan simply waits for TEAM to lapse.
+            expect(tx.subscription.findMany).not.toHaveBeenCalled();
+            expect(tx.subscription.update).not.toHaveBeenCalled();
+            expect(tx.subscription.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        startsAt: teamExpiry,
+                        expiresAt: new Date(
+                            teamExpiry.getTime() +
+                                order.durationDays * 24 * 60 * 60 * 1000,
+                        ),
+                    }),
+                }),
             );
         });
 
@@ -397,6 +538,11 @@ describe('PaymentService', () => {
                     findFirst: jest.fn().mockResolvedValue(null),
                     create: jest.fn().mockResolvedValue({ id: 'sub-1' }),
                     update: jest.fn(),
+                },
+                plan: {
+                    findUniqueOrThrow: jest
+                        .fn()
+                        .mockResolvedValue({ sortOrder: 2 }),
                 },
             };
             prisma.$transaction.mockImplementation((fn) => fn(tx));

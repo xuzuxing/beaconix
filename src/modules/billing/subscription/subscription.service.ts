@@ -25,7 +25,10 @@ export class SubscriptionService {
                     new SubscriptionStackEntryEntity({
                         id: entry.id,
                         plan: new PlanEntity(entry.plan),
+                        startsAt: entry.startsAt,
                         expiresAt: entry.expiresAt,
+                        status: entry.status,
+                        pausedRemainingDays: entry.pausedRemainingDays,
                         isEffective: entry.isEffective,
                     }),
             ),

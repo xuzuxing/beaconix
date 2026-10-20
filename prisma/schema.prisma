@@ -952,6 +952,8 @@ enum NotificationStatus {
 
 enum SubscriptionStatus {
   ACTIVE
+  /// 被更高等级的订阅压住：剩余天数冻结，等高端订阅结束后自动恢复。
+  PAUSED
   EXPIRED
   CANCELLED
 }
@@ -1579,6 +1581,11 @@ model Subscription {
   startsAt  DateTime
   expiresAt DateTime
   autoRenew Boolean            @default(false)
+
+  /// 进入 PAUSED 的时刻；恢复时清空。
+  pausedAt DateTime?
+  /// 冻结时结算的剩余天数。恢复时 `expiresAt = 恢复时刻 + pausedRemainingDays`。
+  pausedRemainingDays Int?
 
   orderId String? @unique
 
