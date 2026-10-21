@@ -1,0 +1,121 @@
+version: "1.0"
+name: 测试、构建、上传、发布、部署到自有主机
+displayName: 测试、构建、上传、发布、部署到自有主机
+stages:
+- name: 测试
+  displayName: 测试
+  strategy: naturally
+  trigger: auto
+  steps:
+  - step: ut@nodejs
+    name: ""
+    displayName: Nodejs 单元测试
+    commands:
+    - "# 设置NPM源，提升安装速度"
+    - npm config set registry https://registry.npmmirror.com
+    - "# 在这里输入测试命令"
+    - npm install && npm run test
+    report:
+      path: mochawesome-report
+      index: mochawesome.html
+    checkpoints: {}
+    caches:
+    - "~/.npm"
+    - "~/.yarn"
+    notify: []
+    strategy:
+      retry: "0"
+      resource:
+        cpu: "2"
+        memory: "4"
+- name: 构建
+  displayName: 构建
+  strategy: naturally
+  trigger: auto
+  steps:
+  - step: build@nodejs
+    name: ""
+    displayName: Nodejs 构建
+    nodeVersion: 14.16.0
+    commands:
+    - "# 设置NPM源，提升安装速度"
+    - npm config set registry https://registry.npmmirror.com
+    - ""
+    - "# 执行编译命令"
+    - npm install && npm run build
+    artifacts:
+    - name: BUILD_ARTIFACT
+      path:
+      - ./dist
+      type: .tar.gz
+    caches:
+    - "~/.npm"
+    - "~/.yarn"
+    notify: []
+    strategy:
+      retry: "0"
+      resource:
+        cpu: "2"
+        memory: "4"
+- name: 上传
+  displayName: 上传
+  strategy: naturally
+  trigger: auto
+  steps:
+  - step: publish@general_artifacts
+    name: ""
+    displayName: 上传制品
+    dependArtifact: BUILD_ARTIFACT
+    artifactName: output
+    notify: []
+    strategy:
+      retry: "0"
+      resource:
+        cpu: "2"
+        memory: "4"
+- name: 发布
+  displayName: 发布
+  strategy: naturally
+  trigger: auto
+  steps:
+  - step: publish@release_artifacts
+    name: ""
+    displayName: 发布
+    dependArtifact: output
+    version: 1.0.0.0
+    autoIncrement: true
+    notify: []
+    strategy:
+      retry: "0"
+      resource:
+        cpu: "2"
+        memory: "4"
+- name: 部署
+  displayName: 部署
+  strategy: naturally
+  trigger: auto
+  steps:
+  - step: deploy@agent
+    name: ""
+    displayName: 主机部署
+    deployArtifact:
+    - name: output
+      target: "~/gitee_go/deploy"
+      source: artifact
+      dependArtifact: ""
+      artifactRepository: default
+      artifactName: output
+      artifactVersion: latest
+    script: |-
+      # 请在此输入部署脚本，如启动Java应用如下
+      # nohup java -jar test.jar &gt; nohup.out &amp;
+       echo 'Hello Gitee!'
+    hostGroupID: {}
+    notify: []
+    strategy:
+      retry: "0"
+triggers:
+  trigger: manual
+notify: []
+strategy:
+  blocking: true
