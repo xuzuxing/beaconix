@@ -29,6 +29,8 @@ interface NormalizedTerm {
     price: number;
     enabled: boolean;
     sortOrder: number;
+    /** 小程序虚拟支付道具 ID；null = 该档位不接受虚拟支付下单。 */
+    wechatProductId: string | null;
 }
 
 /**
@@ -85,6 +87,7 @@ export class AdminPlansService {
                             price: term.price,
                             enabled: term.enabled,
                             sortOrder: term.sortOrder,
+                            wechatProductId: term.wechatProductId,
                         })),
                     },
                 },
@@ -254,6 +257,7 @@ export class AdminPlansService {
             price: term.price,
             enabled: term.enabled ?? true,
             sortOrder: term.sortOrder ?? 0,
+            wechatProductId: term.wechatProductId?.trim() || null,
         }));
     }
 
@@ -309,6 +313,7 @@ export class AdminPlansService {
                         price: term.price,
                         enabled: term.enabled,
                         sortOrder: term.sortOrder,
+                        wechatProductId: term.wechatProductId,
                     },
                 });
                 continue;
@@ -322,6 +327,7 @@ export class AdminPlansService {
                     price: term.price,
                     enabled: term.enabled,
                     sortOrder: term.sortOrder,
+                    wechatProductId: term.wechatProductId,
                 },
             });
         }

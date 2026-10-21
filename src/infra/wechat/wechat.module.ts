@@ -11,6 +11,7 @@ import {
 import { WechatPayCertificateService, WechatPayClient } from './pay';
 import { MiniprogramClient } from './miniprogram';
 import { OfficialAccountClient } from './official-account';
+import { WechatVirtualPayClient } from './virtual-pay';
 import { WechatRuntimeConfigService } from './wechat-runtime-config.service';
 import { WorkClient } from './work';
 
@@ -71,6 +72,7 @@ import { WorkClient } from './work';
         WechatPayClient,
         MiniprogramClient,
         OfficialAccountClient,
+        WechatVirtualPayClient,
         WorkClient,
     ],
     exports: [
@@ -80,6 +82,7 @@ import { WorkClient } from './work';
         WechatPayClient,
         MiniprogramClient,
         OfficialAccountClient,
+        WechatVirtualPayClient,
         WorkClient,
     ],
 })

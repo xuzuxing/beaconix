@@ -4,5 +4,6 @@ export * from './clients';
 export * from './pay';
 export * from './miniprogram';
 export * from './official-account';
+export * from './virtual-pay';
 export * from './work';
 export * from './wechat.module';

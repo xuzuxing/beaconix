@@ -139,18 +139,27 @@ async function main() {
                     cycle: PlanCycle.MONTHLY,
                     durationDays: 30,
                     price: 2900,
+                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
+                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
+                    wechatProductId: 'beacon_pro_month',
                     sortOrder: 1,
                 },
                 {
                     cycle: PlanCycle.QUARTERLY,
                     durationDays: 90,
                     price: 7900,
+                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
+                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
+                    wechatProductId: 'beacon_pro_quarter',
                     sortOrder: 2,
                 },
                 {
                     cycle: PlanCycle.YEARLY,
                     durationDays: 365,
                     price: 29000,
+                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
+                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
+                    wechatProductId: 'beacon_pro_year',
                     sortOrder: 3,
                 },
             ],
@@ -177,18 +186,27 @@ async function main() {
                     cycle: PlanCycle.MONTHLY,
                     durationDays: 30,
                     price: 9900,
+                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
+                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
+                    wechatProductId: 'beacon_team_month',
                     sortOrder: 1,
                 },
                 {
                     cycle: PlanCycle.QUARTERLY,
                     durationDays: 90,
                     price: 26900,
+                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
+                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
+                    wechatProductId: 'beacon_team_quarter',
                     sortOrder: 2,
                 },
                 {
                     cycle: PlanCycle.YEARLY,
                     durationDays: 365,
                     price: 99000,
+                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
+                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
+                    wechatProductId: 'beacon_team_year',
                     sortOrder: 3,
                 },
             ],

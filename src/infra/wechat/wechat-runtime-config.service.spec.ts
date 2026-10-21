@@ -16,6 +16,15 @@ const ENV_CONFIG: WechatConfig = {
         publicKeyId: 'PUB_KEY_ID_ENV',
         mock: false,
     },
+    virtualPay: {
+        offerId: 'offer-env',
+        appKey: 'vp-appkey-env',
+        sandboxAppKey: 'vp-sandbox-env',
+        env: 0,
+        pushToken: 'vp-push-token-env',
+        pushAesKey: 'vp-push-aes-env',
+        mock: false,
+    },
     miniprogram: { appId: 'wx-mp-env', appSecret: 'mp-secret-env' },
     website: { appId: 'wx-web-env', appSecret: 'web-secret-env' },
     scanLogin: {
@@ -186,8 +195,8 @@ describe('WechatRuntimeConfigService', () => {
 
         const keys = settings.getOverriddenValue.mock.calls.map(([key]) => key);
 
-        expect(keys).toHaveLength(26);
-        expect(new Set(keys).size).toBe(26);
+        expect(keys).toHaveLength(33);
+        expect(new Set(keys).size).toBe(33);
         expect(keys).toEqual(
             expect.arrayContaining([
                 'wechat.pay.mchId',
@@ -198,6 +207,13 @@ describe('WechatRuntimeConfigService', () => {
                 'wechat.officialAccount.aesKey',
                 'wechat.work.agentId',
                 'wechat.http.timeoutMs',
+                'wechat.virtualPay.offerId',
+                'wechat.virtualPay.appKey',
+                'wechat.virtualPay.sandboxAppKey',
+                'wechat.virtualPay.env',
+                'wechat.virtualPay.pushToken',
+                'wechat.virtualPay.pushAesKey',
+                'wechat.virtualPay.mock',
             ]),
         );
     });

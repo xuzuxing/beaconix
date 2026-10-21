@@ -117,6 +117,17 @@ export interface WechatBinaryResponse {
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 /**
+ * Marks a body that is already JSON-serialized and must be sent verbatim.
+ *
+ * WeChat's xpay endpoints sign the *exact* bytes that go on the wire
+ * (`pay_sig = HMAC(appKey, uri + '&' + body)`), so re-serializing an object
+ * would invalidate the signature as soon as key order changes.
+ */
+export class RawJsonBody {
+    constructor(readonly raw: string) {}
+}
+
+/**
  * Thin wrapper around the global `fetch` for WeChat APIs.
  *
  * Responsibilities:
@@ -152,6 +163,18 @@ export class WechatHttpClient {
         options: WechatRequestOptions = {},
     ): Promise<T> {
         return this.request<T>('POST', path, body, options);
+    }
+
+    /**
+     * POSTs a string that is already JSON, byte for byte. Use it whenever the
+     * request must be signed over the raw body (WeChat xpay / virtual payment).
+     */
+    postRawJson<T>(
+        path: string,
+        rawBody: string,
+        options: WechatRequestOptions = {},
+    ): Promise<T> {
+        return this.request<T>('POST', path, new RawJsonBody(rawBody), options);
     }
 
     /** POSTs JSON and returns the raw response bytes (e.g. mini-program QR PNG/JPEG). */
@@ -272,7 +295,12 @@ export class WechatHttpClient {
                         : { 'content-type': 'application/json' }),
                     ...options.headers,
                 },
-                body: body === undefined ? undefined : JSON.stringify(body),
+                body:
+                    body === undefined
+                        ? undefined
+                        : body instanceof RawJsonBody
+                          ? body.raw
+                          : JSON.stringify(body),
                 signal: controller.signal,
             });
         } finally {

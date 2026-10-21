@@ -8,6 +8,7 @@ import type {
     WechatPayConfig,
     WechatScanLoginConfig,
     WechatScanLoginEnvVersion,
+    WechatVirtualPayConfig,
     WechatWebsiteConfig,
     WechatWorkConfig,
 } from '../../config';
@@ -27,6 +28,15 @@ const EMPTY_WECHAT_CONFIG: WechatConfig = {
         notifyUrl: '',
         publicKey: '',
         publicKeyId: '',
+        mock: true,
+    },
+    virtualPay: {
+        offerId: '',
+        appKey: '',
+        sandboxAppKey: '',
+        env: 0,
+        pushToken: '',
+        pushAesKey: '',
         mock: true,
     },
     miniprogram: { appId: '', appSecret: '' },
@@ -74,6 +84,7 @@ export class WechatRuntimeConfigService {
     async config(): Promise<WechatConfig> {
         const [
             pay,
+            virtualPay,
             miniprogram,
             website,
             scanLogin,
@@ -82,6 +93,7 @@ export class WechatRuntimeConfigService {
             http,
         ] = await Promise.all([
             this.pay(),
+            this.virtualPay(),
             this.miniprogram(),
             this.website(),
             this.scanLogin(),
@@ -92,6 +104,7 @@ export class WechatRuntimeConfigService {
 
         return {
             pay,
+            virtualPay,
             miniprogram,
             website,
             scanLogin,
@@ -134,6 +147,38 @@ export class WechatRuntimeConfigService {
             notifyUrl,
             publicKey,
             publicKeyId,
+            mock,
+        };
+    }
+
+    async virtualPay(): Promise<WechatVirtualPayConfig> {
+        const env = this.env().virtualPay;
+        const [
+            offerId,
+            appKey,
+            sandboxAppKey,
+            envFlag,
+            pushToken,
+            pushAesKey,
+            mock,
+        ] = await Promise.all([
+            this.text('wechat.virtualPay.offerId', env.offerId),
+            this.text('wechat.virtualPay.appKey', env.appKey),
+            this.text('wechat.virtualPay.sandboxAppKey', env.sandboxAppKey),
+            this.integer('wechat.virtualPay.env', env.env),
+            this.text('wechat.virtualPay.pushToken', env.pushToken),
+            this.text('wechat.virtualPay.pushAesKey', env.pushAesKey),
+            this.flag('wechat.virtualPay.mock', env.mock),
+        ]);
+
+        return {
+            offerId,
+            appKey,
+            sandboxAppKey,
+            // 现网只认 0：写成别的值（例如把沙箱当现网）会让每一笔下单都报 -15011。
+            env: envFlag === 1 ? 1 : 0,
+            pushToken,
+            pushAesKey,
             mock,
         };
     }

@@ -43,6 +43,7 @@ describe('AttachmentCleanupService', () => {
 
         const where = prisma.attachment.findMany.mock.calls[0][0].where;
         expect(where).toMatchObject({
+            claimedAt: null,
             taskId: null,
             ticketId: null,
             ticketReplyId: null,

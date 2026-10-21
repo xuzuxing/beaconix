@@ -16,6 +16,7 @@ import {
     SettingDefinition,
 } from './settings.defaults';
 import { isValidStringArray, normalizeStringArray } from './settings.util';
+import { claimPersistedObjects } from '../attachments/attachment-claims';
 
 export interface AttachmentRuntimeSettings {
     maxImageSizeMb: number;
@@ -151,6 +152,18 @@ export class SettingsService {
 
         this.valueCache.delete(key);
         this.overrideCache.delete(key);
+
+        // `system.logoUrl` / `system.faviconUrl` name an upload that lives only
+        // as this string; claim the object so the nightly attachment cleanup
+        // does not delete a brand image that is still rendered everywhere.
+        if (typeof value === 'string' && value) {
+            await claimPersistedObjects(this.prisma, [value]).catch((error) =>
+                this.logger.warn(
+                    `Failed to claim setting upload for ${key}: ${error}`,
+                ),
+            );
+        }
+
         return this.entityFromRow(row, definition);
     }
 

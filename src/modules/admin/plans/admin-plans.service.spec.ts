@@ -278,6 +278,7 @@ describe('AdminPlansService', () => {
                 price: 2700,
                 enabled: true,
                 sortOrder: 0,
+                wechatProductId: null,
             },
         });
         expect(tx.planTerm.create).toHaveBeenCalledWith({

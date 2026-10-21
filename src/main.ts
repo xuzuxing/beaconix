@@ -25,6 +25,11 @@ async function bootstrap() {
     const appConfig = configService.get<AppConfig>('app')!;
     const logger = new Logger('Bootstrap');
 
+    // WeChat virtual payment pushes `text/xml`, which the default JSON /
+    // urlencoded parsers ignore — without a text parser `rawBody` stays empty
+    // and the push payload would be lost.
+    app.useBodyParser('text', { type: ['text/xml', 'application/xml'] });
+
     // Global prefix
     app.setGlobalPrefix('api');
 

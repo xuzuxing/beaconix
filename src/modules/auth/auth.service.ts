@@ -39,6 +39,7 @@ import {
     ResetPasswordDto,
 } from './dto';
 import { UserEntity } from './entities';
+import { claimPersistedObjects } from '../attachments/attachment-claims';
 import { TwoFactorService } from './two-factor/two-factor.service';
 import type { RequestMeta } from '../../common/interfaces';
 
@@ -193,6 +194,19 @@ export class AuthService {
             where: { id: userId },
             data: dto,
         });
+
+        // An avatar uploaded through `POST /api/attachments/upload` is an
+        // unhosted attachment row; without this claim the nightly cleanup
+        // would delete the file while `user.avatarUrl` still points at it.
+        if (dto.avatarUrl) {
+            await claimPersistedObjects(this.prisma, [dto.avatarUrl]).catch(
+                (error) =>
+                    this.logger.warn(
+                        `Failed to claim avatar upload for user ${userId}: ${error}`,
+                    ),
+            );
+        }
+
         return new UserEntity(user);
     }
 

@@ -21,6 +21,7 @@ import {
     WechatMiniProgramLoginDto,
 } from './dto';
 import { AuthService } from '../auth.service';
+import { claimPersistedObjects } from '../../attachments/attachment-claims';
 import type { RequestMeta } from '../../../common/interfaces';
 
 @Injectable()
@@ -156,6 +157,7 @@ export class WechatAuthService {
             }
 
             await this.ensureUserIdentity(existing.id, input);
+            await this.claimAvatar(input.avatarUrl);
 
             return { user: existing, isNewUser: false };
         }
@@ -205,6 +207,8 @@ export class WechatAuthService {
             this.logger.log(
                 `WeChat user created via ${input.provider}: ${this.maskEmail(user.email)}`,
             );
+
+            await this.claimAvatar(input.avatarUrl);
 
             return { user, isNewUser: true };
         } catch (error) {
@@ -288,6 +292,21 @@ export class WechatAuthService {
                 avatarUrl: input.avatarUrl ?? null,
             },
         });
+    }
+
+    /**
+     * Marks the mini program's avatar upload as in use.
+     *
+     * The mini program picks an avatar and uploads it through
+     * `POST /api/attachments/upload`, so the object is an unhosted row that the
+     * nightly cleanup would otherwise delete a day later. A WeChat CDN URL
+     * matches no row and is a no-op here.
+     */
+    private async claimAvatar(avatarUrl?: string): Promise<void> {
+        if (!avatarUrl) return;
+        await claimPersistedObjects(this.prisma, [avatarUrl]).catch((error) =>
+            this.logger.warn(`Failed to claim WeChat avatar upload: ${error}`),
+        );
     }
 
     private async finishLogin(

@@ -4,7 +4,9 @@ import {
     IsEnum,
     IsInt,
     IsOptional,
+    IsString,
     Max,
+    MaxLength,
     Min,
 } from 'class-validator';
 import { PlanCycle } from '../../../../generated/prisma/enums';
@@ -65,4 +67,15 @@ export class CreatePlanTermDto {
     @IsInt()
     @Min(0)
     sortOrder?: number;
+
+    @ApiPropertyOptional({
+        example: 'beacon_pro_month',
+        nullable: true,
+        description:
+            '小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】发布到现网的道具）。留空/null 表示该档位不接受虚拟支付下单。道具单价必须与 price 一致（分），否则下单会被微信拒绝（-15013）。',
+    })
+    @IsOptional()
+    @IsString()
+    @MaxLength(64)
+    wechatProductId?: string | null;
 }

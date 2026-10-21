@@ -93,7 +93,7 @@ describe('SettingsService', () => {
         expect(byKey.get('wechat.scanLogin.page')?.section).toBe('scanLogin');
 
         const wechat = settings.filter((item) => item.group === 'wechat');
-        expect(wechat).toHaveLength(26);
+        expect(wechat).toHaveLength(33);
         // 顺序即 key 首次出现的顺序，展示文案由前端按 key 做 i18n
         expect([...new Set(wechat.map((item) => item.section))]).toEqual([
             'pay',
@@ -103,6 +103,7 @@ describe('SettingsService', () => {
             'officialAccount',
             'work',
             'http',
+            'virtualPay',
         ]);
 
         // 全或无：storage 里混着两层 key（storage.driver），整组保持平铺，

@@ -21,6 +21,10 @@ const BATCH_SIZE = 200;
  * older than 24 hours whose `taskId` / `ticketId` / `ticketReplyId` are all
  * empty is garbage and is deleted together with its object.
  *
+ * An avatar, an organization logo or a brand image has no such host either — it
+ * lives only as a URL on another row — so those flows mark their upload with
+ * `claimedAt` (see `attachment-claims.ts`) and this job leaves it alone.
+ *
  * Runs daily at 3:30 AM, after the 3:00 AM monitoring history cleanup.
  */
 @Injectable()
@@ -46,6 +50,9 @@ export class AttachmentCleanupService implements OnModuleInit {
         const orphans = await this.prisma.attachment.findMany({
             where: {
                 createdAt: { lt: cutoff },
+                // `claimedAt` covers the uploads something durable points at
+                // without a task/ticket host: avatars, logos, brand images.
+                claimedAt: null,
                 taskId: null,
                 ticketId: null,
                 ticketReplyId: null,

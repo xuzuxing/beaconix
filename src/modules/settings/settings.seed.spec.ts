@@ -31,11 +31,12 @@ describe('settings seed rows', () => {
             row.key.startsWith('wechat.'),
         );
 
-        expect(wechat).toHaveLength(26);
+        expect(wechat).toHaveLength(33);
         // group / section 都是代码侧元数据，seed 不写表
         expect(wechat.every((row) => !('section' in row))).toBe(true);
-        // 支付私钥、APIv3 密钥、三套 appSecret、公众号 token/aesKey、企业微信 corpSecret
-        expect(wechat.filter((row) => row.isSecret)).toHaveLength(8);
+        // 支付私钥、APIv3 密钥、三套 appSecret、公众号 token/aesKey、企业微信 corpSecret、
+        // 虚拟支付 appKey / 沙箱 appKey / 消息推送 token / aesKey
+        expect(wechat.filter((row) => row.isSecret)).toHaveLength(12);
         expect(wechat.every((row) => row.overridden === false)).toBe(true);
     });
 

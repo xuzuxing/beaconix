@@ -62,8 +62,33 @@ export interface WechatHttpConfig {
     maxRetries: number;
 }
 
+/**
+ * 小程序虚拟支付（道具直购）。
+ *
+ * 与 Pay V3 完全独立的一套凭据：`offerId` + `appKey` 来自 MP 后台
+ * 【虚拟支付 → 基本配置】，`paySig` 用 `appKey` 做 HMAC-SHA256。
+ * 文档：https://developers.weixin.qq.com/miniprogram/dev/platform-capabilities/business-capabilities/virtual-payment/person.html
+ */
+export interface WechatVirtualPayConfig {
+    /** 虚拟支付 OfferID（虚拟支付商户号）。 */
+    offerId: string;
+    /** 现网 AppKey，`env = 0` 时用于 paySig 签名。 */
+    appKey: string;
+    /** 沙箱 AppKey，`env = 1` 时替代现网 AppKey。 */
+    sandboxAppKey: string;
+    /** 0 = 现网，1 = 沙箱。现网部署必须是 0（微信 -15011）。 */
+    env: number;
+    /** MP 后台【开发管理 → 消息推送】配置的 Token，明文模式验签用。 */
+    pushToken: string;
+    /** MP 后台【开发管理 → 消息推送】的 EncodingAESKey，安全模式解密推送用。 */
+    pushAesKey: string;
+    /** true 时不调用真实微信接口，便于无凭据联调。 */
+    mock: boolean;
+}
+
 export interface WechatConfig {
     pay: WechatPayConfig;
+    virtualPay: WechatVirtualPayConfig;
     miniprogram: WechatMiniProgramConfig;
     website: WechatWebsiteConfig;
     scanLogin: WechatScanLoginConfig;
@@ -103,6 +128,15 @@ export const wechatConfig = registerAs('wechat', (): WechatConfig => ({
         publicKey: optionalEnv('WECHAT_PAY_PUBLIC_KEY', ''),
         publicKeyId: optionalEnv('WECHAT_PAY_PUBLIC_KEY_ID', ''),
         mock: optionalEnv('WECHAT_PAY_MOCK', 'true') !== 'false',
+    },
+    virtualPay: {
+        offerId: optionalEnv('WECHAT_VIRTUALPAY_OFFER_ID', ''),
+        appKey: optionalEnv('WECHAT_VIRTUALPAY_APP_KEY', ''),
+        sandboxAppKey: optionalEnv('WECHAT_VIRTUALPAY_SANDBOX_APP_KEY', ''),
+        env: optionalInt('WECHAT_VIRTUALPAY_ENV', 0),
+        pushToken: optionalEnv('WECHAT_VIRTUALPAY_PUSH_TOKEN', ''),
+        pushAesKey: optionalEnv('WECHAT_VIRTUALPAY_PUSH_AES_KEY', ''),
+        mock: optionalEnv('WECHAT_VIRTUALPAY_MOCK', 'true') !== 'false',
     },
     miniprogram: {
         appId: optionalEnv('WECHAT_MINI_APPID', ''),

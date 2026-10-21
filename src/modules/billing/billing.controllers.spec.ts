@@ -4,6 +4,7 @@ import { OrderController } from './order/order.controller';
 import { OrderService } from './order/order.service';
 import { PaymentController } from './payment/payment.controller';
 import { PaymentService } from './payment/payment.service';
+import { WechatVirtualPaymentService } from './payment/wechat-virtual-payment.service';
 import { PlanController } from './plan/plan.controller';
 import { PlanService } from './plan/plan.service';
 import { QuotaController } from './quota/quota.controller';
@@ -44,6 +45,13 @@ describe('Billing controllers', () => {
                     useValue: {
                         createPayment: jest.fn(),
                         handleWechatCallback: jest.fn(),
+                    },
+                },
+                {
+                    provide: WechatVirtualPaymentService,
+                    useValue: {
+                        createPayment: jest.fn(),
+                        handleNotify: jest.fn(),
                     },
                 },
                 {

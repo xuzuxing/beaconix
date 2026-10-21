@@ -669,6 +669,81 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         integer: true,
     },
 
+    // ── 小程序虚拟支付 ────────────────────────────────────────────────
+    // 与上面的「微信支付 V3」是两套独立凭据：小程序内的虚拟商品（订阅、解锁
+    // 功能等）按微信要求必须走虚拟支付，凭 OfferID + AppKey 做 HMAC-SHA256
+    // 签名。留空的关键项一律回退同名环境变量。
+    {
+        key: 'wechat.virtualPay.offerId',
+        name: '虚拟支付 OfferID',
+        group: 'wechat',
+        value: '',
+        valueType: SettingValueType.STRING,
+        description:
+            'MP 后台【虚拟支付 → 基本配置】里的 OfferID（虚拟支付商户号），下单时写进 signData。留空则回退 WECHAT_VIRTUALPAY_OFFER_ID。',
+    },
+    {
+        key: 'wechat.virtualPay.appKey',
+        name: '虚拟支付现网 AppKey',
+        group: 'wechat',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '现网 AppKey，用于 paySig 签名（HMAC-SHA256）。保存后不回显；留空则回退 WECHAT_VIRTUALPAY_APP_KEY。',
+    },
+    {
+        key: 'wechat.virtualPay.sandboxAppKey',
+        name: '虚拟支付沙箱 AppKey',
+        group: 'wechat',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            '沙箱 AppKey，仅在环境标识为沙箱（env = 1）时替代现网 AppKey。保存后不回显；留空则回退 WECHAT_VIRTUALPAY_SANDBOX_APP_KEY。',
+    },
+    {
+        key: 'wechat.virtualPay.env',
+        name: '虚拟支付环境',
+        group: 'wechat',
+        value: 0,
+        valueType: SettingValueType.NUMBER,
+        description:
+            '0 = 现网，1 = 沙箱。现网部署必须填 0（填 1 会被微信拒绝，错误码 -15011）。对应 WECHAT_VIRTUALPAY_ENV。',
+        min: 0,
+        max: 1,
+        integer: true,
+    },
+    {
+        key: 'wechat.virtualPay.pushToken',
+        name: '消息推送 Token',
+        group: 'wechat',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            'MP 后台【开发管理 → 消息推送】配置的 Token，用于校验发货推送的明文模式签名。保存后不回显；留空则回退 WECHAT_VIRTUALPAY_PUSH_TOKEN。',
+    },
+    {
+        key: 'wechat.virtualPay.pushAesKey',
+        name: '消息推送 EncodingAESKey',
+        group: 'wechat',
+        value: '',
+        valueType: SettingValueType.STRING,
+        isSecret: true,
+        description:
+            'MP 后台【开发管理 → 消息推送】的 EncodingAESKey（43 位），安全模式下解密发货/退款推送。保存后不回显；留空则回退 WECHAT_VIRTUALPAY_PUSH_AES_KEY。',
+    },
+    {
+        key: 'wechat.virtualPay.mock',
+        name: '模拟虚拟支付',
+        group: 'wechat',
+        value: true,
+        valueType: SettingValueType.BOOLEAN,
+        description:
+            '开启后不调用真实虚拟支付接口，返回可直接联调的模拟 payData；开始真实收款前必须关闭。对应 WECHAT_VIRTUALPAY_MOCK。',
+    },
+
     // ── 支付宝（仅支付场景）──────────────────────────────────────────
     // 只有支付一种用途，因此 key 用两层、不声明 section：推断规则会看到
     // 「组内 key 不足三段」而整组平铺，正好符合预期。

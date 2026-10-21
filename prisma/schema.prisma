@@ -727,6 +727,12 @@ model Attachment {
   ticketReplyId String?
   uploadedById  String?
 
+  /// When a business flow persisted this object's URL without a task/ticket
+  /// host — an avatar on a user, a logo on an organization, a brand image in
+  /// settings. Those rows have no host column to point at them, so this
+  /// timestamp is what keeps the orphan cleanup from deleting a live file.
+  claimedAt DateTime?
+
   createdAt DateTime @default(now())
 
   task        Task?        @relation(fields: [taskId], references: [id], onDelete: Cascade)
@@ -967,6 +973,7 @@ enum OrderStatus {
 
 enum PaymentChannel {
   WECHAT
+  WECHAT_VIRTUAL
 }
 
 enum PaymentStatus {
@@ -1557,6 +1564,9 @@ model PlanTerm {
   durationDays Int
   /// 该周期档位的价格（分）。
   price        Int
+  /// 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】发布到现网的道具）。
+  /// 空 = 该档位尚未映射，不能用虚拟支付下单；道具单价必须与 `price` 一致。
+  wechatProductId String?
   enabled      Boolean   @default(true)
   sortOrder    Int       @default(0)
 
@@ -1630,6 +1640,7 @@ model Order {
   term         PlanTerm?     @relation(fields: [termId], references: [id])
   user         User          @relation(fields: [userId], references: [id])
   payment      Payment?
+  paymentAttempts PaymentAttempt[]
   subscription Subscription?
 
   @@index([organizationId])
@@ -1644,6 +1655,8 @@ model Payment {
   id            String         @id @default(cuid())
   orderId       String         @unique
   channel       PaymentChannel
+  /// 平台侧唯一单号：微信支付 V3 是 `transaction_id`，虚拟支付是 `wx_order_id`
+  /// （发货推送里的 `WeChatPayInfo.MchOrderNo`）。幂等去重以此为准。
   transactionId String?        @unique
   prepayId      String?
   amount        Int
@@ -1659,6 +1672,49 @@ model Payment {
   @@index([status])
   @@index([transactionId])
   @@map("payments")
+}
+
+// 支付尝试（每次「发起支付」一条）
+// 微信虚拟支付要求 `outTradeNo` 每次下单重新生成、不可复用（复用报 -15002），
+// 而 `Payment.orderId` 是唯一键（一单只能有一条结算记录）。把「下单尝试」
+// 与「最终结算」拆开：用户重复点击支付会产生多条 attempt，旧单号成功回调
+// 仍能按 `outTradeNo` 找回对应的订单，不会因为覆盖而丢货。
+enum PaymentAttemptStatus {
+  PENDING
+  PAID
+  CLOSED
+  FAILED
+}
+
+model PaymentAttempt {
+  id         String              @id @default(cuid())
+  orderId    String
+  channel    PaymentChannel
+  /// 商家业务单号：8-32 位、不以 `_` 开头、每次下单重新生成。
+  outTradeNo String              @unique
+  /// 下单用的用户 openid（虚拟支付按 openid + 单号查单）。
+  openid     String
+  /// 虚拟支付道具 ID；V3 通道为空。
+  productId  String?
+  /// 金额（分），下单时从订单抄下来，回调用它核对实付金额。
+  amount     Int
+  /// 0 = 现网，1 = 沙箱。
+  env        Int                 @default(0)
+  status     PaymentAttemptStatus @default(PENDING)
+  /// 平台侧唯一单号（= `wx_order_id`），幂等键。
+  wxOrderId  String?             @unique
+  paidAt     DateTime?
+  /// 回调原文（虚拟支付是 XML 字符串，包装成 `{ xml }`）。
+  rawNotify  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@map("payment_attempts")
 }
 
 // ── 平台工单（Support Ticket）─────────────────────────────────────────────

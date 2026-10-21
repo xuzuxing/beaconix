@@ -15,6 +15,7 @@ import {
     TransferOwnershipDto,
 } from './dto';
 import { OrganizationEntity } from './entities';
+import { claimPersistedObjects } from '../attachments/attachment-claims';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ADMIN_ROLES } from '../notifications/notification-event';
 import {
@@ -78,6 +79,17 @@ export class OrganizationsService {
             return organization;
         });
 
+        // A logo uploaded through `POST /api/attachments/upload` is an unhosted
+        // attachment row; claim it so the nightly cleanup keeps the file.
+        if (dto.logoUrl) {
+            await claimPersistedObjects(this.prisma, [dto.logoUrl]).catch(
+                (error) =>
+                    this.logger.warn(
+                        `Failed to claim organization logo upload: ${error}`,
+                    ),
+            );
+        }
+
         return new OrganizationEntity(org);
     }
 
@@ -112,6 +124,17 @@ export class OrganizationsService {
             where: { id: orgId },
             data: dto,
         });
+
+        // Same rule as create: a logo lives only as a URL on the row, so the
+        // upload behind it has to be marked in use or the cleanup eats it.
+        if (dto.logoUrl) {
+            await claimPersistedObjects(this.prisma, [dto.logoUrl]).catch(
+                (error) =>
+                    this.logger.warn(
+                        `Failed to claim organization logo upload: ${error}`,
+                    ),
+            );
+        }
 
         return new OrganizationEntity(org);
     }
