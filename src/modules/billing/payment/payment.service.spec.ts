@@ -190,6 +190,18 @@ describe('PaymentService', () => {
             prisma.$transaction.mockImplementation((callback) => callback(tx));
             await service.handleWechatCallback('{}', 'signature');
             expect(tx.subscription.create).not.toHaveBeenCalled();
+            // 续费订单的快照是「原到期时刻 → 延长后的到期时刻」。
+            expect(tx.order.update).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: {
+                        serviceStartsAt: expiresAt,
+                        serviceEndsAt: new Date(
+                            expiresAt.getTime() +
+                                order.durationDays * 24 * 60 * 60 * 1000,
+                        ),
+                    },
+                }),
+            );
             expect(
                 notifications.publish.mock.calls.map(([event]) => event.type),
             ).toEqual(['PAYMENT_SUCCEEDED', 'SUBSCRIPTION_RENEWED']);
@@ -297,6 +309,16 @@ describe('PaymentService', () => {
                     data: expect.objectContaining({ status: 'PAID' }),
                 }),
             );
+            // 结算必须写下服务期快照：退款折算与订阅回收都依赖它。
+            const snapshotCall = tx.order.update.mock.calls.find(
+                ([args]) => args?.data?.serviceStartsAt,
+            )?.[0];
+
+            expect(snapshotCall).toBeDefined();
+            expect(
+                snapshotCall.data.serviceEndsAt.getTime() -
+                    snapshotCall.data.serviceStartsAt.getTime(),
+            ).toBe(order.durationDays * 24 * 60 * 60 * 1000);
             expect(tx.subscription.create).toHaveBeenCalledWith(
                 expect.objectContaining({
                     data: expect.objectContaining({

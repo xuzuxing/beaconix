@@ -9,12 +9,15 @@ import { OrderService } from './order/order.service';
 import { AlipayPaymentService } from './payment/alipay-payment.service';
 import { PaymentController } from './payment/payment.controller';
 import { PaymentProviderFactory } from './payment/payment-provider.factory';
+import { RefundProviderRegistrar } from './payment/refund-provider.registrar';
 import { PaymentService } from './payment/payment.service';
 import { WechatPaymentService } from './payment/wechat-payment.service';
 import { WechatVirtualPaymentService } from './payment/wechat-virtual-payment.service';
 import { PlanController } from './plan/plan.controller';
 import { PlanService } from './plan/plan.service';
 import { QuotaController } from './quota/quota.controller';
+import { RefundModule } from './refund/refund.module';
+import { RefundService } from './refund/refund.service';
 import { SubscriptionController } from './subscription/subscription.controller';
 import { SubscriptionExpiryService } from './subscription/subscription-expiry.service';
 import { SubscriptionService } from './subscription/subscription.service';
@@ -25,6 +28,7 @@ import { SubscriptionService } from './subscription/subscription.service';
         QuotaModule,
         WechatModule,
         AlipayModule,
+        RefundModule,
     ],
     controllers: [
         PlanController,
@@ -41,6 +45,7 @@ import { SubscriptionService } from './subscription/subscription.service';
         OrderExpiryService,
         PaymentService,
         PaymentProviderFactory,
+        RefundProviderRegistrar,
         WechatPaymentService,
         WechatVirtualPaymentService,
         AlipayPaymentService,
@@ -51,6 +56,7 @@ import { SubscriptionService } from './subscription/subscription.service';
         OrderService,
         PaymentService,
         WechatVirtualPaymentService,
+        RefundService,
     ],
 })
 export class BillingModule {}

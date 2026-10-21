@@ -7,6 +7,8 @@ import {
     PaymentAttemptStatus,
     PaymentChannel,
     PaymentStatus,
+    RefundStatus,
+    RefundType,
 } from '../../../generated/prisma/enums';
 import type {
     OrderModel,
@@ -25,9 +27,11 @@ import {
     parseXpayXml,
     readXpayEvent,
     VIRTUAL_PAY_EVENTS,
+    VIRTUAL_PAY_ORDER_STATUS,
     WechatVirtualPayClient,
     WechatRuntimeConfigService,
 } from '../../../infra/wechat';
+import type { VirtualPayOrder } from '../../../infra/wechat';
 import { MiniprogramClient } from '../../../infra/wechat/miniprogram';
 import {
     checkMsgSignature,
@@ -37,7 +41,14 @@ import {
 import { NotificationsService } from '../../notifications/notifications.service';
 import { ADMIN_ROLES } from '../../notifications/notification-event';
 import type { CreatePaymentDto } from './dto';
+import type {
+    PaymentProviderRefundInput,
+    PaymentProviderRefundResult,
+    RefundProvider,
+} from './payment-provider.interface';
 import { PaymentService } from './payment.service';
+import { RefundService } from '../refund/refund.service';
+import { generateRefundNo } from '../refund/refund-number.util';
 import { settlePaidOrder } from './payment-settlement';
 
 /** 兜底查单只回看最近一天：更早的单应该已经在后台人工对账过。 */
@@ -142,7 +153,9 @@ function firstQueryValue(
  * - 结算复用 `settlePaidOrder`，与 V3 通道共用订阅堆叠与通知逻辑。
  */
 @Injectable()
-export class WechatVirtualPaymentService {
+export class WechatVirtualPaymentService implements RefundProvider {
+    readonly channel = PaymentChannel.WECHAT_VIRTUAL;
+
     private readonly logger = new Logger(WechatVirtualPaymentService.name);
 
     constructor(
@@ -152,6 +165,7 @@ export class WechatVirtualPaymentService {
         private readonly client: WechatVirtualPayClient,
         private readonly miniprogramClient: MiniprogramClient,
         private readonly runtimeConfig: WechatRuntimeConfigService,
+        private readonly refunds: RefundService,
     ) {}
 
     /**
@@ -689,12 +703,38 @@ export class WechatVirtualPaymentService {
                 return successResult(format, false);
             }
 
+            // 本地有在途退款申请（后台或用户发起）：走统一结算，
+            // 订阅会被正常回收，与主动退款完全一致。
+            const inFlightRefund = await this.prisma.refund.findFirst({
+                where: {
+                    orderId: attempt.orderId,
+                    status: {
+                        in: [RefundStatus.PENDING, RefundStatus.PROCESSING],
+                    },
+                },
+                select: { id: true },
+            });
+
+            if (inFlightRefund) {
+                await this.refunds.markSuccess(inFlightRefund.id, {
+                    status: 'SUCCESS',
+                    channelRefundId: notify.refundId ?? undefined,
+                    raw: { source: 'xpay_refund_notify' },
+                });
+
+                return successResult(format, true);
+            }
+
             await this.prisma.$transaction(async (tx) => {
+                // Apple 侧发起的退款没有本地申请记录，金额以推送为准。
+                const refundAmount = notify.refundFee ?? attempt.amount;
+
                 if (payment) {
                     await tx.payment.update({
                         where: { id: payment.id },
                         data: {
                             status: PaymentStatus.REFUNDED,
+                            refundedAmount: { increment: refundAmount },
                             rawCallback: {
                                 refund: rawBody,
                             },
@@ -704,7 +744,34 @@ export class WechatVirtualPaymentService {
 
                 await tx.order.update({
                     where: { id: attempt.orderId },
-                    data: { status: OrderStatus.REFUNDED },
+                    data: {
+                        status: OrderStatus.REFUNDED,
+                        refundedAmount: { increment: refundAmount },
+                    },
+                });
+
+                // 补一条被动退款记录：让对账报表与后台列表能看到 Apple 发起的
+                // 退款（这类退款不回收订阅，见方法注释）。
+                await tx.refund.create({
+                    data: {
+                        refundNo: generateRefundNo(),
+                        orderId: attempt.orderId,
+                        organizationId: attempt.order.organizationId,
+                        channel: PaymentChannel.WECHAT_VIRTUAL,
+                        type: RefundType.MANUAL,
+                        status: RefundStatus.SUCCESS,
+                        amount: refundAmount,
+                        settledAmount: refundAmount,
+                        policyCode: 'MANUAL',
+                        reason: 'WeChat virtual payment refund notify',
+                        approvedBy: null,
+                        channelRefundId: notify.refundId ?? null,
+                        refundedAt: new Date(),
+                        rawResponse: {
+                            source: 'xpay_refund_notify',
+                            rawBody: rawBody.slice(0, 2000),
+                        },
+                    },
                 });
 
                 await tx.paymentAttempt.updateMany({
@@ -913,6 +980,90 @@ export class WechatVirtualPaymentService {
         return term.wechatProductId;
     }
 
+    // -- 退款（RefundProvider）------------------------------------------
+
+    /**
+     * 发起虚拟支付退款（`/xpay/refund_order`）。
+     *
+     * 这个接口只是「启动退款任务」，返回后状态是 `PROCESSING`；终态由
+     * `xpay_refund_notify` 推送或 `queryRefund` 的 `query_order` 反查确认。
+     *
+     * iOS 上用户也可能直接向 Apple 申请退款，那条路不经过这里，只能被动落账
+     * （见 `handleRefundNotify`）。
+     */
+    async refund(
+        input: PaymentProviderRefundInput,
+    ): Promise<PaymentProviderRefundResult> {
+        const attempt = await this.findRefundableAttempt(input.orderId);
+
+        if (!attempt) {
+            throw new BadRequestException(
+                'No paid virtual payment attempt for this order',
+            );
+        }
+
+        if (await this.client.isMock()) {
+            return { status: 'SUCCESS', raw: { mock: true } };
+        }
+
+        const { env } = await this.client.credentials();
+
+        await this.client.refundOrder({
+            openid: attempt.openid,
+            outTradeNo: attempt.outTradeNo,
+            env,
+            refundFee: input.refundFee,
+            // 微信限制退款原因 80 字节，宁可截断也不要整单失败
+            reason: input.reason?.slice(0, 80),
+        });
+
+        return {
+            status: 'PROCESSING',
+            raw: { outTradeNo: attempt.outTradeNo },
+        };
+    }
+
+    /** 退款推送丢失时用 `query_order` 反查退款终态。 */
+    async queryRefund(input: {
+        refundNo: string;
+        outTradeNo: string;
+        orderId?: string;
+    }): Promise<PaymentProviderRefundResult> {
+        const attempt = await this.findRefundableAttempt(input.orderId);
+
+        if (!attempt) {
+            // 找不到支付尝试只能继续等：判失败会让兜底轮询把正常退款标成失败
+            return {
+                status: 'PROCESSING',
+                raw: { reason: 'payment attempt not found' },
+            };
+        }
+
+        if (await this.client.isMock()) {
+            return { status: 'SUCCESS', raw: { mock: true } };
+        }
+
+        const { env } = await this.client.credentials();
+        const remote = await this.client.queryOrder({
+            openid: attempt.openid,
+            outTradeNo: attempt.outTradeNo,
+            env,
+        });
+
+        return mapVirtualRefundStatus(remote);
+    }
+
+    /** 虚拟支付退款的入参是「支付尝试」而不是订单：单号与 openid 都在这里。 */
+    private async findRefundableAttempt(orderId?: string) {
+        if (!orderId) return null;
+
+        return this.prisma.paymentAttempt.findFirst({
+            where: { orderId, status: PaymentAttemptStatus.PAID },
+            orderBy: { paidAt: 'desc' },
+            select: { outTradeNo: true, openid: true },
+        });
+    }
+
     /**
      * 生成业务单号：8-32 位、不以 `_` 开头、每次下单都不同。
      * 用 `V` 前缀区分虚拟支付单号，方便在微信后台与 V3 单号区分。
@@ -931,4 +1082,31 @@ export class WechatVirtualPaymentService {
             (error as { code?: string }).code === 'P2002'
         );
     }
+}
+
+/**
+ * `query_order` 的退款状态 → 平台退款状态。
+ *
+ * 虚拟支付没有独立退款单号，也没有单独的退款状态字段：退款单在 `query_order`
+ * 里复用订单状态（5 = 商户侧退款完成、8 = 用户侧到账、7 = 退款失败）。
+ */
+function mapVirtualRefundStatus(
+    remote: VirtualPayOrder,
+): PaymentProviderRefundResult {
+    if (remote.status === VIRTUAL_PAY_ORDER_STATUS.REFUND_FAILED) {
+        return {
+            status: 'FAILED',
+            failureReason: 'WeChat virtual payment refund failed',
+            raw: remote,
+        };
+    }
+
+    if (
+        remote.status === VIRTUAL_PAY_ORDER_STATUS.REFUND_MERCHANT_DONE ||
+        remote.status === VIRTUAL_PAY_ORDER_STATUS.REFUND_USER_DONE
+    ) {
+        return { status: 'SUCCESS', raw: remote };
+    }
+
+    return { status: 'PROCESSING', raw: remote };
 }

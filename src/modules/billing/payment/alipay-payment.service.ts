@@ -6,12 +6,15 @@ import {
     AlipayPayMethod,
     AlipayRuntimeConfigService,
     ALIPAY_SUCCESS_TRADE_STATUSES,
+    type AlipayRefundApiResult,
 } from '../../../infra/alipay';
 import type {
     PaymentProvider,
     PaymentProviderCallbackResult,
     PaymentProviderCreateInput,
     PaymentProviderPayParams,
+    PaymentProviderRefundInput,
+    PaymentProviderRefundResult,
 } from './payment-provider.interface';
 
 /** 未指定时的默认产品码：PC 收银台。 */
@@ -130,6 +133,52 @@ export class AlipayPaymentService implements PaymentProvider {
         };
     }
 
+    /**
+     * 提交退款（`alipay.trade.refund`）。
+     *
+     * 支付宝退款是同步的，接口返回即终态；金额单位要换算成元。
+     */
+    async refund(
+        input: PaymentProviderRefundInput,
+    ): Promise<PaymentProviderRefundResult> {
+        const config = await this.runtimeConfig.config();
+
+        if (config.mock) {
+            return {
+                status: 'SUCCESS',
+                raw: { mock: true, outRefundNo: input.outRefundNo },
+            };
+        }
+
+        const result = await this.client.refund({
+            outTradeNo: input.outTradeNo,
+            outRefundNo: input.outRefundNo,
+            // 平台内金额是分，支付宝要元的两位小数字符串
+            refundAmount: yuanFromFen(input.refundFee),
+            reason: input.reason,
+        });
+
+        return mapAlipayRefundResult(result);
+    }
+
+    async queryRefund(input: {
+        refundNo: string;
+        outTradeNo: string;
+    }): Promise<PaymentProviderRefundResult> {
+        const config = await this.runtimeConfig.config();
+
+        if (config.mock) {
+            return { status: 'SUCCESS', raw: { mock: true } };
+        }
+
+        return mapAlipayRefundQuery(
+            await this.client.queryRefund({
+                outTradeNo: input.outTradeNo,
+                outRefundNo: input.refundNo,
+            }),
+        );
+    }
+
     // -- 内部 ------------------------------------------------------------
 
     private mockPayParams(input: {
@@ -186,9 +235,45 @@ export function yuanFromFen(fen: number): string {
 }
 
 /**
- * 异步通知是 `application/x-www-form-urlencoded`：解析成字典并剔除空值，
- * 与支付宝验签时的拼接规则保持一致（空值参与拼接会必然验签失败）。
+ * `alipay.trade.refund` 的响应 → 平台退款结果。
+ *
+ * `fund_change = N` 表示「本次没有资金变动」：同号重复请求（幂等重放）会这样
+ * 返回，仍然算成功——钱只退了一次。
  */
+export function mapAlipayRefundResult(
+    result: AlipayRefundApiResult,
+): PaymentProviderRefundResult {
+    if (result.code !== '10000') {
+        throw new AlipayApiError(
+            `Alipay refund failed: ${result.subMsg ?? result.msg ?? 'unknown error'}`,
+            result.code,
+            result.subCode,
+        );
+    }
+
+    return { status: 'SUCCESS', raw: result };
+}
+
+/**
+ * `alipay.trade.fastpay.refund.query` 的响应 → 平台退款结果。
+ *
+ * 查不到（`code != 10000`）只能算「处理中」：支付宝可能还没落账，
+ * 判失败会让轮询把正常退款标成失败。
+ */
+export function mapAlipayRefundQuery(
+    result: AlipayRefundApiResult,
+): PaymentProviderRefundResult {
+    if (result.code !== '10000') {
+        return { status: 'PROCESSING', raw: result };
+    }
+
+    return {
+        status:
+            result.refundStatus === 'REFUND_SUCCESS' ? 'SUCCESS' : 'PROCESSING',
+        raw: result,
+    };
+}
+
 export function parseNotifyParams(rawBody: string): Record<string, string> {
     const params: Record<string, string> = {};
 

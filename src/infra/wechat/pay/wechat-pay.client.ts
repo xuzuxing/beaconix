@@ -185,8 +185,40 @@ export class WechatPayClient {
         rawBody: string,
         headers: WechatPayHeaderBag,
     ): Promise<WechatPayTransaction> {
-        const endpoint = 'POST /v3/notify/transactions';
+        const plaintext = await this.verifyAndDecrypt(
+            rawBody,
+            headers,
+            'POST /v3/notify/transactions',
+        );
 
+        return JSON.parse(plaintext) as WechatPayTransaction;
+    }
+
+    /**
+     * 退款结果通知（`/v3/refund/domestic/notifications`）。
+     *
+     * 与交易通知同一套验签 + AES-GCM 解密，只有 endpoint 名（错误上下文）
+     * 与解密后的报文结构不同：退款通知里是 `WechatPayRefund`。
+     */
+    async parseRefundNotification(
+        rawBody: string,
+        headers: WechatPayHeaderBag,
+    ): Promise<WechatPayRefund> {
+        const plaintext = await this.verifyAndDecrypt(
+            rawBody,
+            headers,
+            'POST /v3/refund/domestic/notifications',
+        );
+
+        return JSON.parse(plaintext) as WechatPayRefund;
+    }
+
+    /** 通知通用流程：头校验 → 时间窗 → 平台证书验签 → AES-GCM 解密。 */
+    private async verifyAndDecrypt(
+        rawBody: string,
+        headers: WechatPayHeaderBag,
+        endpoint: string,
+    ): Promise<string> {
         const timestamp = readHeader(headers, 'wechatpay-timestamp');
         const nonce = readHeader(headers, 'wechatpay-nonce');
         const signature = readHeader(headers, 'wechatpay-signature');
@@ -226,9 +258,8 @@ export class WechatPayClient {
 
         const envelope = this.parseEnvelope(rawBody, endpoint);
         const { apiV3Key } = await this.runtimeConfig.pay();
-        const plaintext = decryptResource(apiV3Key, envelope.resource);
 
-        return JSON.parse(plaintext) as WechatPayTransaction;
+        return decryptResource(apiV3Key, envelope.resource);
     }
 
     // -- Helpers ---------------------------------------------------------

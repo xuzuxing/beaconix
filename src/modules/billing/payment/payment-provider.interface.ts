@@ -31,6 +31,59 @@ export type PaymentCallbackHeaders = Record<
     string | string[] | undefined
 >;
 
+export interface PaymentProviderRefundInput {
+    /** 平台退款单号，同时是渠道幂等键（微信 `out_refund_no`、支付宝 `out_request_no`）。 */
+    outRefundNo: string;
+    /** 平台订单号（`Order.orderNo`），用于渠道侧定位原支付。 */
+    outTradeNo: string;
+    /** 平台订单 id：虚拟支付要靠它找 `PaymentAttempt`（openid + 真实单号）。 */
+    orderId?: string;
+    /** 渠道交易号（微信 `transaction_id`）。 */
+    transactionId?: string;
+    /** 退款金额（分）。 */
+    refundFee: number;
+    /** 原订单金额（分），微信要求上送用于校验。 */
+    totalFee: number;
+    reason?: string;
+}
+
+export type PaymentProviderRefundStatus = 'SUCCESS' | 'PROCESSING' | 'FAILED';
+
+export interface PaymentProviderRefundResult {
+    status: PaymentProviderRefundStatus;
+    /** 渠道退款单号（微信 `refund_id`）。 */
+    channelRefundId?: string;
+    failureReason?: string;
+    raw?: unknown;
+}
+
+/** 渠道退款结果通知解析后的内容。 */
+export interface PaymentProviderRefundCallback extends PaymentProviderRefundResult {
+    /** 渠道回传的平台退款单号（`out_refund_no`），用于定位本地记录。 */
+    outRefundNo: string;
+}
+
+/**
+ * 只具备退款能力的渠道。
+ *
+ * 虚拟支付（小程序道具）的下单走 `PaymentAttempt` + `wx.requestVirtualPayment`，
+ * 与 `PaymentProvider` 的契约（返回 payParams）对不上，所以不实现完整接口，
+ * 只单独登记退款能力，供 `RefundService` 统一调用。
+ */
+export interface RefundProvider {
+    readonly channel: PaymentChannel;
+
+    refund(
+        input: PaymentProviderRefundInput,
+    ): Promise<PaymentProviderRefundResult>;
+
+    queryRefund?(input: {
+        refundNo: string;
+        outTradeNo: string;
+        orderId?: string;
+    }): Promise<PaymentProviderRefundResult>;
+}
+
 /**
  * A payment channel adapter. Add a new provider (Alipay, Stripe, ...) by
  * implementing this interface and registering it in PaymentProviderFactory.
@@ -55,4 +108,34 @@ export interface PaymentProvider {
         signature: string,
         headers?: PaymentCallbackHeaders,
     ): Promise<PaymentProviderCallbackResult>;
+
+    /**
+     * Submits a refund to the channel.
+     *
+     * `PROCESSING` is a legitimate answer: WeChat confirms asynchronously and
+     * Alipay can time out, so the caller must not treat it as failure.
+     */
+    refund(
+        input: PaymentProviderRefundInput,
+    ): Promise<PaymentProviderRefundResult>;
+
+    /**
+     * Re-reads a refund's state from the channel. Used by the reconcile job
+     * when the callback never arrives (Alipay has no refund callback at all).
+     */
+    queryRefund?(input: {
+        refundNo: string;
+        outTradeNo: string;
+        orderId?: string;
+    }): Promise<PaymentProviderRefundResult>;
+
+    /**
+     * Parses a refund-result notification. Only channels that actually push
+     * refund results implement it (WeChat does; Alipay answers synchronously).
+     */
+    parseRefundCallback?(
+        rawBody: string,
+        signature: string,
+        headers?: PaymentCallbackHeaders,
+    ): Promise<PaymentProviderRefundCallback>;
 }

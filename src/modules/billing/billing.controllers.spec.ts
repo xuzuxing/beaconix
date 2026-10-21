@@ -8,6 +8,7 @@ import { WechatVirtualPaymentService } from './payment/wechat-virtual-payment.se
 import { PlanController } from './plan/plan.controller';
 import { PlanService } from './plan/plan.service';
 import { QuotaController } from './quota/quota.controller';
+import { RefundService } from './refund/refund.service';
 import { SubscriptionController } from './subscription/subscription.controller';
 import { SubscriptionService } from './subscription/subscription.service';
 import { QuotaService } from '../../shared/quota/quota.service';
@@ -57,6 +58,16 @@ describe('Billing controllers', () => {
                 {
                     provide: QuotaService,
                     useValue: { getUsageSummary: jest.fn() },
+                },
+                {
+                    provide: RefundService,
+                    useValue: {
+                        create: jest.fn(),
+                        quote: jest.fn(),
+                        retry: jest.fn(),
+                        markClosed: jest.fn(),
+                        handleWechatRefundCallback: jest.fn(),
+                    },
                 },
             ],
         })

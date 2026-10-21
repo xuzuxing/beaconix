@@ -29,6 +29,7 @@ import { CreatePaymentDto } from './dto';
 import type { PaymentCallbackHeaders } from './payment-provider.interface';
 import { PaymentService } from './payment.service';
 import { WechatVirtualPaymentService } from './wechat-virtual-payment.service';
+import { RefundService } from '../refund/refund.service';
 
 /** Case-insensitive header lookup for Express/Nest header bags. */
 function readHeader(
@@ -54,6 +55,7 @@ export class PaymentController {
     constructor(
         private readonly paymentService: PaymentService,
         private readonly virtualPayService: WechatVirtualPaymentService,
+        private readonly refundService: RefundService,
     ) {}
 
     @Post('orders/:id/pay')
@@ -159,6 +161,46 @@ export class PaymentController {
         );
 
         return result;
+    }
+
+    /**
+     * 微信退款结果通知（`/v3/refund/domestic/notifications`）。
+     *
+     * 与交易回调同一套验签与解密；退款单按 `out_refund_no` 找回本地记录，
+     * 推进状态后回裸 JSON `{ code: "SUCCESS" }`。处理失败回 400 + FAIL，
+     * 微信会按退避重试。
+     */
+    @Post('payment/wechat/refund-callback')
+    @Public()
+    @SkipTransform()
+    @ApiOperation({ summary: 'WeChat refund callback (idempotent)' })
+    @ApiBody({
+        description:
+            'WeChat refund notification envelope with an encrypted resource',
+    })
+    @ApiOkResponse({ description: '{ code: "SUCCESS", message: "成功" }' })
+    async wechatRefundCallback(
+        @Req() request: RawBodyRequest<Request>,
+        @Headers() headers: PaymentCallbackHeaders,
+        @Body() body: unknown,
+        @Res({ passthrough: true }) response: Response,
+    ) {
+        const rawBody =
+            request.rawBody?.toString('utf8') ?? JSON.stringify(body);
+
+        const result = await this.refundService.handleWechatRefundCallback(
+            rawBody,
+            readHeader(headers, 'wechatpay-signature') ?? '',
+            headers,
+        );
+
+        response.status(
+            result.handled ? HttpStatus.OK : HttpStatus.BAD_REQUEST,
+        );
+
+        return result.handled
+            ? { code: 'SUCCESS', message: '成功' }
+            : { code: 'FAIL', message: result.message ?? 'FAIL' };
     }
 
     /**

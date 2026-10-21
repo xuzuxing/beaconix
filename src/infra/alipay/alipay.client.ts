@@ -16,6 +16,8 @@ import {
     type AlipayNotifyParams,
     type AlipayPrecreateRequest,
     type AlipayPrecreateResult,
+    type AlipayRefundApiResult,
+    type AlipayRefundRequest,
 } from './alipay.types';
 
 /**
@@ -115,6 +117,40 @@ export class AlipayClient {
 
             return false;
         }
+    }
+
+    /**
+     * 提交退款（`alipay.trade.refund`）。
+     *
+     * 支付宝的退款是**同步**的：接口返回即终态，没有退款回调。幂等键是
+     * `out_request_no`，同号重复请求返回同一笔结果（`fund_change = N`）。
+     */
+    async refund(request: AlipayRefundRequest): Promise<AlipayRefundApiResult> {
+        const { sdk } = await this.sdk();
+
+        return await sdk.exec('alipay.trade.refund', {
+            bizContent: {
+                outTradeNo: request.outTradeNo,
+                refundAmount: request.refundAmount,
+                outRequestNo: request.outRefundNo,
+                ...(request.reason ? { refundReason: request.reason } : {}),
+            },
+        });
+    }
+
+    /** 查询退款（`alipay.trade.fastpay.refund.query`），兜底轮询用。 */
+    async queryRefund(request: {
+        outTradeNo: string;
+        outRefundNo: string;
+    }): Promise<AlipayRefundApiResult> {
+        const { sdk } = await this.sdk();
+
+        return await sdk.exec('alipay.trade.fastpay.refund.query', {
+            bizContent: {
+                outTradeNo: request.outTradeNo,
+                outRequestNo: request.outRefundNo,
+            },
+        });
     }
 
     // -- 内部 ------------------------------------------------------------

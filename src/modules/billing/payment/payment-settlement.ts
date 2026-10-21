@@ -19,6 +19,12 @@ export interface SettlementResult {
     renewed: boolean;
 }
 
+/** 结算时同时算出「这笔订单买到的时段」，用于退款折算与回收。 */
+interface SubscriptionActivation extends SettlementResult {
+    serviceStartsAt: Date;
+    serviceEndsAt: Date;
+}
+
 /**
  * 支付成功后的业务结算（与通道无关）。
  *
@@ -54,6 +60,16 @@ export async function settlePaidOrder(
     await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${order.organizationId} FOR UPDATE`;
 
     const activation = await activateSubscription(tx, order);
+
+    // 服务期快照：续费订单不会写 `Subscription.orderId`，退款时只能靠这两个
+    // 字段判断「这笔钱买到了哪段时间」。必须与订阅变更在同一个事务里落库。
+    await tx.order.update({
+        where: { id: order.id },
+        data: {
+            serviceStartsAt: activation.serviceStartsAt,
+            serviceEndsAt: activation.serviceEndsAt,
+        },
+    });
 
     const recipients = [
         order.userId,
@@ -122,7 +138,7 @@ export async function settlePaidOrder(
 async function activateSubscription(
     tx: Prisma.TransactionClient,
     order: OrderForSettlement,
-): Promise<SettlementResult> {
+): Promise<SubscriptionActivation> {
     const now = new Date();
     const dayMs = 24 * 60 * 60 * 1000;
 
@@ -136,6 +152,7 @@ async function activateSubscription(
     });
 
     if (existing) {
+        const startsAt = existing.expiresAt;
         const expiresAt = new Date(
             existing.expiresAt.getTime() + order.durationDays * dayMs,
         );
@@ -143,7 +160,14 @@ async function activateSubscription(
             where: { id: existing.id },
             data: { expiresAt },
         });
-        return { id: existing.id, expiresAt, renewed: true };
+        return {
+            id: existing.id,
+            expiresAt,
+            renewed: true,
+            // 续费的时段是「原到期时刻 → 延长后的到期时刻」。
+            serviceStartsAt: startsAt,
+            serviceEndsAt: expiresAt,
+        };
     }
 
     const [plan, effective] = await Promise.all([
@@ -190,7 +214,13 @@ async function activateSubscription(
             orderId: order.id,
         },
     });
-    return { id: subscription.id, expiresAt, renewed: false };
+    return {
+        id: subscription.id,
+        expiresAt,
+        renewed: false,
+        serviceStartsAt: startsAt,
+        serviceEndsAt: expiresAt,
+    };
 }
 
 /**

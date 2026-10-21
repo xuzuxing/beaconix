@@ -122,6 +122,7 @@ enum NotificationType {
   TWO_FACTOR_RECOVERY_CODE_USED
   TWO_FACTOR_RECOVERY_CODES_REGENERATED
   PAYMENT_SUCCEEDED
+  PAYMENT_REFUNDED
   SUBSCRIPTION_ACTIVATED
   SUBSCRIPTION_RENEWED
   SUBSCRIPTION_EXPIRING
@@ -984,6 +985,27 @@ enum PaymentStatus {
   REFUNDED
 }
 
+/// 退款的来源与算法：客服解释「为什么退这么多」时按它对照政策。
+enum RefundType {
+  /// 未生效或冷静期内：全额
+  FULL
+  /// 超过冷静期：按未使用天数折算
+  PRORATED
+  /// 后台人工指定金额
+  MANUAL
+}
+
+enum RefundStatus {
+  /// 已申请，待审批或待提交渠道
+  PENDING
+  /// 已提交渠道，等终态（微信回调 / 支付宝轮询）
+  PROCESSING
+  SUCCESS
+  FAILED
+  /// 被拒或人工关闭
+  CLOSED
+}
+
 // 监控目标
 model Monitor {
   id                 String      @id @default(cuid())
@@ -1633,6 +1655,15 @@ model Order {
   cancelledAt DateTime?
   expiresAt   DateTime
 
+  /// 本单覆盖的服务期快照（结算时写入）：退款按天折算与订阅回收都靠它定位
+  /// 「这笔订单买到了哪段时间」。续费订单不会写 `Subscription.orderId`，
+  /// 没有快照就查不出自己的时段；历史订单为空。
+  serviceStartsAt DateTime?
+  serviceEndsAt   DateTime?
+
+  /// 累计已退金额（分）。一单一退（P0/P1），保留累加是为了对账与并发超退校验。
+  refundedAmount Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1643,6 +1674,7 @@ model Order {
   payment      Payment?
   paymentAttempts PaymentAttempt[]
   subscription Subscription?
+  refunds      Refund[]
 
   @@index([organizationId])
   @@index([status])
@@ -1661,6 +1693,8 @@ model Payment {
   transactionId String?        @unique
   prepayId      String?
   amount        Int
+  /// 累计已退金额（分），与 `Order.refundedAmount` 同步累加。
+  refundedAmount Int           @default(0)
   status        PaymentStatus  @default(PENDING)
   paidAt        DateTime?
   rawCallback   Json?
@@ -1673,6 +1707,50 @@ model Payment {
   @@index([status])
   @@index([transactionId])
   @@map("payments")
+}
+
+// 退款记录（一单一退：同一订单在途/成功的记录最多一条，见 §3.5）
+// 独立成表的原因：`Payment.orderId` 是唯一键（一单一条支付记录），部分退款
+// 与对账需要按次累积，不能挤在支付记录上。
+model Refund {
+  id             String         @id @default(cuid())
+  /// 渠道幂等键：微信 `out_refund_no`、支付宝 `out_request_no`、虚拟支付 `MchOrderNo`
+  refundNo       String         @unique
+  orderId        String
+  organizationId String
+  channel        PaymentChannel
+
+  type   RefundType
+  status RefundStatus @default(PENDING)
+
+  /// 申请退款金额（分）
+  amount        Int
+  /// 渠道实际退款金额（分），部分退款/手续费场景下可能小于 `amount`
+  settledAmount Int?
+
+  /// 政策快照：COOLING_OFF / NOT_STARTED / PRORATED / MANUAL
+  policyCode    String?
+  /// 折算快照（天），免去事后重算时因时间流逝得出不同结果
+  usedDays      Int?
+  remainingDays Int?
+
+  reason          String?
+  requestedBy     String?
+  approvedBy      String?
+  channelRefundId String?
+  failureReason   String?
+  rawResponse     Json?
+  refundedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status, updatedAt])
+  @@index([organizationId])
+  @@map("refunds")
 }
 
 // 支付尝试（每次「发起支付」一条）

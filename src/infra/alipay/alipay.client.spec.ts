@@ -257,4 +257,75 @@ describe('AlipayClient', () => {
             ).resolves.toBe(false);
         });
     });
+
+    describe('refund', () => {
+        it('submits alipay.trade.refund with the yuan amount', async () => {
+            const { client, config } = createClient();
+            const exec = jest.fn().mockResolvedValue({
+                code: '10000',
+                msg: 'Success',
+                fundChange: 'Y',
+            });
+            stubSdk(client, { exec }, config);
+
+            const result = await client.refund({
+                outTradeNo: 'BW123',
+                outRefundNo: 'RF1',
+                // 调用方已经转过元，client 不再做单位换算
+                refundAmount: '199.33',
+                reason: 'not satisfied',
+            });
+
+            expect(exec).toHaveBeenCalledWith('alipay.trade.refund', {
+                bizContent: {
+                    outTradeNo: 'BW123',
+                    refundAmount: '199.33',
+                    outRequestNo: 'RF1',
+                    refundReason: 'not satisfied',
+                },
+            });
+            expect(result).toMatchObject({ code: '10000', fundChange: 'Y' });
+        });
+
+        it('omits refundReason when no reason is given', async () => {
+            const { client, config } = createClient();
+            const exec = jest.fn().mockResolvedValue({ code: '10000' });
+            stubSdk(client, { exec }, config);
+
+            await client.refund({
+                outTradeNo: 'BW123',
+                outRefundNo: 'RF1',
+                refundAmount: '1.00',
+            });
+
+            expect(exec.mock.calls[0][1].bizContent).not.toHaveProperty(
+                'refundReason',
+            );
+        });
+
+        it('queries a refund through the fastpay query endpoint', async () => {
+            const { client, config } = createClient();
+            const exec = jest.fn().mockResolvedValue({
+                code: '10000',
+                refundStatus: 'REFUND_SUCCESS',
+            });
+            stubSdk(client, { exec }, config);
+
+            const result = await client.queryRefund({
+                outTradeNo: 'BW123',
+                outRefundNo: 'RF1',
+            });
+
+            expect(exec).toHaveBeenCalledWith(
+                'alipay.trade.fastpay.refund.query',
+                {
+                    bizContent: {
+                        outTradeNo: 'BW123',
+                        outRequestNo: 'RF1',
+                    },
+                },
+            );
+            expect(result.refundStatus).toBe('REFUND_SUCCESS');
+        });
+    });
 });

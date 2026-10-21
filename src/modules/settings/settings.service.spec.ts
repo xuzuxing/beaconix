@@ -260,6 +260,7 @@ describe('SettingsService', () => {
             'attachments',
             'wechat',
             'alipay',
+            'billing',
         ]);
     });
 
@@ -514,6 +515,7 @@ describe('SettingsService', () => {
                 'attachments',
                 'wechat',
                 'alipay',
+                'billing',
             ],
         });
         expect(warnSpy).toHaveBeenCalled();

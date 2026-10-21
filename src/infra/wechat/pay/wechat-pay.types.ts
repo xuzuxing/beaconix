@@ -49,8 +49,10 @@ export interface WechatPayRefund {
     out_refund_no: string;
     out_trade_no?: string;
     transaction_id?: string;
-    /** `SUCCESS` / `CLOSED` / `PROCESSING` / `ABNORMAL`. */
+    /** 查询接口返回的执行状态：`SUCCESS` / `CLOSED` / `PROCESSING` / `ABNORMAL`。 */
     status: string;
+    /** 退款结果通知（`/v3/refund/domestic/notifications`）里的状态字段。 */
+    refund_status?: string;
     amount?: {
         total?: number;
         refund?: number;

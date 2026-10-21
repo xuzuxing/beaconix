@@ -75,3 +75,34 @@ export interface AlipayPrecreateResult {
 
 /** 异步通知参数（form-urlencoded 解析后的字典）。 */
 export type AlipayNotifyParams = Record<string, string>;
+
+export interface AlipayRefundRequest {
+    /** 原支付订单号（`Order.orderNo`）。 */
+    outTradeNo: string;
+    /** 平台退款单号，作为支付宝的 `out_request_no`（幂等键）。 */
+    outRefundNo: string;
+    /** 退款金额，元的两位小数字符串。 */
+    refundAmount: string;
+    reason?: string;
+}
+
+/**
+ * `alipay.trade.refund` / `alipay.trade.fastpay.refund.query` 的关键字段。
+ *
+ * SDK 会把下划线字段转成驼峰（`fund_change` → `fundChange`），这里按驼峰声明。
+ */
+export interface AlipayRefundApiResult {
+    /** `10000` 表示接口调用成功；业务是否真的退了钱看 `fundChange`。 */
+    code: string;
+    msg?: string;
+    subCode?: string;
+    subMsg?: string;
+    /** `Y` = 本次发生了资金变动；`N` = 幂等重复请求（之前已退成功）。 */
+    fundChange?: string;
+    tradeNo?: string;
+    outTradeNo?: string;
+    /** 退款金额（元）。 */
+    refundFee?: string;
+    /** 查询接口返回：`REFUND_SUCCESS` 表示退款已成功。 */
+    refundStatus?: string;
+}

@@ -5,6 +5,7 @@ import type { MiniprogramClient } from '../../../infra/wechat/miniprogram';
 import type { WechatRuntimeConfigService } from '../../../infra/wechat';
 import type { WechatVirtualPayClient } from '../../../infra/wechat';
 import type { NotificationsService } from '../../notifications/notifications.service';
+import type { RefundService } from '../refund/refund.service';
 import type { PaymentService } from './payment.service';
 import { WechatVirtualPaymentService } from './wechat-virtual-payment.service';
 
@@ -102,6 +103,7 @@ function createHarness(options?: {
         plan: {
             findUniqueOrThrow: jest.fn().mockResolvedValue({ sortOrder: 1 }),
         },
+        refund: { create: jest.fn() },
         $queryRaw: jest.fn().mockResolvedValue([]),
     };
 
@@ -143,6 +145,7 @@ function createHarness(options?: {
             findMany: jest.fn().mockResolvedValue([]),
         },
         payment: { findUnique: jest.fn().mockResolvedValue(null) },
+        refund: { findFirst: jest.fn().mockResolvedValue(null) },
         order: {
             findFirst: jest.fn().mockResolvedValue(order),
             update: jest.fn(),
@@ -202,6 +205,10 @@ function createHarness(options?: {
         }),
     };
 
+    const refunds = {
+        markSuccess: jest.fn().mockResolvedValue({ id: 'refund-1' }),
+    };
+
     const service = new WechatVirtualPaymentService(
         prisma as unknown as PrismaService,
         paymentService as unknown as PaymentService,
@@ -209,6 +216,7 @@ function createHarness(options?: {
         client as unknown as WechatVirtualPayClient,
         miniprogramClient as unknown as MiniprogramClient,
         runtimeConfig as unknown as WechatRuntimeConfigService,
+        refunds as unknown as RefundService,
     );
 
     return {
@@ -220,6 +228,7 @@ function createHarness(options?: {
         notifications,
         miniprogramClient,
         runtimeConfig,
+        refunds,
     };
 }
 
@@ -616,6 +625,45 @@ describe('WechatVirtualPaymentService', () => {
             );
             // 订阅不自动回收
             expect(harness.tx.subscription.update).not.toHaveBeenCalled();
+        });
+
+        it('routes through the unified refund path when a local refund is in flight', async () => {
+            const harness = createHarness();
+            harness.prisma.payment.findUnique.mockResolvedValue({
+                id: 'payment-1',
+                orderId: order.id,
+                status: PaymentStatus.SUCCESS,
+            });
+            harness.prisma.refund.findFirst.mockResolvedValue({
+                id: 'refund-1',
+            });
+
+            const result = await harness.service.handleNotify({
+                rawBody: `<xml>
+                    <Event><![CDATA[xpay_refund_notify]]></Event>
+                    <OpenId><![CDATA[o_user_openid]]></OpenId>
+                    <OutTradeNo><![CDATA[VABC123456789]]></OutTradeNo>
+                    <Env>0</Env>
+                    <WeChatPayInfo>
+                        <MchOrderNo><![CDATA[wx_order_1]]></MchOrderNo>
+                        <RefundId><![CDATA[wx_refund_1]]></RefundId>
+                        <RefundFee>2900</RefundFee>
+                    </WeChatPayInfo>
+                </xml>`,
+                query: {},
+            });
+
+            expect(result.handled).toBe(true);
+            // 有本地申请记录：交给 RefundService 结算（会回收订阅）
+            expect(harness.refunds.markSuccess).toHaveBeenCalledWith(
+                'refund-1',
+                expect.objectContaining({
+                    status: 'SUCCESS',
+                    channelRefundId: 'wx_refund_1',
+                }),
+            );
+            // 推送侧不再重复改订单/支付
+            expect(harness.tx.order.update).not.toHaveBeenCalled();
         });
     });
 });

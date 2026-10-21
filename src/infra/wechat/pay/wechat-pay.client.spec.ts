@@ -280,6 +280,41 @@ describe('WechatPayClient', () => {
         });
     });
 
+    describe('parseRefundNotification', () => {
+        it('verifies and decrypts a refund notification', async () => {
+            const { client } = createClient();
+            const { body, headers } = buildNotification({
+                refund_id: 'wx-refund-1',
+                out_refund_no: 'RF1',
+                out_trade_no: 'BW1',
+                refund_status: 'SUCCESS',
+                amount: { total: 2900, refund: 2900 },
+            });
+
+            const refund = await client.parseRefundNotification(body, headers);
+
+            expect(refund).toMatchObject({
+                refund_id: 'wx-refund-1',
+                out_refund_no: 'RF1',
+                refund_status: 'SUCCESS',
+            });
+        });
+
+        it('rejects a refund notification signed with the wrong key', async () => {
+            const { client } = createClient();
+            const { body, headers } = buildNotification({
+                refund_id: 'wx-refund-1',
+            });
+
+            await expect(
+                client.parseRefundNotification(body, {
+                    ...headers,
+                    'wechatpay-signature': 'not-a-signature',
+                }),
+            ).rejects.toThrow(WechatApiError);
+        });
+    });
+
     describe('refreshPlatformCertificates', () => {
         it('delegates to the certificate service', async () => {
             const { client, certificates } = createClient();

@@ -11,6 +11,7 @@ import {
     MonitorDataCleanupService,
     AttachmentCleanupService,
     WechatVirtualPayReconcileService,
+    RefundReconcileService,
 } from './jobs';
 
 @Module({
@@ -28,6 +29,7 @@ import {
         MonitorDataCleanupService,
         AttachmentCleanupService,
         WechatVirtualPayReconcileService,
+        RefundReconcileService,
     ],
 })
 export class CronModule {}

@@ -25,6 +25,7 @@ export const SCHEDULED_JOBS = {
     probeIngestSweep: 'probe-ingest-sweep',
     workspaceNotificationDelivery: 'workspace-notification-delivery',
     wechatVirtualPayReconcile: 'wechat-virtual-pay-reconcile',
+    refundReconcile: 'refund-reconcile',
 } as const;
 
 export type ScheduledJobName =
@@ -54,4 +55,6 @@ export const SCHEDULED_JOB_PATTERNS: Record<ScheduledJobName, string> = {
     'workspace-notification-delivery': '* * * * *',
     // 虚拟支付官方建议：推送丢失时每 5 分钟查单兜底一次
     'wechat-virtual-pay-reconcile': '*/5 * * * *',
+    // 退款同理：微信回调可能丢失，支付宝压根没有退款回调
+    'refund-reconcile': '*/5 * * * *',
 };

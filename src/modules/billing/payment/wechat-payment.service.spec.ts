@@ -7,6 +7,8 @@ function createService(mock: boolean) {
         createJsapiTransaction: jest.fn(),
         buildJsapiPayParams: jest.fn(),
         parseNotification: jest.fn(),
+        createRefund: jest.fn(),
+        queryRefund: jest.fn(),
     };
     const runtimeConfig = {
         pay: jest.fn().mockResolvedValue({ mock }),
@@ -108,6 +110,101 @@ describe('WechatPaymentService', () => {
                 'wechatpay-signature': 'sig',
             });
             expect(result.trade_state).toBe('SUCCESS');
+        });
+    });
+
+    describe('refund', () => {
+        const refundInput = {
+            outRefundNo: 'RF1',
+            outTradeNo: 'BW1',
+            transactionId: 'tx-1',
+            refundFee: 2900,
+            totalFee: 2900,
+            reason: 'not needed',
+        };
+
+        it('short-circuits in mock mode', async () => {
+            const { service, payClient } = createService(true);
+
+            const result = await service.refund(refundInput);
+
+            expect(result).toMatchObject({
+                status: 'SUCCESS',
+                channelRefundId: 'mock_refund_RF1',
+            });
+            expect(payClient.createRefund).not.toHaveBeenCalled();
+        });
+
+        it('submits the refund and maps SUCCESS', async () => {
+            const { service, payClient } = createService(false);
+            payClient.createRefund.mockResolvedValue({
+                refund_id: 'wx-refund-1',
+                out_refund_no: 'RF1',
+                status: 'SUCCESS',
+            });
+
+            const result = await service.refund(refundInput);
+
+            expect(payClient.createRefund).toHaveBeenCalledWith({
+                outRefundNo: 'RF1',
+                outTradeNo: 'BW1',
+                transactionId: 'tx-1',
+                refundFee: 2900,
+                totalFee: 2900,
+                reason: 'not needed',
+            });
+            expect(result).toMatchObject({
+                status: 'SUCCESS',
+                channelRefundId: 'wx-refund-1',
+            });
+        });
+
+        it.each(['PROCESSING', 'ABNORMAL'])(
+            'keeps %s as PROCESSING instead of failing it',
+            async (status) => {
+                const { service, payClient } = createService(false);
+                payClient.createRefund.mockResolvedValue({
+                    refund_id: 'wx-refund-1',
+                    out_refund_no: 'RF1',
+                    status,
+                });
+
+                const result = await service.refund(refundInput);
+
+                expect(result.status).toBe('PROCESSING');
+                expect(result.failureReason).toBeUndefined();
+            },
+        );
+
+        it('treats CLOSED as FAILED so it can be retried', async () => {
+            const { service, payClient } = createService(false);
+            payClient.createRefund.mockResolvedValue({
+                refund_id: 'wx-refund-1',
+                out_refund_no: 'RF1',
+                status: 'CLOSED',
+            });
+
+            const result = await service.refund(refundInput);
+
+            expect(result.status).toBe('FAILED');
+            expect(result.failureReason).toContain('CLOSED');
+        });
+
+        it('queries a refund by its platform number', async () => {
+            const { service, payClient } = createService(false);
+            payClient.queryRefund.mockResolvedValue({
+                refund_id: 'wx-refund-1',
+                out_refund_no: 'RF1',
+                status: 'SUCCESS',
+            });
+
+            const result = await service.queryRefund({
+                refundNo: 'RF1',
+                outTradeNo: 'BW1',
+            });
+
+            expect(payClient.queryRefund).toHaveBeenCalledWith('RF1');
+            expect(result.status).toBe('SUCCESS');
         });
     });
 });

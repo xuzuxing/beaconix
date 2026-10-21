@@ -836,6 +836,82 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         description:
             '开启后不调用支付宝接口，直接返回模拟支付参数，便于无凭证时联调；开始真实收款前必须关闭。',
     },
+
+    // ── 退款策略（计费）──────────────────────────────────────────────
+    // 三段式 key（billing.refund.*）会被自动归到 billing tab 下的 refund 小节。
+    // 读取方是 RefundConfigService：没有 env 兜底，这些是业务策略而不是部署差异。
+    {
+        key: 'billing.refund.enabled',
+        name: '退款开关',
+        group: 'billing',
+        value: false,
+        valueType: SettingValueType.BOOLEAN,
+        description:
+            '总开关。关闭时所有退款接口直接拒绝。默认关闭：代码与迁移先上线，确认无误后再由运营打开。',
+    },
+    {
+        key: 'billing.refund.coolingOffDays',
+        name: '冷静期天数',
+        group: 'billing',
+        value: 7,
+        valueType: SettingValueType.NUMBER,
+        integer: true,
+        min: 0,
+        max: 365,
+        description:
+            '从**服务开始日**起算的冷静期：期内申请全额退款。排队未生效的订单不受此限，始终可全额退。',
+    },
+    {
+        key: 'billing.refund.prorate',
+        name: '按天折算',
+        group: 'billing',
+        value: true,
+        valueType: SettingValueType.BOOLEAN,
+        description:
+            '关闭后超过冷静期一律不退；开启则按未使用天数折算退款金额。',
+    },
+    {
+        key: 'billing.refund.feeRate',
+        name: '退款手续费率',
+        group: 'billing',
+        value: 0,
+        valueType: SettingValueType.NUMBER,
+        min: 0,
+        max: 0.3,
+        description:
+            '从折算金额里扣除的手续费比例（0–0.3）。填 0.05 与 5 等价，均表示 5%；默认 0 即不扣。',
+    },
+    {
+        key: 'billing.refund.minAmount',
+        name: '最小退款额（分）',
+        group: 'billing',
+        value: 0,
+        valueType: SettingValueType.NUMBER,
+        integer: true,
+        min: 0,
+        description:
+            '折算结果低于该金额时不予退款，避免 1 分钱的退款单。默认 0 表示不设下限。',
+    },
+    {
+        key: 'billing.refund.userSelfService',
+        name: '允许用户自助退款',
+        group: 'billing',
+        value: false,
+        valueType: SettingValueType.BOOLEAN,
+        description:
+            'P1 开关：打开后用户可在订单页自助申请；关闭时只有后台能发起退款。',
+    },
+    {
+        key: 'billing.refund.autoApproveLimit',
+        name: '自动通过阈值（分）',
+        group: 'billing',
+        value: 0,
+        valueType: SettingValueType.NUMBER,
+        integer: true,
+        min: 0,
+        description:
+            'P1 开关：用户申请的金额不超过该值时自动执行，超过则停在待审批。默认 0 = 全部人工审批。',
+    },
 ];
 
 /**

@@ -32,6 +32,8 @@ function createService(overrides: Partial<AlipayConfig> = {}) {
             .fn()
             .mockResolvedValue({ qrCode: 'https://qr.alipay.com/bax0123' }),
         verifyNotify: jest.fn().mockResolvedValue(true),
+        refund: jest.fn(),
+        queryRefund: jest.fn(),
     };
     const runtimeConfig = {
         config: jest.fn().mockResolvedValue(resolved),
@@ -267,6 +269,110 @@ describe('AlipayPaymentService', () => {
                     }).toString(),
                 ),
             ).rejects.toThrow(/missing out_trade_no/);
+        });
+    });
+    describe('refund', () => {
+        const refundInput = {
+            outRefundNo: 'RF1',
+            outTradeNo: 'BWABC123',
+            refundFee: 19933,
+            totalFee: 29900,
+            reason: 'not satisfied',
+        };
+
+        it('short-circuits in mock mode', async () => {
+            const { service, client } = createService();
+
+            const result = await service.refund(refundInput);
+
+            expect(result.status).toBe('SUCCESS');
+            expect(client.refund).not.toHaveBeenCalled();
+        });
+
+        it('converts cents to yuan and submits the refund', async () => {
+            const { service, client } = createService({ mock: false });
+            client.refund.mockResolvedValue({
+                code: '10000',
+                msg: 'Success',
+                fundChange: 'Y',
+            });
+
+            const result = await service.refund(refundInput);
+
+            expect(client.refund).toHaveBeenCalledWith({
+                outTradeNo: 'BWABC123',
+                outRefundNo: 'RF1',
+                // 19933 分 = 199.33 元
+                refundAmount: '199.33',
+                reason: 'not satisfied',
+            });
+            expect(result.status).toBe('SUCCESS');
+        });
+
+        it('treats a repeated request (fund_change=N) as success', async () => {
+            const { service, client } = createService({ mock: false });
+            client.refund.mockResolvedValue({
+                code: '10000',
+                msg: 'Success',
+                // 同号重复请求：钱已经退过了，不会再退一次
+                fundChange: 'N',
+            });
+
+            await expect(service.refund(refundInput)).resolves.toMatchObject({
+                status: 'SUCCESS',
+            });
+        });
+
+        it('throws AlipayApiError when Alipay rejects the refund', async () => {
+            const { service, client } = createService({ mock: false });
+            client.refund.mockResolvedValue({
+                code: '40004',
+                msg: 'Business Failed',
+                subCode: 'ACQ.SELLER_BALANCE_NOT_ENOUGH',
+                subMsg: 'seller balance is not enough',
+            });
+
+            const error = await service.refund(refundInput).catch((e) => e);
+
+            expect(error).toBeInstanceOf(AlipayApiError);
+            expect(error.subCode).toBe('ACQ.SELLER_BALANCE_NOT_ENOUGH');
+            expect(error.message).toContain('seller balance is not enough');
+        });
+
+        it('reads the refund state back for the reconcile job', async () => {
+            const { service, client } = createService({ mock: false });
+            client.queryRefund.mockResolvedValue({
+                code: '10000',
+                msg: 'Success',
+                refundStatus: 'REFUND_SUCCESS',
+            });
+
+            const result = await service.queryRefund({
+                refundNo: 'RF1',
+                outTradeNo: 'BWABC123',
+            });
+
+            expect(client.queryRefund).toHaveBeenCalledWith({
+                outTradeNo: 'BWABC123',
+                outRefundNo: 'RF1',
+            });
+            expect(result.status).toBe('SUCCESS');
+        });
+
+        it('keeps an unknown refund as PROCESSING while polling', async () => {
+            const { service, client } = createService({ mock: false });
+            client.queryRefund.mockResolvedValue({
+                code: '40004',
+                msg: 'Business Failed',
+                subCode: 'ACQ.REFUND_NOT_EXIST',
+            });
+
+            await expect(
+                service.queryRefund({
+                    refundNo: 'RF1',
+                    outTradeNo: 'BWABC123',
+                }),
+            ).resolves.toMatchObject({ status: 'PROCESSING' });
         });
     });
 });
