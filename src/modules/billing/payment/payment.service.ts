@@ -55,7 +55,8 @@ export class PaymentService {
 
         const openid = dto.openid?.trim();
 
-        if (!openid) {
+        // `openid` 只在 JSAPI 渠道必需：支付宝的收银台/扫码下单没有付款人身份。
+        if (channel === PaymentChannel.WECHAT && !openid) {
             throw new BadRequestException(
                 'openid is required for the WECHAT (JSAPI) channel',
             );
@@ -67,6 +68,7 @@ export class PaymentService {
             outTradeNo: order.orderNo,
             totalFee: order.amount,
             payerId: openid,
+            payMethod: dto.payMethod,
             body: `Beaconix plan order ${order.orderNo}`,
         });
 
@@ -100,6 +102,16 @@ export class PaymentService {
             signature,
             headers,
         );
+    }
+
+    /**
+     * 支付宝异步通知：签名在 provider 里用 `alipay-sdk` 校验（参数放在
+     * form-urlencoded 报文里，不走 `signature` 头），之后与微信完全同一条路径。
+     */
+    async handleAlipayCallback(
+        rawBody: string,
+    ): Promise<PaymentCallbackResponse> {
+        return this.handleCallback(PaymentChannel.ALIPAY, rawBody, '');
     }
 
     /** Channel-agnostic callback processing through the provider factory. */
@@ -176,7 +188,13 @@ export class PaymentService {
     // -- Helpers ---------------------------------------------------------
 
     private extractPrepayId(params: PaymentProviderPayParams): string {
-        const value = params['package'] ?? params['prepayId'] ?? '';
+        // 支付宝没有 prepay_id：收银台 URL / 扫码链接存进同一列，便于排查对账。
+        const value =
+            params['package'] ??
+            params['prepayId'] ??
+            params['payUrl'] ??
+            params['qrCode'] ??
+            '';
         return typeof value === 'string' ? value : JSON.stringify(value);
     }
 

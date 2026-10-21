@@ -1,4 +1,5 @@
 import { PaymentChannel, PaymentStatus } from '../../../generated/prisma/enums';
+import { AlipayPayMethod } from '../../../infra/alipay';
 import { PaymentService } from './payment.service';
 import type { PrismaService } from '../../../infra/database/prisma.service';
 import type { PaymentProviderFactory } from './payment-provider.factory';
@@ -101,7 +102,7 @@ describe('PaymentService', () => {
                 service.createPayment('order-1', 'user-1', {
                     openid: 'o_xxx',
                     // ALIPAY 会随后续迁移加入枚举，这里先按渠道断言行为
-                    channel: 'ALIPAY' as PaymentChannel,
+                    channel: 'ALIPAY',
                 }),
             ).rejects.toThrow('Order already paid via WECHAT');
 
@@ -139,7 +140,7 @@ describe('PaymentService', () => {
 
             await service.createPayment('order-1', 'user-1', {
                 openid: 'o_xxx',
-                channel: 'ALIPAY' as PaymentChannel,
+                channel: 'ALIPAY',
             });
 
             expect(prisma.payment.upsert).toHaveBeenCalledWith(
@@ -561,6 +562,132 @@ describe('PaymentService', () => {
                     }),
                 }),
             );
+        });
+    });
+
+    describe('createPayment (ALIPAY)', () => {
+        it('does not require openid and forwards the payMethod', async () => {
+            const { service, prisma, provider, paymentProviderFactory } =
+                createService();
+            prisma.order.findUnique.mockResolvedValue(order);
+            prisma.membership.findUnique.mockResolvedValue({ id: 'member-1' });
+            provider.createPayment.mockResolvedValue({
+                payUrl: 'https://openapi.alipay.com/gateway.do?sign=x',
+                outTradeNo: order.orderNo,
+            });
+            prisma.payment.upsert.mockResolvedValue({ id: 'payment-1' });
+
+            const result = await service.createPayment('order-1', 'user-1', {
+                channel: PaymentChannel.ALIPAY,
+                payMethod: AlipayPayMethod.PAGE,
+            });
+
+            expect(paymentProviderFactory.get).toHaveBeenCalledWith('ALIPAY');
+            expect(provider.createPayment).toHaveBeenCalledWith({
+                outTradeNo: 'BWABC123',
+                totalFee: 2900,
+                // 支付宝渠道没有付款人身份
+                payerId: undefined,
+                payMethod: AlipayPayMethod.PAGE,
+                body: 'Beaconix plan order BWABC123',
+            });
+            expect(result).toEqual({
+                payUrl: 'https://openapi.alipay.com/gateway.do?sign=x',
+                outTradeNo: 'BWABC123',
+            });
+        });
+
+        it('stores the cashier URL in prepayId because Alipay has no prepay_id', async () => {
+            const { service, prisma, provider } = createService();
+            prisma.order.findUnique.mockResolvedValue(order);
+            prisma.membership.findUnique.mockResolvedValue({ id: 'member-1' });
+            provider.createPayment.mockResolvedValue({
+                payUrl: 'https://openapi.alipay.com/gateway.do?sign=x',
+                outTradeNo: order.orderNo,
+            });
+            prisma.payment.upsert.mockResolvedValue({ id: 'payment-1' });
+
+            await service.createPayment('order-1', 'user-1', {
+                channel: PaymentChannel.ALIPAY,
+            });
+
+            expect(prisma.payment.upsert).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    create: expect.objectContaining({
+                        channel: 'ALIPAY',
+                        prepayId:
+                            'https://openapi.alipay.com/gateway.do?sign=x',
+                    }),
+                }),
+            );
+        });
+
+        it('still requires openid for the WeChat JSAPI channel', async () => {
+            const { service, prisma, provider } = createService();
+            prisma.order.findUnique.mockResolvedValue(order);
+            prisma.membership.findUnique.mockResolvedValue({ id: 'member-1' });
+
+            await expect(
+                service.createPayment('order-1', 'user-1', {}),
+            ).rejects.toThrow(/openid is required/);
+            expect(provider.createPayment).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('handleAlipayCallback', () => {
+        it('settles through the ALIPAY provider and looks the payment up by channel', async () => {
+            const { service, prisma, provider, paymentProviderFactory } =
+                createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: 'BWABC123',
+                transaction_id: '2026102122001400000000000001',
+                trade_state: 'SUCCESS',
+                trade_status: 'TRADE_SUCCESS',
+            });
+            prisma.payment.findFirst.mockResolvedValue({
+                id: 'payment-1',
+                orderId: 'order-1',
+                status: 'SUCCESS',
+                order,
+            });
+
+            const rawBody =
+                'out_trade_no=BWABC123&trade_status=TRADE_SUCCESS&sign=x';
+            const result = await service.handleAlipayCallback(rawBody);
+
+            expect(result).toEqual({ code: 'SUCCESS', message: '成功' });
+            expect(paymentProviderFactory.get).toHaveBeenCalledWith('ALIPAY');
+            expect(provider.verifyCallback).toHaveBeenCalledWith(
+                rawBody,
+                '',
+                undefined,
+            );
+            expect(prisma.payment.findFirst).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: {
+                        channel: 'ALIPAY',
+                        order: { orderNo: 'BWABC123' },
+                    },
+                }),
+            );
+        });
+
+        it('refuses a non-success trade state without touching the payment', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: 'BWABC123',
+                transaction_id: '',
+                trade_state: 'WAIT_BUYER_PAY',
+                trade_status: 'WAIT_BUYER_PAY',
+            });
+
+            const result = await service.handleAlipayCallback(
+                'out_trade_no=BWABC123&trade_status=WAIT_BUYER_PAY',
+            );
+
+            expect(result.code).toBe('FAIL');
+            expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+            expect(prisma.$transaction).not.toHaveBeenCalled();
         });
     });
 });

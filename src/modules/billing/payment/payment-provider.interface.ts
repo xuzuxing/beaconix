@@ -3,9 +3,15 @@ import type { PaymentChannel } from '../../../generated/prisma/enums';
 export interface PaymentProviderCreateInput {
     outTradeNo: string;
     totalFee: number;
-    /** Channel-specific payer identifier (e.g. WeChat openid). */
-    payerId: string;
+    /**
+     * Channel-specific payer identifier (e.g. WeChat openid). Optional because
+     * Alipay's page/wap/precreate flows have no payer identity at order time;
+     * each provider validates what it actually needs.
+     */
+    payerId?: string;
     body: string;
+    /** Channel-specific product/method selector (Alipay: page.pay / wap.pay / precreate). */
+    payMethod?: string;
 }
 
 export interface PaymentProviderPayParams {

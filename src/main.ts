@@ -122,12 +122,12 @@ async function bootstrap() {
 
     app.enableShutdownHooks([ShutdownSignal.SIGTERM, ShutdownSignal.SIGINT]);
 
-    await app.listen(appConfig.port, () => {
+    await app.listen(appConfig.port, appConfig.host, () => {
         logger.log(
-            `Application running on port http://localhost:${appConfig.port} with env ${appConfig.env}`,
+            `Application running on port http://${appConfig.host}:${appConfig.port} with env ${appConfig.env}`,
         );
         logger.log(
-            `Swagger docs available at http://localhost:${appConfig.port}/api/docs`,
+            `Swagger docs available at http://${appConfig.host}:${appConfig.port}/api/docs`,
         );
     });
 }

@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
+import { AlipayModule } from '../../infra/alipay';
 import { WechatModule } from '../../infra/wechat/wechat.module';
 import { SharedSubscriptionModule } from '../../shared/subscription/subscription.module';
 import { QuotaModule } from '../../shared/quota/quota.module';
 import { OrderController } from './order/order.controller';
 import { OrderExpiryService } from './order/order-expiry.service';
 import { OrderService } from './order/order.service';
+import { AlipayPaymentService } from './payment/alipay-payment.service';
 import { PaymentController } from './payment/payment.controller';
 import { PaymentProviderFactory } from './payment/payment-provider.factory';
 import { PaymentService } from './payment/payment.service';
@@ -18,7 +20,12 @@ import { SubscriptionExpiryService } from './subscription/subscription-expiry.se
 import { SubscriptionService } from './subscription/subscription.service';
 
 @Module({
-    imports: [SharedSubscriptionModule, QuotaModule, WechatModule],
+    imports: [
+        SharedSubscriptionModule,
+        QuotaModule,
+        WechatModule,
+        AlipayModule,
+    ],
     controllers: [
         PlanController,
         SubscriptionController,
@@ -36,6 +43,7 @@ import { SubscriptionService } from './subscription/subscription.service';
         PaymentProviderFactory,
         WechatPaymentService,
         WechatVirtualPaymentService,
+        AlipayPaymentService,
     ],
     exports: [
         PlanService,

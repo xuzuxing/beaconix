@@ -747,8 +747,8 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
     // ── 支付宝（仅支付场景）──────────────────────────────────────────
     // 只有支付一种用途，因此 key 用两层、不声明 section：推断规则会看到
     // 「组内 key 不足三段」而整组平铺，正好符合预期。
-    // 注意：计费流程尚未接入支付宝渠道（PaymentChannel 目前只有 WECHAT），
-    // 这些项是接入前的凭证准备，运行时还没有消费方。
+    // 运行时读取方是 `AlipayRuntimeConfigService`（infra/alipay）：这里的值
+    // 覆盖 `.env`，留空回退环境变量，30 秒内生效。
     {
         key: 'alipay.appId',
         name: '应用 APPID',

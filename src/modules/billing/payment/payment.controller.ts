@@ -82,6 +82,50 @@ export class PaymentController {
         return this.paymentService.createPayment(id, user.sub, dto);
     }
 
+    /**
+     * 支付宝异步通知（`ALIPAY_NOTIFY_URL` 指向这里）。
+     *
+     * 支付宝只认**纯文本 `success`**（不带引号、不是 JSON），返回别的内容或
+     * 非 2xx 都会让它按 4m/10m/10m/1h/2h/6h/15h 的节奏重试。验签在 provider
+     * 层用 `alipay-sdk` 完成，之后与微信共用渠道无关的幂等结算逻辑。
+     */
+    @Post('payment/alipay/callback')
+    @Public()
+    @SkipTransform()
+    @ApiOperation({
+        summary: 'Alipay async notification (idempotent)',
+        description:
+            'Form-urlencoded notification, verified with the Alipay public key. Answers the bare text `success` on success and `failure` otherwise.',
+    })
+    @ApiBody({
+        description: 'Alipay form-urlencoded notification parameters',
+        schema: { type: 'object', additionalProperties: { type: 'string' } },
+    })
+    @ApiOkResponse({ description: 'text/plain: success | failure' })
+    async alipayCallback(
+        @Req() request: RawBodyRequest<Request>,
+        @Body() body: Record<string, string | string[]>,
+        @Res({ passthrough: true }) response: Response,
+    ) {
+        // 验签对象就是这份 form-urlencoded 参数字典；`rawBody` 是原始字节，
+        // 没有时用解析后的 body 重新拼（等价，参数顺序不参与验签）。
+        const rawBody =
+            request.rawBody?.toString('utf8') ??
+            new URLSearchParams(
+                Object.entries(body ?? {}).flatMap(([key, value]) =>
+                    Array.isArray(value)
+                        ? value.map((item) => [key, item])
+                        : [[key, value]],
+                ),
+            ).toString();
+
+        const result = await this.paymentService.handleAlipayCallback(rawBody);
+
+        response.status(HttpStatus.OK).type('text/plain');
+
+        return result.code === 'SUCCESS' ? 'success' : 'failure';
+    }
+
     @Post('payment/wechat/callback')
     @Public()
     @SkipTransform()

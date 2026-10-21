@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PaymentChannel } from '../../../generated/prisma/enums';
+import { AlipayPaymentService } from './alipay-payment.service';
 import type { PaymentProvider } from './payment-provider.interface';
 import { WechatPaymentService } from './wechat-payment.service';
 
@@ -7,8 +8,12 @@ import { WechatPaymentService } from './wechat-payment.service';
 export class PaymentProviderFactory {
     private readonly providers = new Map<PaymentChannel, PaymentProvider>();
 
-    constructor(wechatPaymentService: WechatPaymentService) {
+    constructor(
+        wechatPaymentService: WechatPaymentService,
+        alipayPaymentService: AlipayPaymentService,
+    ) {
         this.register(wechatPaymentService);
+        this.register(alipayPaymentService);
     }
 
     /** Register a provider. Called from the constructor for built-in channels. */

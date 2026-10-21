@@ -9,6 +9,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { GlobalExceptionFilter } from './common/filters';
 import {
+    alipayConfig,
     appConfig,
     databaseConfig,
     jwtConfig,
@@ -26,6 +27,7 @@ import {
     ThrottlerConfig,
 } from './config';
 import { PrismaModule } from './infra/database/prisma.module';
+import { AlipayModule } from './infra/alipay';
 import { QueueModule } from './infra/queue/queue.module';
 import { RedisModule } from './infra/redis/redis.module';
 import { ScheduledJobsModule } from './infra/scheduler/scheduled-jobs.module';
@@ -74,6 +76,7 @@ import { HealthController } from './health.controller';
             isGlobal: true,
             envFilePath: '.env',
             load: [
+                alipayConfig,
                 appConfig,
                 databaseConfig,
                 jwtConfig,
@@ -144,6 +147,7 @@ import { HealthController } from './health.controller';
         RedisModule,
         ScheduledJobsModule,
         WechatModule,
+        AlipayModule,
         HealthModule,
         MetricsModule,
         // business

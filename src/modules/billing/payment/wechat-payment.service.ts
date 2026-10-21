@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PaymentChannel } from '../../../generated/prisma/enums';
 import { WechatPayClient } from '../../../infra/wechat/pay';
 import { WechatRuntimeConfigService } from '../../../infra/wechat/wechat-runtime-config.service';
@@ -31,6 +31,12 @@ export class WechatPaymentService implements PaymentProvider {
     ): Promise<PaymentProviderPayParams> {
         if (await this.mockEnabled()) {
             return this.mockPayParams(input);
+        }
+
+        // JSAPI 必须有 openid；DTO 现在把 openid 设为可选（支付宝渠道不需要），
+        // 所以这里补一条显式校验，避免把 undefined 当 openid 发给微信。
+        if (!input.payerId) {
+            throw new BadRequestException('openid is required for WeChat Pay');
         }
 
         const { prepayId } = await this.payClient.createJsapiTransaction({

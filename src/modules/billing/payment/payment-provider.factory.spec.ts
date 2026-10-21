@@ -1,18 +1,27 @@
 import { BadRequestException } from '@nestjs/common';
+import type { AlipayPaymentService } from './alipay-payment.service';
 import { PaymentProviderFactory } from './payment-provider.factory';
 import type { PaymentProvider } from './payment-provider.interface';
 import type { WechatPaymentService } from './wechat-payment.service';
 
-function createFactory() {
-    const wechat = {
-        channel: 'WECHAT',
+function provider(channel: string): PaymentProvider {
+    return {
+        channel,
         createPayment: jest.fn(),
         verifyCallback: jest.fn(),
-    } as unknown as WechatPaymentService;
+    } as unknown as PaymentProvider;
+}
 
-    const factory = new PaymentProviderFactory(wechat);
+function createFactory() {
+    const wechat = provider('WECHAT');
+    const alipay = provider('ALIPAY');
 
-    return { factory, wechat };
+    const factory = new PaymentProviderFactory(
+        wechat as unknown as WechatPaymentService,
+        alipay as unknown as AlipayPaymentService,
+    );
+
+    return { factory, wechat, alipay };
 }
 
 describe('PaymentProviderFactory', () => {
@@ -22,24 +31,26 @@ describe('PaymentProviderFactory', () => {
         expect(factory.get('WECHAT')).toBe(wechat);
     });
 
+    it('registers the Alipay provider for ALIPAY', () => {
+        const { factory, alipay } = createFactory();
+
+        expect(factory.get('ALIPAY')).toBe(alipay);
+    });
+
     it('rejects channels without a registered provider', () => {
         const { factory } = createFactory();
 
-        expect(() => factory.get('ALIPAY' as never)).toThrow(
+        expect(() => factory.get('WECHAT_VIRTUAL')).toThrow(
             BadRequestException,
         );
     });
 
     it('allows registering additional providers dynamically', () => {
         const { factory } = createFactory();
-        const alipay = {
-            channel: 'ALIPAY',
-            createPayment: jest.fn(),
-            verifyCallback: jest.fn(),
-        } as unknown as PaymentProvider;
+        const stripe = provider('STRIPE');
 
-        factory.register(alipay);
+        factory.register(stripe);
 
-        expect(factory.get('ALIPAY' as never)).toBe(alipay);
+        expect(factory.get('STRIPE' as never)).toBe(stripe);
     });
 });

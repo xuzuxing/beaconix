@@ -4,6 +4,7 @@ import { optionalEnv } from './env';
 export interface AppConfig {
     name: string;
     port: number;
+    host: string;
     env: string;
     isProduction: boolean;
     isDevelopment: boolean;
@@ -19,6 +20,7 @@ export const appConfig = registerAs('app', (): AppConfig => {
     return {
         name: optionalEnv('APP_NAME', 'beaconix'),
         port: parseInt(optionalEnv('PORT', '3000'), 10),
+        host: optionalEnv('HOST', '0.0.0.0'),
         env,
         isProduction: env === 'production',
         isDevelopment: env === 'development',
