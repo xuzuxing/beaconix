@@ -10,6 +10,7 @@ import { MembershipRole } from '../../generated/prisma/enums';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { PrismaService } from '../../infra/database/prisma.service';
 import type { JwtPayload } from '../interfaces/jwt-payload.interface';
+import { resolveTenant } from '../../infra/tenant/resolve-tenant';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -29,7 +30,7 @@ export class RolesGuard implements CanActivate {
         const user = request['user'] as JwtPayload | undefined;
         if (!user) throw new ForbiddenException('Authentication required');
 
-        const orgId = await this.resolveOrgId(request);
+        const orgId = await resolveTenant(this.prisma, request);
         if (!orgId) {
             throw new ForbiddenException(
                 'Organization context required for role check',
@@ -84,69 +85,5 @@ export class RolesGuard implements CanActivate {
         request['membership'] = membership;
 
         return true;
-    }
-
-    private async resolveOrgId(request: any): Promise<string | undefined> {
-        const orgId = request.params?.orgId as string | undefined;
-        if (orgId) return orgId;
-
-        // Resolve org via project for routes like /projects/:projectId/*
-        const projectId = request.params?.projectId as string | undefined;
-        if (projectId) {
-            const project = await this.prisma.project.findFirst({
-                where: { id: projectId, deletedAt: null },
-                select: { organizationId: true },
-            });
-            if (!project) throw new NotFoundException('Project not found');
-            // Verify org is not soft-deleted
-            const org = await this.prisma.organization.findFirst({
-                where: { id: project.organizationId, deletedAt: null },
-                select: { id: true },
-            });
-            if (!org) throw new NotFoundException('Organization not found');
-            request['projectOrgId'] = project.organizationId;
-            return project.organizationId;
-        }
-
-        // Resolve org via task for routes like /tasks/:taskId/*
-        const taskId = request.params?.taskId as string | undefined;
-        if (taskId) {
-            const task = await this.prisma.task.findFirst({
-                where: { id: taskId, deletedAt: null },
-                select: { organizationId: true, projectId: true },
-            });
-            if (!task) throw new NotFoundException('Task not found');
-            const org = await this.prisma.organization.findFirst({
-                where: { id: task.organizationId, deletedAt: null },
-                select: { id: true },
-            });
-            if (!org) throw new NotFoundException('Organization not found');
-            request['taskOrgId'] = task.organizationId;
-            request['taskProjectId'] = task.projectId;
-            return task.organizationId;
-        }
-
-        // Generic :id param — could be an org ID or a label ID
-        const id = request.params?.id as string | undefined;
-        if (id) {
-            // Check if it's an org ID
-            const org = await this.prisma.organization.findFirst({
-                where: { id, deletedAt: null },
-                select: { id: true },
-            });
-            if (org) return id;
-
-            // Check if it's a label ID
-            const label = await this.prisma.label.findUnique({
-                where: { id },
-                select: { organizationId: true },
-            });
-            if (label) {
-                request['labelOrgId'] = label.organizationId;
-                return label.organizationId;
-            }
-        }
-
-        return undefined;
     }
 }
