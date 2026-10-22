@@ -169,6 +169,7 @@ export class AdminOrdersService {
             amount: order.amount,
             currency: order.currency,
             durationDays: order.durationDays,
+            cycle: order.cycle,
             status: order.status,
             paidAt: order.paidAt,
             cancelledAt: order.cancelledAt,

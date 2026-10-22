@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PlanCycle } from '../../../../generated/prisma/enums';
 import { PlanEntity } from '../../../billing/plan/entities';
 
 /** Owning tenant of an order, flattened for the platform-wide order table. */
@@ -57,6 +58,14 @@ export class AdminOrderEntity {
 
     @ApiProperty({ example: 30 })
     durationDays: number;
+
+    @ApiPropertyOptional({
+        enum: PlanCycle,
+        nullable: true,
+        description:
+            'Cycle that was purchased. Null on orders created before cycles existed.',
+    })
+    cycle?: PlanCycle | null;
 
     @ApiProperty({
         enum: ['PENDING', 'PAID', 'CANCELLED', 'REFUNDED'],

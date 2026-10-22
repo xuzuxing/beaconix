@@ -11,6 +11,7 @@ const orderRow = {
     amount: 2900,
     currency: 'CNY',
     durationDays: 30,
+    cycle: 'MONTHLY',
     status: 'PENDING',
     paidAt: null,
     cancelledAt: null,
@@ -77,6 +78,7 @@ describe('AdminOrdersService', () => {
             id: 'order-1',
             organizationId: 'org-1',
             userId: 'user-1',
+            cycle: 'MONTHLY',
             organization: { name: 'Acme Corporation' },
             user: { email: 'ada@example.test' },
         });
