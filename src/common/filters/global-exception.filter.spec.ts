@@ -1,5 +1,9 @@
 import { ArgumentsHost, HttpStatus, Logger } from '@nestjs/common';
 import { WechatApiError } from '../../infra/wechat/wechat.types';
+import {
+    AlipayApiError,
+    AlipayConfigurationError,
+} from '../../infra/alipay/alipay.types';
 import { SettingsService } from '../../modules/settings';
 import { GlobalExceptionFilter } from './global-exception.filter';
 
@@ -106,6 +110,51 @@ describe('GlobalExceptionFilter', () => {
             expect.objectContaining({
                 statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
                 detail: 'boom',
+            }),
+        );
+    });
+
+    it('maps an Alipay API failure to 502 with the reason code instead of 500', async () => {
+        jest.spyOn(Logger.prototype, 'error').mockImplementation(
+            () => undefined,
+        );
+        const filter = createFilter();
+        const { host, json, status } = createHost();
+
+        await filter.catch(
+            new AlipayApiError(
+                'Alipay refund failed: ACQ.SYSTEM_ERROR',
+                '40004',
+            ),
+            host,
+        );
+
+        expect(status).toHaveBeenCalledWith(HttpStatus.BAD_GATEWAY);
+        expect(json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                statusCode: HttpStatus.BAD_GATEWAY,
+                message: '支付宝服务调用失败（40004）',
+            }),
+        );
+    });
+
+    it('maps a missing Alipay configuration to 503', async () => {
+        jest.spyOn(Logger.prototype, 'error').mockImplementation(
+            () => undefined,
+        );
+        const filter = createFilter();
+        const { host, json, status } = createHost();
+
+        await filter.catch(
+            new AlipayConfigurationError('alipay.privateKey is empty'),
+            host,
+        );
+
+        expect(status).toHaveBeenCalledWith(HttpStatus.SERVICE_UNAVAILABLE);
+        expect(json).toHaveBeenCalledWith(
+            expect.objectContaining({
+                statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+                message: '支付宝服务未配置或配置无效',
             }),
         );
     });

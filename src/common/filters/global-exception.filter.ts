@@ -13,6 +13,10 @@ import {
     WechatApiError,
     WechatConfigurationError,
 } from '../../infra/wechat/wechat.types';
+import {
+    AlipayApiError,
+    AlipayConfigurationError,
+} from '../../infra/alipay/alipay.types';
 import { SettingsService } from '../../modules/settings';
 
 @Catch()
@@ -30,17 +34,18 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         const response = ctx.getResponse<Response>();
         const request = ctx.getRequest<Request>();
 
-        const wechatError = this.mapWechatError(exception);
+        const mappedError =
+            this.mapWechatError(exception) ?? this.mapAlipayError(exception);
 
         const status =
             exception instanceof HttpException
                 ? exception.getStatus()
-                : (wechatError?.status ?? HttpStatus.INTERNAL_SERVER_ERROR);
+                : (mappedError?.status ?? HttpStatus.INTERNAL_SERVER_ERROR);
 
         const rawResponse =
             exception instanceof HttpException
                 ? exception.getResponse()
-                : (wechatError?.message ?? 'Internal server error');
+                : (mappedError?.message ?? 'Internal server error');
 
         const responseBody =
             typeof rawResponse === 'object' && rawResponse !== null
@@ -168,5 +173,37 @@ export class GlobalExceptionFilter implements ExceptionFilter {
                     message: `微信服务调用失败（errcode ${exception.errcode ?? exception.code ?? '未知'}）`,
                 };
         }
+    }
+
+    /**
+     * 支付宝侧的失败映射。
+     *
+     * 配置缺失给 503（服务暂时不可用，不是请求错），接口/验签失败给 502
+     * （上游网关的锅）。两者的原始英文消息只进日志，响应体给一句可读中文
+     * 加上支付宝的 `code/subCode`，前端与运维都不必再翻堆栈。
+     */
+    private mapAlipayError(exception: unknown): {
+        status: number;
+        message: string;
+    } | null {
+        if (exception instanceof AlipayConfigurationError) {
+            return {
+                status: HttpStatus.SERVICE_UNAVAILABLE,
+                message: '支付宝服务未配置或配置无效',
+            };
+        }
+
+        if (!(exception instanceof AlipayApiError)) {
+            return null;
+        }
+
+        const reason =
+            [exception.code, exception.subCode].filter(Boolean).join(' / ') ||
+            '未知错误';
+
+        return {
+            status: HttpStatus.BAD_GATEWAY,
+            message: `支付宝服务调用失败（${reason}）`,
+        };
     }
 }

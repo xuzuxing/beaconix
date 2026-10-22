@@ -6,6 +6,7 @@ import { AlipayApiError, AlipayPayMethod } from '../../../infra/alipay';
 import type { AlipayConfig } from '../../../config';
 import {
     AlipayPaymentService,
+    ALIPAY_NOTIFY_ERROR_CODES,
     parseNotifyParams,
     payMethodOf,
     yuanFromFen,
@@ -269,6 +270,44 @@ describe('AlipayPaymentService', () => {
                     }).toString(),
                 ),
             ).rejects.toThrow(/missing out_trade_no/);
+        });
+
+        it('tags every rejection with a reason code for the callback log', async () => {
+            const { service, client } = createService({ mock: false });
+
+            // 缺参数：带上收到的参数名与报文长度，空报文也能一眼分辨。
+            await expect(service.verifyCallback('')).rejects.toMatchObject({
+                code: ALIPAY_NOTIFY_ERROR_CODES.MISSING_OUT_TRADE_NO,
+                message: expect.stringContaining('empty notification body'),
+            });
+
+            await expect(
+                service.verifyCallback(
+                    new URLSearchParams({
+                        trade_status: 'TRADE_SUCCESS',
+                    }).toString(),
+                ),
+            ).rejects.toMatchObject({
+                code: ALIPAY_NOTIFY_ERROR_CODES.MISSING_OUT_TRADE_NO,
+                message: expect.stringContaining('trade_status'),
+            });
+
+            // 验签失败与 app_id 串台各有自己的码。
+            client.verifyNotify.mockResolvedValue(false);
+            await expect(
+                service.verifyCallback(notifyBody()),
+            ).rejects.toMatchObject({
+                code: ALIPAY_NOTIFY_ERROR_CODES.SIGN_INVALID,
+            });
+
+            client.verifyNotify.mockResolvedValue(true);
+            await expect(
+                service.verifyCallback(
+                    notifyBody({ app_id: '2021999999999999' }),
+                ),
+            ).rejects.toMatchObject({
+                code: ALIPAY_NOTIFY_ERROR_CODES.APP_ID_MISMATCH,
+            });
         });
     });
     describe('refund', () => {

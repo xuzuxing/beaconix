@@ -5,6 +5,7 @@ import {
     Headers,
     HttpCode,
     HttpStatus,
+    Logger,
     Param,
     Post,
     Query,
@@ -25,9 +26,11 @@ import type { Request, Response } from 'express';
 import { CurrentUser, Public, SkipTransform } from '../../../common/decorators';
 import type { JwtPayload } from '../../../common/interfaces/jwt-payload.interface';
 import { PaymentChannel } from '../../../generated/prisma/enums';
+import { AlipayApiError } from '../../../infra/alipay';
 import { CreatePaymentDto } from './dto';
 import type { PaymentCallbackHeaders } from './payment-provider.interface';
 import { PaymentService } from './payment.service';
+import type { PaymentCallbackResponse } from './payment.service';
 import { WechatVirtualPaymentService } from './wechat-virtual-payment.service';
 import { RefundService } from '../refund/refund.service';
 
@@ -52,6 +55,8 @@ function readHeader(
 @ApiBearerAuth('access-token')
 @Controller()
 export class PaymentController {
+    private readonly logger = new Logger(PaymentController.name);
+
     constructor(
         private readonly paymentService: PaymentService,
         private readonly virtualPayService: WechatVirtualPaymentService,
@@ -121,7 +126,7 @@ export class PaymentController {
                 ),
             ).toString();
 
-        const result = await this.paymentService.handleAlipayCallback(rawBody);
+        const result = await this.handleAlipayNotification(rawBody);
 
         response.status(HttpStatus.OK).type('text/plain');
 
@@ -270,5 +275,47 @@ export class PaymentController {
         response.type(result.contentType);
 
         return result.reply;
+    }
+
+    // -- 内部 ------------------------------------------------------------
+
+    /**
+     * 处理支付宝异步通知，把「通知本身不合法」转成协议内的应答。
+     *
+     * 支付宝只认纯文本 `success`：其它任何响应都会触发 4m/10m/10m/1h/2h/6h/15h
+     * 的重试。所以缺 `out_trade_no`、验签失败、app_id 串台这类**外部输入问题**
+     * 不该再当 5xx 抛出去——既刷满 ERROR 堆栈，又让这条通知被重试一整天。
+     * 这里记一条 warn（带原因码）后回 `failure`，支付宝会按自己的节奏重试，
+     * 而日志里只留一行结论。
+     *
+     * 反过来，数据库故障、结算异常等**本站问题**必须继续抛：那是「确实没处理
+     * 完」，交给 `GlobalExceptionFilter` 出 5xx、让支付宝重试才是对的。
+     */
+    private async handleAlipayNotification(
+        rawBody: string,
+    ): Promise<PaymentCallbackResponse> {
+        try {
+            const result =
+                await this.paymentService.handleAlipayCallback(rawBody);
+
+            if (result.code !== 'SUCCESS') {
+                this.logger.warn(
+                    `Alipay notification not settled: ${result.message ?? 'unknown reason'}`,
+                );
+            }
+
+            return result;
+        } catch (error) {
+            if (!(error instanceof AlipayApiError)) throw error;
+
+            this.logger.warn(
+                `Alipay notification rejected [${error.code ?? 'UNKNOWN'}]: ${error.message}`,
+            );
+
+            return {
+                code: 'FAIL',
+                message: error.code ?? 'alipay notification rejected',
+            };
+        }
     }
 }

@@ -21,6 +21,21 @@ import type {
 const DEFAULT_PAY_METHOD = AlipayPayMethod.PAGE;
 
 /**
+ * 异步通知被拒绝的原因码，挂在 `AlipayApiError.code` 上。
+ *
+ * 回调入口据此判断「这是外部输入的问题（回 `failure`，不抛 5xx）」，也方便
+ * 运维直接搜码定位，不必去比对_message_。
+ */
+export const ALIPAY_NOTIFY_ERROR_CODES = {
+    /** 报文里没有 `out_trade_no`：不是本平台的支付通知（多为探测/配置错）。 */
+    MISSING_OUT_TRADE_NO: 'NOTIFY_MISSING_OUT_TRADE_NO',
+    /** 验签不通过：伪造报文，或公钥与支付宝后台不一致。 */
+    SIGN_INVALID: 'NOTIFY_SIGN_INVALID',
+    /** app_id 不属于本应用：同一把公钥被多个应用共用时的串台通知。 */
+    APP_ID_MISMATCH: 'NOTIFY_APP_ID_MISMATCH',
+} as const;
+
+/**
  * 支付宝适配器。
  *
  * `alipay.mock=true`（默认）时不调用支付宝接口，返回模拟参数，保证无凭证也能
@@ -99,14 +114,16 @@ export class AlipayPaymentService implements PaymentProvider {
 
         if (!outTradeNo) {
             throw new AlipayApiError(
-                'Alipay notification is missing out_trade_no',
+                `Alipay notification is missing out_trade_no${describeNotifyBody(params, rawBody)}`,
+                ALIPAY_NOTIFY_ERROR_CODES.MISSING_OUT_TRADE_NO,
             );
         }
 
         if (!config.mock) {
             if (!(await this.client.verifyNotify(params))) {
                 throw new AlipayApiError(
-                    'Alipay notification signature verification failed',
+                    `Alipay notification signature verification failed${describeNotifyBody(params, rawBody)}`,
+                    ALIPAY_NOTIFY_ERROR_CODES.SIGN_INVALID,
                 );
             }
 
@@ -114,7 +131,8 @@ export class AlipayPaymentService implements PaymentProvider {
             const appId = params['app_id'];
             if (config.appId && appId && appId !== config.appId) {
                 throw new AlipayApiError(
-                    `Alipay notification app_id ${appId} does not match the configured app`,
+                    `Alipay notification app_id ${appId} does not match the configured app ${config.appId}`,
+                    ALIPAY_NOTIFY_ERROR_CODES.APP_ID_MISMATCH,
                 );
             }
         }
@@ -283,4 +301,29 @@ export function parseNotifyParams(rawBody: string): Record<string, string> {
     }
 
     return params;
+}
+
+/**
+ * 给「通知被拒绝」的异常补一段可诊断的上下文。
+ *
+ * 只列**参数名**和报文长度，绝不带值：通知里有 `buyer_logon_id`、`sign`
+ * 之类的敏感/冗长内容，落到日志里既没必要也难读。排查时最需要知道的正是
+ * 「到底收到了什么参数」——完全空报文（探测/健康检查打到回调地址）与
+ * 「有参数但键名不对（notify_url 配错应用）」靠这一行就能分开。
+ */
+export function describeNotifyBody(
+    params: Record<string, string>,
+    rawBody: string,
+): string {
+    const names = Object.keys(params);
+    const bytes = Buffer.byteLength(rawBody ?? '', 'utf8');
+
+    if (names.length === 0) {
+        return ` (empty notification body, ${bytes} bytes received)`;
+    }
+
+    const shown = names.slice(0, 12).join(', ');
+    const more = names.length > 12 ? `, +${names.length - 12} more` : '';
+
+    return ` (received params: ${shown}${more}; ${bytes} bytes)`;
 }
