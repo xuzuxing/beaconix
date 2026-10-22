@@ -6,18 +6,15 @@ import { QuotaModule } from '../../shared/quota/quota.module';
 import { OrderController } from './order/order.controller';
 import { OrderExpiryService } from './order/order-expiry.service';
 import { OrderService } from './order/order.service';
-import { AlipayPaymentService } from './payment/alipay-payment.service';
 import { PaymentController } from './payment/payment.controller';
-import { PaymentProviderFactory } from './payment/payment-provider.factory';
+import { PaymentProviderModule } from './payment/payment-provider.module';
 import { RefundProviderRegistrar } from './payment/refund-provider.registrar';
 import { PaymentService } from './payment/payment.service';
-import { WechatPaymentService } from './payment/wechat-payment.service';
 import { WechatVirtualPaymentService } from './payment/wechat-virtual-payment.service';
 import { PlanController } from './plan/plan.controller';
 import { PlanService } from './plan/plan.service';
 import { QuotaController } from './quota/quota.controller';
 import { RefundModule } from './refund/refund.module';
-import { RefundService } from './refund/refund.service';
 import { SubscriptionController } from './subscription/subscription.controller';
 import { SubscriptionExpiryService } from './subscription/subscription-expiry.service';
 import { SubscriptionService } from './subscription/subscription.service';
@@ -28,6 +25,8 @@ import { SubscriptionService } from './subscription/subscription.service';
         QuotaModule,
         WechatModule,
         AlipayModule,
+        // 渠道工厂（含微信/支付宝下单能力）单独成模块，RefundModule 也要用。
+        PaymentProviderModule,
         RefundModule,
     ],
     controllers: [
@@ -44,11 +43,8 @@ import { SubscriptionService } from './subscription/subscription.service';
         OrderService,
         OrderExpiryService,
         PaymentService,
-        PaymentProviderFactory,
         RefundProviderRegistrar,
-        WechatPaymentService,
         WechatVirtualPaymentService,
-        AlipayPaymentService,
     ],
     exports: [
         PlanService,
@@ -56,7 +52,9 @@ import { SubscriptionService } from './subscription/subscription.service';
         OrderService,
         PaymentService,
         WechatVirtualPaymentService,
-        RefundService,
+        // RefundService 由 RefundModule 提供，这里转发导出该模块，
+        // 让 admin / cron 仍能通过 BillingModule 拿到退款能力。
+        RefundModule,
     ],
 })
 export class BillingModule {}
