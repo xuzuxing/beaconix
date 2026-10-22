@@ -15,6 +15,7 @@
 | 站内通知事件、收件人、SSE 与可靠投递 | [工作区通知](design/workspace-notifications.md)                                |
 | 设置页分组（section）方案对比        | [设置页分组提案](proposals/settings-sections.md)                               |
 | 支付宝支付接入的开发方案             | [支付宝接入方案](proposals/alipay-payment-integration.md)                      |
+| 微信虚拟支付接入的开发方案             | [微信虚拟支付接入方案](proposals/wechat-virtual-payment.md)                      |
 | 执行中的专项设计与验收契约           | [实施计划](#实施计划)                                                          |
 
 ## 目录与命名
