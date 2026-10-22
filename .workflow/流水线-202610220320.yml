@@ -15,6 +15,7 @@ stages:
     - "# 设置NPM源，提升安装速度"
     - npm config set registry https://registry.npmmirror.com
     - "# 在这里输入测试命令"
+    - npm install -g pnpm
     - pnpm install && pnpm test
     report:
       path: mochawesome-report
