@@ -37,6 +37,7 @@
     "prisma:validate": "npx prisma validate",
     "assets:wechat-goods": "tsx scripts/generate-wechat-goods.ts",
     "admin:create": "tsx scripts/create-admin.ts",
+    "mock:pay": "tsx scripts/mock-payment-callback.ts",
     "test:resend": "ts-node scripts/test-resend.ts",
     "test:smtp": "tsx scripts/test-smtp.ts",
     "probe:cli": "node probes/agent/bin/beaconix-probe.js",
