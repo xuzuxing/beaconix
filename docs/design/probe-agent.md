@@ -53,7 +53,7 @@ probes/agent/
 ```
 $ sudo beaconix-probe login
 Requesting access for host-01 (linux) ...
-Open:  https://app.beaconix.app/activate?code=WDJB-MJHT
+Open:  https://beaconix.app/activate?code=WDJB-MJHT
 Code:  WDJB-MJHT
 Waiting for approval ...
 Enrollment approved: probe=probe_xxx
@@ -98,7 +98,13 @@ Credentials saved to /etc/beaconix/probe.json
 - `approve` 的权限判定在服务层：`SUPER_ADMIN` 直接通过，其余要求目标组织的 `OWNER` / `ADMIN` 成员。
 - 确认页由前端 SPA 渲染，本仓库只提供 `activate`（数据）与 `approve`（授权），不新增 `views/*.hbs`。
 - 探针创建统一走 `ProbesService.create`，因此配额、默认值（名称、`provider`、`region`）与后台手工添加完全一致。
-- 部署地址可配置：`BEACON_ACTIVATE_URL`（确认页）、`BEACON_PUBLIC_API_URL`（返回给探针的 API 地址）、`BEACON_DOWNLOAD_BASE`（安装脚本与版本清单）。
+- 下发给探针/运维的三个对外地址统一由 `ProbeEndpointsService` 解析：管理页「探针」
+  分组的 `probe.endpoint.activateUrl` / `probe.endpoint.publicApiUrl` /
+  `probe.endpoint.installUrl` 优先（SUPER_ADMIN 可改），留空则回退环境变量
+  `BEACON_ACTIVATE_URL` / `BEACON_PUBLIC_API_URL` / `BEACON_INSTALL_URL`，最后落到内置
+  默认值（`https://beaconix.app/activate`、`https://beaconix.app/api`、
+  `https://get.beaconix.app/install.sh`）。`BEACON_DOWNLOAD_BASE` 属于发布侧/客户端
+  变量，后端不消费。
 
 ### 3.4 Redis 键
 

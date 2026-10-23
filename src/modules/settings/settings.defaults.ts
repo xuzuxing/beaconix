@@ -392,6 +392,41 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         integer: true,
     },
 
+    // ── 探针（Probe）──────────────────────────────────────────────────
+    // 下发给探针与运维的对外地址。取值规则与微信组一致：管理页改过就用 DB 的
+    // 值，留空/未覆盖则回退同名环境变量，最后落到这里的默认值
+    // （合并逻辑见 `ProbeEndpointsService`）。
+    {
+        key: 'probe.endpoint.publicApiUrl',
+        name: '探针 API 地址',
+        group: 'probe',
+        value: 'https://beaconix.app/api',
+        valueType: SettingValueType.STRING,
+        description:
+            '下发给探针的 API 基址（含 /api）：安装命令、设备码与一次性 token 换取的凭据都带这个地址。留空则回退环境变量 BEACON_PUBLIC_API_URL。',
+        url: true,
+    },
+    {
+        key: 'probe.endpoint.activateUrl',
+        name: '探针激活页',
+        group: 'probe',
+        value: 'https://beaconix.app/activate',
+        valueType: SettingValueType.STRING,
+        description:
+            '设备码登录时打印给运维的确认页地址，CLI 会追加 ?code=XXXX-XXXX。留空则回退环境变量 BEACON_ACTIVATE_URL。',
+        url: true,
+    },
+    {
+        key: 'probe.endpoint.installUrl',
+        name: '安装脚本地址',
+        group: 'probe',
+        value: 'https://get.beaconix.app/install.sh',
+        valueType: SettingValueType.STRING,
+        description:
+            'Web「添加探针」生成的一行安装命令所用的脚本地址。留空则回退环境变量 BEACON_INSTALL_URL。',
+        url: true,
+    },
+
     // ── 微信支付 ──────────────────────────────────────────────────────
     // 微信整组的取值规则统一：DB 覆盖过就用 DB，留空/未覆盖则回退同名环境
     // 变量（见 `WechatRuntimeConfigService`），因此升级不会改变既有部署行为。

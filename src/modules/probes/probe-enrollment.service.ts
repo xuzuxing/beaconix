@@ -16,6 +16,7 @@ import {
     ProbeScope,
 } from '../../generated/prisma/enums';
 import { ProbesService } from './probes.service';
+import { ProbeEndpointsService } from './probe-endpoints.service';
 import { hashSecret } from './probe-secret.util';
 import {
     createSystemProbeRecord,
@@ -111,6 +112,7 @@ export class ProbeEnrollmentService {
         private readonly prisma: PrismaService,
         private readonly redis: RedisService,
         private readonly probesService: ProbesService,
+        private readonly endpoints: ProbeEndpointsService,
     ) {}
 
     // -- Path A: device authorization grant (RFC 8628) -------------------
@@ -143,7 +145,7 @@ export class ProbeEnrollmentService {
             DEVICE_CODE_TTL_SECONDS,
         );
 
-        const verificationUri = this.activationUrl();
+        const verificationUri = await this.endpoints.activationUrl();
 
         return {
             deviceCode,
@@ -265,7 +267,7 @@ export class ProbeEnrollmentService {
             {
                 probeId,
                 secret,
-                apiUrl: this.publicApiUrl(),
+                apiUrl: await this.endpoints.publicApiUrl(),
             } satisfies EnrollmentCredential,
             CREDENTIAL_TTL_SECONDS,
         );
@@ -337,9 +339,13 @@ export class ProbeEnrollmentService {
 
         // The command carries the API address so the installed probe talks to
         // this deployment rather than falling back to a built-in default.
+        const [installUrl, apiUrl] = await Promise.all([
+            this.endpoints.installScriptUrl(),
+            this.endpoints.publicApiUrl(),
+        ]);
         const command =
-            `curl -fsSL ${this.installScriptUrl()} | sudo sh -s -- ` +
-            `--token=${token} --api-url=${this.publicApiUrl()}`;
+            `curl -fsSL ${installUrl} | sudo sh -s -- ` +
+            `--token=${token} --api-url=${apiUrl}`;
 
         return {
             token,
@@ -347,7 +353,7 @@ export class ProbeEnrollmentService {
                 Date.now() + ENROLL_TOKEN_TTL_SECONDS * 1000,
             ),
             command,
-            apiUrl: this.publicApiUrl(),
+            apiUrl,
         };
     }
 
@@ -384,7 +390,7 @@ export class ProbeEnrollmentService {
         return {
             probeId: probe.id,
             secret: probe.secret,
-            apiUrl: this.publicApiUrl(),
+            apiUrl: await this.endpoints.publicApiUrl(),
         } satisfies EnrollmentCredential;
     }
 
@@ -460,30 +466,5 @@ export class ProbeEnrollmentService {
             maxTenants: 0,
             priority: 0,
         };
-    }
-
-    private activationUrl(): string {
-        return (
-            process.env.BEACON_ACTIVATE_URL ||
-            'https://app.beaconix.app/activate'
-        );
-    }
-
-    private publicApiUrl(): string {
-        return (
-            process.env.BEACON_PUBLIC_API_URL || 'https://api.beaconix.app/api'
-        ).replace(/\/+$/, '');
-    }
-
-    /**
-     * The installer is published at the bucket root, next to (not inside) the
-     * `/probe` download base, so it needs its own entry point. See
-     * probes/RELEASE.md §5.
-     */
-    private installScriptUrl(): string {
-        const url =
-            process.env.BEACON_INSTALL_URL ||
-            'https://get.beaconix.app/install.sh';
-        return url.replace(/\/+$/, '');
     }
 }

@@ -9,9 +9,16 @@ import {
     ProbeScope,
 } from '../../generated/prisma/enums';
 import { ProbeEnrollmentService } from './probe-enrollment.service';
+import type { ProbeEndpointsService } from './probe-endpoints.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { RedisService } from '../../infra/redis/redis.service';
 import type { ProbesService } from './probes.service';
+
+const ENDPOINTS = {
+    activateUrl: 'https://app.test/activate',
+    publicApiUrl: 'https://api.test/api',
+    installUrl: 'https://get.test/install.sh',
+};
 
 function createService() {
     const prisma = {
@@ -28,14 +35,21 @@ function createService() {
     const probesService = {
         create: jest.fn(),
     };
+    const endpoints = {
+        getEndpoints: jest.fn().mockResolvedValue(ENDPOINTS),
+        activationUrl: jest.fn().mockResolvedValue(ENDPOINTS.activateUrl),
+        publicApiUrl: jest.fn().mockResolvedValue(ENDPOINTS.publicApiUrl),
+        installScriptUrl: jest.fn().mockResolvedValue(ENDPOINTS.installUrl),
+    };
 
     const service = new ProbeEnrollmentService(
         prisma as unknown as PrismaService,
         redis as unknown as RedisService,
         probesService as unknown as ProbesService,
+        endpoints as unknown as ProbeEndpointsService,
     );
 
-    return { service, prisma, redis, probesService };
+    return { service, prisma, redis, probesService, endpoints };
 }
 
 const deviceState = (overrides: Record<string, unknown> = {}) => ({
@@ -58,8 +72,9 @@ describe('ProbeEnrollmentService', () => {
 
             expect(result.deviceCode).toMatch(/^[0-9a-f]{64}$/);
             expect(result.userCode).toMatch(/^[A-Z]{4}-[A-Z]{4}$/);
-            expect(result.verificationUriComplete).toContain(
-                encodeURIComponent(result.userCode),
+            expect(result.verificationUri).toBe(ENDPOINTS.activateUrl);
+            expect(result.verificationUriComplete).toBe(
+                `${ENDPOINTS.activateUrl}?code=${encodeURIComponent(result.userCode)}`,
             );
             expect(result.interval).toBeGreaterThan(0);
             expect(result.expiresIn).toBe(600);
@@ -196,6 +211,7 @@ describe('ProbeEnrollmentService', () => {
                 expect.objectContaining({
                     probeId: 'probe-1',
                     secret: 'tnt-secret',
+                    apiUrl: ENDPOINTS.publicApiUrl,
                 }),
                 60,
             );
@@ -304,8 +320,11 @@ describe('ProbeEnrollmentService', () => {
             );
 
             expect(result.token).toMatch(/^bet_[0-9a-f]{48}$/);
-            expect(result.command).toContain(result.token);
-            expect(result.command).toContain('sudo sh');
+            expect(result.command).toBe(
+                `curl -fsSL ${ENDPOINTS.installUrl} | sudo sh -s -- ` +
+                    `--token=${result.token} --api-url=${ENDPOINTS.publicApiUrl}`,
+            );
+            expect(result.apiUrl).toBe(ENDPOINTS.publicApiUrl);
             expect(redis.setJson).toHaveBeenCalledWith(
                 expect.stringContaining('probe:enroll:tok:'),
                 expect.objectContaining({
@@ -338,7 +357,7 @@ describe('ProbeEnrollmentService', () => {
             expect(result).toEqual({
                 probeId: 'probe-9',
                 secret: 'tnt-9',
-                apiUrl: expect.any(String),
+                apiUrl: ENDPOINTS.publicApiUrl,
             });
             expect(probesService.create).toHaveBeenCalledWith(
                 'org-1',

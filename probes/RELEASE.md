@@ -483,6 +483,12 @@ rclone copy probes/releases/2.1.1/beaconix-probe-2.1.1.tar.gz \
   `--api-url`/`BEACON_API_URL`，其它键也不会被覆盖。
 - systemd unit 由 `install.sh` 生成，`ExecStart=<node> /opt/beaconix-probe/bin/beaconix-probe.js run`，
   所以升级只要替换 `/opt/beaconix-probe` 内容并 `systemctl restart`，unit 无需改。
+- Web「添加探针」生成的命令与设备码返回的激活页来自后端，不是前端写死：
+  `ProbeEndpointsService` 先读管理页「探针」分组的 `probe.endpoint.publicApiUrl` /
+  `probe.endpoint.activateUrl` / `probe.endpoint.installUrl`（SUPER_ADMIN 可改），留空
+  回退 `BEACON_PUBLIC_API_URL` / `BEACON_ACTIVATE_URL` / `BEACON_INSTALL_URL`，最后落到
+  `https://beaconix.app/api`、`https://beaconix.app/activate`、
+  `https://get.beaconix.app/install.sh`。私有化部署改这三项即可，无需改代码。
 
 ### 6.1 容器形态（`probes/Dockerfile`）
 
