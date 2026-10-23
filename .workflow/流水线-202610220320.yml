@@ -10,21 +10,22 @@ stages:
   - step: ut@nodejs
     name: ""
     displayName: Nodejs 单元测试
-    nodeVersion: 24.13.0
+    nodeVersion: 22.22.0
     commands:
-      - "set -e"
-      - "# 1. 先确认真实运行时（镜像自带 node 可能极旧）"
-      - node -v && npm -v
-      - "# 2. pnpm 必须锁版本，且与 package.json 的 packageManager 一致（lockfileVersion 9.0 需要 pnpm>=9）"
-      - npm config set registry https://registry.npmmirror.com
-      - npm install -g pnpm@11.11.0
-      - pnpm -v
-      - "# 3. 生成的 Prisma client 不入库，必须先 generate；CI 无 .env，给占位 URL"
-      - export DATABASE_URL="postgresql://ci:ci@127.0.0.1:5432/ci?schema=public"
-      - pnpm install --frozen-lockfile
-      - pnpm prisma:generate
-      - "# 4. 单测（165 suites / 2207 tests，本地约 60s）"
-      - pnpm test
+    - set -e
+    - "# 1. 先确认真实运行时（镜像自带 node 可能极旧）"
+    - node -v && npm -v
+    - "# 2. pnpm 必须锁版本，且与 package.json 的 packageManager 一致（lockfileVersion 9.0 需要\
+      \ pnpm>=9）"
+    - npm config set registry https://registry.npmmirror.com
+    - npm install -g pnpm@11.11.0
+    - pnpm -v
+    - "# 3. 生成的 Prisma client 不入库，必须先 generate；CI 无 .env，给占位 URL"
+    - export DATABASE_URL="postgresql://ci:ci@127.0.0.1:5432/ci?schema=public"
+    - pnpm install --frozen-lockfile
+    - pnpm prisma:generate
+    - "# 4. 单测（165 suites / 2207 tests，本地约 60s）"
+    - pnpm test
     report:
       path: mochawesome-report
       index: mochawesome.html
