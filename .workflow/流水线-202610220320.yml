@@ -10,7 +10,7 @@ stages:
   - step: ut@nodejs
     name: ""
     displayName: Nodejs 单元测试
-    nodeVersion: 22.22.0
+    nodeVersion: 24.13.0
     commands:
     - "# 设置NPM源，提升安装速度"
     - npm config set registry https://registry.npmmirror.com
