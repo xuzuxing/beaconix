@@ -475,8 +475,12 @@ rclone copy probes/releases/2.1.1/beaconix-probe-2.1.1.tar.gz \
   `run` 自动发起，链接进 journal：`journalctl -u beaconix-probe -f`。
 - `self-update` **不会**自己覆盖 `/opt` 下的文件（需要 root），它只负责比对版本并
   打印升级命令；真正的替换由 `install.sh` 完成（`install.sh` 可重复执行，等于原地升级）。
-- `install.sh` 的下载源可用 `BEACON_DOWNLOAD_BASE` 覆盖，API 地址可用
-  `BEACON_API_URL` 覆盖，私有化部署直接改这两个变量即可。
+- `install.sh` 的下载源可用 `BEACON_DOWNLOAD_BASE` 覆盖；API 地址默认
+  `https://beaconix.app/api`，可用 `--api-url` / `BEACON_API_URL` 覆盖，并写进
+  `/etc/beaconix/probe.env`（unit 的 `EnvironmentFile=-`，之前的版本不写这个
+  文件，导致首次 `run` 落回 agent 内置的 `http://localhost:3000/api` 并被
+  preflight 拒绝）。`probe.env` 里已有的地址在重装时保留，除非显式传了
+  `--api-url`/`BEACON_API_URL`，其它键也不会被覆盖。
 - systemd unit 由 `install.sh` 生成，`ExecStart=<node> /opt/beaconix-probe/bin/beaconix-probe.js run`，
   所以升级只要替换 `/opt/beaconix-probe` 内容并 `systemctl restart`，unit 无需改。
 
@@ -641,6 +645,7 @@ tag 版本与 `package.json` 一致（可在 step 里加一条断言）。
 | `self-update` 报 `Update manifest … returned HTTP 404` | `latest.json` 未上传或路径不在 `base` 下 | 确认默认 base 是 `…/probe`，manifest 就在该目录 |
 | `self-update` 长期显示「Up to date」但已发新版 | CDN 缓存了 `latest.json` | 给 `latest.json` 设 60s / no-cache 并刷新缓存 |
 | `self-update` 报 `missing a version` | manifest 被手工改坏 | 用脚本重新生成，不要手写 |
+| 服务 5 秒一次重启，日志 `Insecure API URL "http://localhost:3000/api"` | `/etc/beaconix/probe.env` 缺 `BEACON_API_URL`（老安装器不写该文件，agent 落回内置开发默认值） | `printf 'BEACON_API_URL=https://beaconix.app/api\n' \| sudo tee /etc/beaconix/probe.env` 后 `sudo systemctl restart beaconix-probe`；新版 `install.sh` 会自动写 |
 | 安装后 `beaconix-probe: command not found` | `/usr/local/bin/beaconix-probe` 这个 wrapper 没生成（通常是脚本中途失败） | 重跑 `install.sh`；检查 `/usr/local/bin` 是否在 PATH |
 | SCF 报 `Cannot find module './functions/scf'` 或 `../src/config` | zip 里缺了 `index.js` 或 `functions/` 目录 | 重新 `pnpm probe:pack:scf` 上传；保持 `index.js` + `functions/scf.js` + `src/` 布局，handler 用 `index.main` |
 | SCF 探针频繁 OFFLINE | 触发器周期 ≠ `PROBE_INTERVAL_SECONDS` | 两者必须相等，按部署指南设置 |

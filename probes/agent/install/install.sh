@@ -29,6 +29,14 @@
 #   --login       run the interactive device-code login right now
 #   (neither)     install only — the first probe start prints the approval URL
 #
+# The API base URL is resolved from --api-url, then BEACON_API_URL, then
+# https://beaconix.app/api, and is written to /etc/beaconix/probe.env, the file
+# the unit loads. Without it a plain install would run with the agent's built-in
+# development default (http://localhost:3000/api), which preflight rejects with
+# "Insecure API URL" and the service would restart-loop. An address already in
+# probe.env is kept unless --api-url/BEACON_API_URL overrides it, so re-running
+# the installer never repoints a mirror/staging probe at production silently.
+#
 # Node.js >= 18 is a prerequisite. `sudo` resets PATH to `secure_path`, so a node
 # installed per-user (nvm / fnm / volta / asdf) is invisible to this script even
 # when `node -v` works in the invoking shell. `ensure_node` therefore also probes
@@ -49,7 +57,14 @@ set -eu
 
 DOWNLOAD_BASE="${BEACON_DOWNLOAD_BASE:-https://get.beaconix.app/probe}"
 MANIFEST_URL="${BEACON_MANIFEST_URL:-}"
+DEFAULT_API_URL="https://beaconix.app/api"
 API_URL="${BEACON_API_URL:-}"
+# Whether the address came from --api-url / BEACON_API_URL rather than the
+# default: only an explicit address overwrites one already in probe.env.
+API_URL_EXPLICIT=0
+if [ -n "$API_URL" ]; then
+    API_URL_EXPLICIT=1
+fi
 ENROLL_TOKEN=""
 VERSION="latest"
 MANAGE_SERVICE=1
@@ -79,7 +94,8 @@ Usage:
 Options:
   --token <t>       One-time enrollment token issued in the web UI
   --login           Start the interactive device-code login after installing
-  --api-url <url>   Beacon API base URL
+  --api-url <url>   Beacon API base URL (default: https://beaconix.app/api);
+                    recorded in /etc/beaconix/probe.env
   --version <v>     Install a specific CLI version (default: latest, resolved via latest.json)
   --no-service      Install/update the payload only; do not touch the unit
   --uninstall       Remove the agent and its systemd unit
@@ -89,6 +105,9 @@ Without --token/--login the installer only installs; the first probe start
 prints the approval URL (systemd: journalctl -u beaconix-probe -f).
 
 Environment:
+  BEACON_API_URL    Beacon API base URL (default: https://beaconix.app/api).
+                    An address already in /etc/beaconix/probe.env is kept
+                    unless this (or --api-url) is given explicitly.
   BEACON_NODE_BIN   Absolute path to the node binary (default: PATH, then the
                     usual install roots such as /usr/local/bin, nvm, fnm).
                     `sudo` clears the environment, so with `curl | sudo sh` set
@@ -107,6 +126,7 @@ while [ $# -gt 0 ]; do
         --api-url)
             [ $# -ge 2 ] || die "--api-url needs a value"
             API_URL="$2"
+            API_URL_EXPLICIT=1
             shift 2
             ;;
         --version)
@@ -136,6 +156,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ -z "$API_URL" ]; then
+    API_URL="$DEFAULT_API_URL"
+fi
+
 [ "$(id -u)" -eq 0 ] || die "must run as root (use: curl … | sudo sh)"
 
 uninstall() {
@@ -149,7 +173,7 @@ uninstall() {
     fi
     rm -rf "$INSTALL_DIR"
     rm -f "$BIN_LINK"
-    log "removed the agent (credentials in $CONF_DIR were kept)"
+    log "removed the agent (credentials and probe.env in $CONF_DIR were kept)"
     exit 0
 }
 
@@ -305,6 +329,41 @@ prepare_dirs() {
     chmod 750 "$CONF_DIR" "$LOG_DIR" "$RUN_DIR"
 }
 
+# Record the API URL in probe.env, the file the unit loads via
+# `EnvironmentFile=-`. Without it a plain install falls through to the agent's
+# built-in default (http://localhost:3000/api), which preflight rejects and the
+# service restart-loops. Unknown keys are preserved so a hand-edited probe.env
+# survives a reinstall, and an address already configured there is kept unless
+# --api-url / BEACON_API_URL overrides it explicitly.
+write_env_file() {
+    env_file="$CONF_DIR/probe.env"
+    tmp_env="$env_file.new.$$"
+    existing=""
+    : > "$tmp_env"
+    if [ -f "$env_file" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                BEACON_API_URL=*)
+                    existing="${line#BEACON_API_URL=}"
+                    continue
+                    ;;
+            esac
+            printf '%s\n' "$line" >> "$tmp_env"
+        done < "$env_file"
+    fi
+
+    if [ "$API_URL_EXPLICIT" -eq 0 ] && [ -n "$existing" ]; then
+        API_URL="$existing"
+        log "keeping the API url already set in $env_file"
+    fi
+
+    printf 'BEACON_API_URL=%s\n' "$API_URL" >> "$tmp_env"
+    mv "$tmp_env" "$env_file"
+    chown root:"$RUN_USER" "$env_file" 2>/dev/null || true
+    chmod 640 "$env_file"
+    log "api url: $API_URL (in $env_file)"
+}
+
 # Fetch a manifest into $MANIFEST (default: the root pointer). Non-zero when
 # the manifest cannot be read at all.
 fetch_manifest() {
@@ -450,20 +509,11 @@ EOF
 maybe_enroll() {
     if [ -n "$ENROLL_TOKEN" ]; then
         log "redeeming enrollment token"
-        if [ -n "$API_URL" ]; then
-            "$BIN_LINK" enroll --enroll-token "$ENROLL_TOKEN" --api-url "$API_URL"
-        else
-            "$BIN_LINK" enroll --enroll-token "$ENROLL_TOKEN"
-        fi
+        "$BIN_LINK" enroll --enroll-token "$ENROLL_TOKEN" --api-url "$API_URL"
     elif [ "$DO_LOGIN" -eq 1 ]; then
         log "starting interactive device-code login"
-        if [ -n "$API_URL" ]; then
-            "$BIN_LINK" login --api-url "$API_URL" || \
-                log "login did not complete; the probe will retry on startup"
-        else
-            "$BIN_LINK" login || \
-                log "login did not complete; the probe will retry on startup"
-        fi
+        "$BIN_LINK" login --api-url "$API_URL" || \
+            log "login did not complete; the probe will retry on startup"
     else
         log "no --token/--login given; the probe will print an approval URL on first start"
     fi
@@ -510,6 +560,7 @@ main() {
     ensure_node
     ensure_user
     prepare_dirs
+    write_env_file
     download_payload
     maybe_enroll
 

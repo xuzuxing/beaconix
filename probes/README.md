@@ -80,6 +80,12 @@ curl -fsSL https://get.beaconix.app/install.sh \
 系统级 Node.js（`/usr/bin/node` 或 `/usr/local/bin/node`）；否则用 `--no-service`
 只装程序，再 `sudo beaconix-probe run` 手动运行。
 
+安装器还会把 API 地址写进 `/etc/beaconix/probe.env`（默认 `https://beaconix.app/api`，
+可用 `--api-url` 或 `BEACON_API_URL` 覆盖）。缺这个文件时 agent 会退回内置的开发默认值
+`http://localhost:3000/api`，明文 http 会被 preflight 拒绝，服务随即变成 5 秒一次的重启
+循环。重装会保留 `probe.env` 里已有的地址（除非显式传参），其它键（如
+`PROBE_INTERVAL_SECONDS`）也不会被覆盖。
+
 本地批量测试可使用 [系统探针测试容器](test-fleet/README.md)：启动时通过管理员账号登录，
 自动补齐默认 100 个专用系统探针，并在一个容器里运行独立 Agent 进程。
 创建返回的凭据保存在持久卷中供重启复用；需要在测试后端显式提高同 IP 限流额度。
