@@ -29,6 +29,22 @@
 #   --login       run the interactive device-code login right now
 #   (neither)     install only — the first probe start prints the approval URL
 #
+# Node.js >= 18 is a prerequisite. `sudo` resets PATH to `secure_path`, so a node
+# installed per-user (nvm / fnm / volta / asdf) is invisible to this script even
+# when `node -v` works in the invoking shell. `ensure_node` therefore also probes
+# the usual install roots, and `BEACON_NODE_BIN=/path/to/node` overrides the
+# lookup outright.
+#
+# `sudo` also runs with env_reset, so an exported BEACON_NODE_BIN never reaches
+# this script; pass it *after* sudo instead:
+#
+#   curl -fsSL https://get.beaconix.app/install.sh \
+#       | sudo BEACON_NODE_BIN="$(command -v node)" sh -s --
+#
+# The CLI is linked through a small wrapper that execs the resolved node binary,
+# so `beaconix-probe …` keeps working when `node` is not on the caller's PATH
+# (the systemd unit does not need it: it calls node directly).
+#
 set -eu
 
 DOWNLOAD_BASE="${BEACON_DOWNLOAD_BASE:-https://get.beaconix.app/probe}"
@@ -71,6 +87,13 @@ Options:
 
 Without --token/--login the installer only installs; the first probe start
 prints the approval URL (systemd: journalctl -u beaconix-probe -f).
+
+Environment:
+  BEACON_NODE_BIN   Absolute path to the node binary (default: PATH, then the
+                    usual install roots such as /usr/local/bin, nvm, fnm).
+                    `sudo` clears the environment, so with `curl | sudo sh` set
+                    it after sudo, e.g.
+                      … | sudo BEACON_NODE_BIN=/path/to/node sh -s --
 EOF
 }
 
@@ -134,14 +157,138 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
     uninstall
 fi
 
+NODE_BIN=""
+
+# Major version of a node binary; empty when it cannot be determined.
+node_major_of() {
+    version_out="$("$1" -v 2>/dev/null || true)"
+    printf '%s' "${version_out#v}" | cut -d. -f1
+}
+
+# Roots used by the per-user version managers (nvm, fnm, volta, asdf).
+node_version_roots() {
+    printf '%s\n' \
+        "${NVM_DIR:-}" \
+        "${HOME:-}/.nvm" \
+        /root/.nvm \
+        /usr/local/nvm \
+        /usr/local/share/nvm \
+        /opt/nvm
+    if [ -n "${SUDO_USER:-}" ]; then
+        sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || true)"
+        if [ -n "$sudo_home" ]; then
+            printf '%s\n' "$sudo_home/.nvm" "$sudo_home/.fnm" "$sudo_home/.volta" "$sudo_home/.asdf"
+        fi
+    fi
+}
+
+# Print a usable node path, preferring one >= 18. Empty when nothing was found.
+find_node_bin() {
+    first_any=""
+    for candidate in \
+        /usr/local/bin/node /usr/bin/node /bin/node /snap/bin/node \
+        /opt/node/bin/node /opt/nodejs/bin/node /opt/nodejs/*/bin/node \
+        /usr/local/node/bin/node /usr/local/nodejs/bin/node
+    do
+        [ -x "$candidate" ] || continue
+        [ -n "$first_any" ] || first_any="$candidate"
+        candidate_major="$(node_major_of "$candidate")"
+        if [ -n "$candidate_major" ] && [ "$candidate_major" -ge 18 ] 2>/dev/null; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+
+    roots="$(node_version_roots)"
+    while IFS= read -r root; do
+        [ -n "$root" ] || continue
+        for candidate in \
+            "$root"/versions/node/*/bin/node \
+            "$root"/node-versions/*/installation/bin/node \
+            "$root"/bin/node \
+            "$root"/shims/node
+        do
+            [ -x "$candidate" ] || continue
+            [ -n "$first_any" ] || first_any="$candidate"
+            candidate_major="$(node_major_of "$candidate")"
+            if [ -n "$candidate_major" ] && [ "$candidate_major" -ge 18 ] 2>/dev/null; then
+                printf '%s' "$candidate"
+                return 0
+            fi
+        done
+    done <<EOF
+$roots
+EOF
+
+    printf '%s' "$first_any"
+    return 0
+}
+
 ensure_node() {
-    if ! have node; then
-        die "Node.js >= 18 is required but 'node' was not found; install it and re-run"
+    node_source="PATH"
+    NODE_BIN="${BEACON_NODE_BIN:-}"
+    if [ -n "$NODE_BIN" ]; then
+        node_source="BEACON_NODE_BIN"
+        [ -x "$NODE_BIN" ] || die "BEACON_NODE_BIN=$NODE_BIN is not an executable file"
+    else
+        NODE_BIN="$(command -v node 2>/dev/null || true)"
     fi
-    major="$(node -p 'process.versions.node.split(".")[0]')"
-    if [ "$major" -lt 18 ]; then
-        die "Node.js >= 18 required (found $(node -v))"
+
+    if [ -z "$NODE_BIN" ]; then
+        node_source="install-root scan"
+        NODE_BIN="$(find_node_bin)"
+        [ -n "$NODE_BIN" ] || die "Node.js >= 18 is required but 'node' was not found. \
+PATH is '$PATH' and no node binary exists in the usual install roots. \
+'sudo' resets PATH, so an nvm/fnm install needs 'sudo env \"PATH=\$PATH\" sh' \
+or BEACON_NODE_BIN=/path/to/node."
+        log "node is not on PATH (sudo resets it); using $NODE_BIN"
     fi
+
+    case "$NODE_BIN" in
+        /*) ;;
+        *)
+            # A relative BEACON_NODE_BIN (or a non-absolute PATH hit) would land
+            # verbatim in ExecStart=, which systemd refuses.
+            node_abs_dir="$(cd "$(dirname "$NODE_BIN")" 2>/dev/null && pwd)" || node_abs_dir=""
+            [ -n "$node_abs_dir" ] || die "cannot resolve $NODE_BIN to an absolute path"
+            NODE_BIN="$node_abs_dir/$(basename "$NODE_BIN")"
+            ;;
+    esac
+
+    node_dir="$(dirname "$NODE_BIN")"
+    case ":$PATH:" in
+        *":$node_dir:"*) ;;
+        *)
+            PATH="$node_dir:$PATH"
+            export PATH
+            ;;
+    esac
+
+    node_version="$("$NODE_BIN" -v 2>/dev/null || true)"
+    node_major="${node_version#v}"
+    node_major="${node_major%%.*}"
+    case "$node_major" in
+        ''|*[!0-9]*)
+            die "could not determine the Node.js version of $NODE_BIN (got '$node_version')"
+            ;;
+    esac
+    [ "$node_major" -ge 18 ] || die "Node.js >= 18 required (found $node_version at $NODE_BIN)"
+
+    case "$NODE_BIN" in
+        /root/*|/home/*)
+            if [ "$MANAGE_SERVICE" -eq 1 ]; then
+                die "Node.js was found at $NODE_BIN, which the '$RUN_USER' service user \
+cannot reach (the unit sets ProtectHome=true). Install a system-wide Node.js \
+(apt/nodesource to /usr/bin/node, or the official tarball under /usr/local) and re-run, \
+or install with --no-service."
+            fi
+            log "warning: $NODE_BIN lives in a home directory, which the unit's"
+            log "         ProtectHome=true hides; only manual runs will work:"
+            log "           sudo $BIN_LINK run"
+            ;;
+    esac
+
+    log "using Node.js $node_version from $NODE_BIN ($node_source)"
 }
 
 ensure_user() {
@@ -174,7 +321,7 @@ fetch_manifest() {
 
 manifest_field() {
     printf '%s' "$MANIFEST" | \
-        node -p "JSON.parse(require('fs').readFileSync(0, 'utf8'))['$1'] || ''" \
+        "${NODE_BIN:-node}" -p "JSON.parse(require('fs').readFileSync(0, 'utf8'))['$1'] || ''" \
             2>/dev/null || true
 }
 
@@ -242,6 +389,21 @@ candidate_urls() {
     printf '%s\n' "$DOWNLOAD_BASE/beaconix-probe-latest.tar.gz"
 }
 
+# /usr/local/bin/beaconix-probe is a wrapper, not a symlink: the CLI is a
+# `#!/usr/bin/env node` script, which would not find a node missing from the
+# caller's PATH (sudo's secure_path, an nvm-only install, …).
+write_bin_link() {
+    mkdir -p "$(dirname "$BIN_LINK")"
+    # `>` follows a symlink, so drop a pre-existing link before writing.
+    rm -f "$BIN_LINK"
+    cat > "$BIN_LINK" <<EOF
+#!/bin/sh
+# Generated by the Beacon probe installer; reinstall to point it elsewhere.
+exec "$NODE_BIN" "$INSTALL_DIR/bin/beaconix-probe.js" "\$@"
+EOF
+    chmod 755 "$BIN_LINK"
+}
+
 download_payload() {
     resolve_manifest
     if [ -z "$expected_sha" ]; then
@@ -281,7 +443,7 @@ EOF
     rm -rf "$tmp"
 
     chmod +x "$INSTALL_DIR/bin/beaconix-probe.js"
-    ln -sf "$INSTALL_DIR/bin/beaconix-probe.js" "$BIN_LINK"
+    write_bin_link
     log "installed CLI to $INSTALL_DIR ($resolved_version, linked at $BIN_LINK)"
 }
 
@@ -313,7 +475,6 @@ maybe_enroll() {
 }
 
 write_unit() {
-    node_bin="$(command -v node)"
     log "writing $UNIT_PATH"
     cat > "$UNIT_PATH" <<EOF
 [Unit]
@@ -327,7 +488,7 @@ Type=simple
 User=$RUN_USER
 Group=$RUN_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$node_bin $INSTALL_DIR/bin/beaconix-probe.js run
+ExecStart="$NODE_BIN" $INSTALL_DIR/bin/beaconix-probe.js run
 Restart=always
 RestartSec=5
 EnvironmentFile=-$CONF_DIR/probe.env

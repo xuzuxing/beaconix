@@ -624,8 +624,10 @@ tag 版本与 `package.json` 一致（可在 step 里加一条断言）。
   本身没有签名（见下一条）。
 - **没有签名**：产物可被下载源篡改。若要防供应链攻击，可加 minisign/cosign 签名，
   并在 `install.sh` 里验签。
-- **依赖宿主机 Node**：`install.sh` 要求目标机已装 Node ≥ 18。若想完全自包含，可另出
-  一个 Node SEA / 单文件可执行产物的发布通道（当前 `--no-scf` 之类的开关不影响主链路）。
+- **依赖宿主机 Node**：`install.sh` 要求目标机已装 Node ≥ 18（可用
+  `BEACON_NODE_BIN` 指定；家目录下的 nvm/fnm node 因 unit 的 `ProtectHome=true`
+  只能配合 `--no-service` 手动运行）。若想完全自包含，可另出一个 Node SEA /
+  单文件可执行产物的发布通道（当前 `--no-scf` 之类的开关不影响主链路）。
 - **SCF zip 未在真实云函数环境做冒烟**：本地已做 zip 结构与 CRC 校验，但触发器周期与
   `PROBE_INTERVAL_SECONDS` 必须相等这一约束只能部署后验证。
 
@@ -639,7 +641,7 @@ tag 版本与 `package.json` 一致（可在 step 里加一条断言）。
 | `self-update` 报 `Update manifest … returned HTTP 404` | `latest.json` 未上传或路径不在 `base` 下 | 确认默认 base 是 `…/probe`，manifest 就在该目录 |
 | `self-update` 长期显示「Up to date」但已发新版 | CDN 缓存了 `latest.json` | 给 `latest.json` 设 60s / no-cache 并刷新缓存 |
 | `self-update` 报 `missing a version` | manifest 被手工改坏 | 用脚本重新生成，不要手写 |
-| 安装后 `beaconix-probe: command not found` | 软链 `/usr/local/bin/beaconix-probe` 没建（通常是脚本中途失败） | 重跑 `install.sh`；检查 `/usr/local/bin` 是否在 PATH |
+| 安装后 `beaconix-probe: command not found` | `/usr/local/bin/beaconix-probe` 这个 wrapper 没生成（通常是脚本中途失败） | 重跑 `install.sh`；检查 `/usr/local/bin` 是否在 PATH |
 | SCF 报 `Cannot find module './functions/scf'` 或 `../src/config` | zip 里缺了 `index.js` 或 `functions/` 目录 | 重新 `pnpm probe:pack:scf` 上传；保持 `index.js` + `functions/scf.js` + `src/` 布局，handler 用 `index.main` |
 | SCF 探针频繁 OFFLINE | 触发器周期 ≠ `PROBE_INTERVAL_SECONDS` | 两者必须相等，按部署指南设置 |
 | 容器日志出现 `curl: (22) … 404` / `curl: (6) Could not resolve host` | 下载源不可达，或该版本文件不存在 | 检查 `BEACON_DOWNLOAD_BASE` 与 `PROBE_VERSION`（预发布不写根 `latest.json`） |

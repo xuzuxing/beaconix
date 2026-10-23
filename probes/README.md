@@ -62,6 +62,24 @@ curl -fsSL https://get.beaconix.app/install.sh | sudo sh
 - `--version <v>`：安装指定版本（默认解析 `latest.json`）；
 - `--no-service`：只装程序，之后手动 `sudo beaconix-probe run`。
 
+前置条件是 **Node.js ≥ 18**。`sudo` 会把 `PATH` 重置为 `secure_path`，因此用
+nvm / fnm / volta 装在用户家目录的 node 在安装器里看不到（`node -v` 在你自己
+的 shell 里却正常）。安装器会额外扫描常见安装位置（`/usr/local/bin`、`/usr/bin`、
+nvm / fnm / volta / asdf 根目录），也可以用 `BEACON_NODE_BIN=/path/to/node` 指定。
+`sudo` 还会清空环境变量（`env_reset`），所以在调用者 shell 里 export 的
+`BEACON_NODE_BIN` 传不进 `curl | sudo sh`，必须写在 `sudo` 之后：
+
+```bash
+curl -fsSL https://get.beaconix.app/install.sh \
+    | sudo BEACON_NODE_BIN="$(command -v node)" sh -s --
+```
+
+`/usr/local/bin/beaconix-probe` 是指向所选 node 的 wrapper 脚本（不再是软链），
+因此 node 不在调用者 `PATH` 上时 `beaconix-probe …` 依然可用。家目录下的 node
+无法被 systemd 服务用户访问（unit 设了 `ProtectHome=true`），系统级部署建议装一个
+系统级 Node.js（`/usr/bin/node` 或 `/usr/local/bin/node`）；否则用 `--no-service`
+只装程序，再 `sudo beaconix-probe run` 手动运行。
+
 本地批量测试可使用 [系统探针测试容器](test-fleet/README.md)：启动时通过管理员账号登录，
 自动补齐默认 100 个专用系统探针，并在一个容器里运行独立 Agent 进程。
 创建返回的凭据保存在持久卷中供重启复用；需要在测试后端显式提高同 IP 限流额度。
