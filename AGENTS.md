@@ -20,9 +20,12 @@ pnpm test:watch
 pnpm test:cov
 pnpm test:e2e           # jest with test/jest-e2e.json
 # run a single test file:
-pnpm test -- src/modules/tasks/tasks.service.spec.ts
+pnpm exec jest src/modules/tasks/tasks.service.spec.ts
 # run tests matching a name:
-pnpm test -- -t "should create a task"
+pnpm exec jest -t "should create a task"
+# NOTE: `pnpm test -- <args>` is unreliable: pnpm keeps the literal `--` under
+# POSIX shells, so jest receives the flags as testPathPatterns and reports
+# "No tests found". Use `pnpm exec jest ...` (works in bash and PowerShell).
 
 pnpm prisma:generate    # regenerate client into src/generated/prisma (REQUIRED after schema edits)
 pnpm prisma:migrate     # migrate dev

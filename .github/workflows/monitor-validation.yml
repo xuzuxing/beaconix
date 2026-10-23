@@ -67,7 +67,9 @@ jobs:
               env:
                   APPLICATION_MONITOR_INTEGRATION: disposable-local-services
             - name: Verify WebSocket, gRPC, Docker API and MongoDB teardown
-              run: pnpm test -- --runInBand src/modules/checker/checkers/application-protocols.integration.spec.ts src/modules/checker/checkers/mongodb-worker.spec.ts
+              # `pnpm exec` instead of `pnpm test --`: pnpm forwards a literal `--`
+              # under POSIX shells, which jest would parse as a path pattern.
+              run: pnpm exec jest --runInBand src/modules/checker/checkers/application-protocols.integration.spec.ts src/modules/checker/checkers/mongodb-worker.spec.ts
             - name: Stop isolated Redis
               if: always()
               run: docker rm --force beaconix-monitor-redis

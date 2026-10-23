@@ -53,7 +53,9 @@ jobs:
         run: pnpm lint
 
       - name: Test
-        run: pnpm test -- --maxWorkers=2 --no-coverage
+        # NOTE: do not use `pnpm test -- <flags>`; pnpm forwards the literal `--`
+        # under POSIX shells, jest then treats the flags as testPathPatterns.
+        run: pnpm exec jest --maxWorkers=2 --no-coverage
 
       - name: Build
         run: pnpm build
