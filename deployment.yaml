@@ -1,0 +1,618 @@
+# =============================================================================
+# beaconix API — k3s 部署清单
+#
+# 部署：
+#   kubectl apply -f deployment.yaml
+#   kubectl -n beaconix rollout status deploy/beaconix-app
+#
+# 文件分四节，可以整节删除：
+#   0) Namespace / ConfigMap / Secret          —— 必需
+#   1) 应用：PVC + Deployment + Service + IngressRoute —— 必需
+#   2) 依赖组件 PostgreSQL / Redis             —— 自建时保留；用外部托管实例时整节
+#                                                 删除，并把 Secret 里的 DATABASE_URL /
+#                                                 REDIS_URL 改成外部地址
+#   3) 可选加固：NetworkPolicy                 —— 按需启用
+#
+# 节点调度：
+#   应用 Pod 通过 nodeSelector 固定到带 node-role=prod 标签的 Worker（与平台方示例
+#   一致）。部署前确认节点已打标签，否则 Pod 会一直 Pending：
+#     kubectl get nodes -L node-role
+#     kubectl label node <node-name> node-role=prod
+#
+# 副本数：
+#   保持 1 副本。原因：/app/storage 是 local-path（ReadWriteOnce）卷，且镜像启动时
+#   会先跑 prisma migrate deploy。若要按示例做成 2 副本高可用，需要先把附件存储换成
+#   OSS 或 RWX 共享卷，并把迁移拆成独立 Job（之后才能安全改回 RollingUpdate）。
+#
+# 对外路由（同域名 beaconix.app 按路径分流）：
+#   /api/*            → beaconix-app-svc  （Nest API，全局前缀就是 /api）
+#   /storage/public/* → beaconix-app-svc  （公开附件静态目录，见 main.ts）
+#   /*                → nginx-web         （前端静态站，需与本次部署在同一命名空间、
+#                                          监听 80；SPA history fallback 由 nginx 负责）
+#
+# 镜像：
+#   默认使用本地镜像 beaconix-app:latest（与 docker-compose.yml 同名）。推到镜像
+#   仓库后改成实际地址，例如 ghcr.io/your-org/beaconix:1.0.0。单节点 k3s 也可以
+#   直接导入 containerd，免去拉取：
+#     docker save beaconix-app:latest | sudo k3s ctr images import -
+#
+# 部署前必须替换的占位符（随机值用 `openssl rand -base64 32` 生成）：
+#   - Secret beaconix-secrets：JWT_SECRET / JWT_REFRESH_SECRET /
+#     TWO_FACTOR_SECRET_KEY / MONITOR_SECRET_KEY / DATABASE_URL
+#   - Secret beaconix-postgres：POSTGRES_PASSWORD（与 DATABASE_URL 里的密码一致）
+#   - ConfigMap beaconix-config：APP_WEB_URL / CORS_ORIGINS / BEACON_PUBLIC_API_URL
+#   - IngressRoute：match 里的域名，以及需要 HTTPS 时的 tls.secretName
+#
+# 注意：这里的 Secret 只是模板占位，不要带着真实值提交回仓库。更稳妥的做法是
+# 删掉 Secret 小节，改用 `kubectl -n beaconix create secret generic ...` 或
+# SealedSecrets 管理。
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# 0. 命名空间与公共配置
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: beaconix
+  labels:
+    app.kubernetes.io/part-of: beaconix
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: beaconix-config
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: beaconix
+    app.kubernetes.io/part-of: beaconix
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  # 监听所有网卡，否则 Service 无法转发
+  HOST: "0.0.0.0"
+  APP_NAME: "beaconix"
+  # 前端地址，用于邮件里的链接
+  APP_WEB_URL: "https://beaconix.app"
+  # 允许跨域的前端来源，逗号分隔；留空则关闭 CORS
+  CORS_ORIGINS: "https://beaconix.app"
+  # 容器内路径，与 Deployment 的 volumeMounts 对应
+  STORAGE_PUBLIC_ROOT: "/app/storage/public"
+  STORAGE_PRIVATE_ROOT: "/app/storage/private"
+  REDIS_KEY_PREFIX: "beaconix:"
+  REDIS_DB: "0"
+  # 定时任务 cron 表达式使用的时区（IANA 名称）
+  SCHEDULER_TIMEZONE: "Asia/Shanghai"
+  PROBE_OFFLINE_AFTER_SECONDS: "180"
+  # 探针安装命令中展示的 API 地址
+  BEACON_PUBLIC_API_URL: "https://beaconix.app"
+  # 日志交给 k3s 从 stdout 收集，不写文件
+  LOGGER_SERVICE_NAME: "beaconix"
+  LOGGER_DIR: "/app/logs"
+  LOGGER_LEVEL: "info"
+  LOGGER_PRETTY_PRINT: "false"
+  LOGGER_TO_CONSOLE: "true"
+  LOGGER_TO_FILE: "false"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: beaconix-secrets
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: beaconix
+    app.kubernetes.io/part-of: beaconix
+type: Opaque
+stringData:
+  # 指向第 2 节的 PostgreSQL Service；用外部数据库时改写这里
+  DATABASE_URL: "postgresql://beaconix:CHANGE_ME_DB_PASSWORD@beaconix-postgres-svc:5432/beaconix?schema=public&sslmode=disable"
+  # 指向第 2 节的 Redis Service；用外部 Redis 时改写这里
+  REDIS_URL: "redis://beaconix-redis-svc:6379"
+  # 以下四个键缺少任意一个，应用都会启动失败（requireEnv）
+  JWT_SECRET: "CHANGE_ME_openssl_rand_base64_32"
+  JWT_REFRESH_SECRET: "CHANGE_ME_openssl_rand_base64_32"
+  # 32 字节 base64，用于加密 TOTP secret
+  TWO_FACTOR_SECRET_KEY: "CHANGE_ME_openssl_rand_base64_32"
+  # 32 字节 base64，用于加密监控凭据（使用监控功能时必需）
+  MONITOR_SECRET_KEY: "CHANGE_ME_openssl_rand_base64_32"
+  # 事务邮件（Resend）；不填则邮件相关功能不可用
+  RESEND_API_KEY: ""
+  RESEND_FROM_EMAIL: ""
+  RESEND_FROM_NAME: "beaconix"
+  # 支付 / OSS 等其他密钥按需补充，也可以部署后在 Admin → 设置页面里配置
+  # WECHAT_PAY_MCHID: ""
+  # WECHAT_PAY_APIV3_KEY: ""
+  # ALIPAY_APPID: ""
+  # ALIPAY_PRIVATE_KEY: ""
+  # STORAGE_OSS_ACCESS_KEY_ID: ""
+  # STORAGE_OSS_ACCESS_KEY_SECRET: ""
+
+
+---
+# -----------------------------------------------------------------------------
+# 1. 应用
+# -----------------------------------------------------------------------------
+# 附件与本地文件存储。local-path 是 k3s 自带存储类，使用节点本地磁盘。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: beaconix-storage
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: beaconix
+    app.kubernetes.io/component: api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beaconix-app
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: beaconix
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: beaconix
+spec:
+  # local-path 卷是 ReadWriteOnce，只能挂到单个节点，因此保持单副本。
+  # 多副本需要把 /app/storage 换成 RWX 存储（NFS / 共享卷），或改用 OSS。
+  replicas: 1
+  revisionHistoryLimit: 5
+  # 镜像启动时会先执行 `prisma migrate deploy`；Recreate 保证新旧 Pod 不会同时
+  # 迁移。改成独立迁移 Job 之后可以切回 RollingUpdate 以支持零停机。
+  strategy:
+    type: Recreate
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: beaconix
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: beaconix
+        app.kubernetes.io/component: api
+      annotations:
+        # Prometheus 抓取（指标端点为 /api/metrics）。没有 Prometheus 时忽略即可。
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/api/metrics"
+    spec:
+      # 【核心】强制调度到带有 prod 标签的 Worker 节点
+      nodeSelector:
+        node-role: prod
+      # 私有镜像仓库需要认证时启用：
+      # imagePullSecrets:
+      #   - name: regcred
+      # 应用监听 SIGTERM 优雅退出（enableShutdownHooks），留出收尾时间
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: api
+          # 改成实际镜像地址，例如 ghcr.io/your-org/beaconix:1.0.0
+          image: beaconix-app:latest
+          imagePullPolicy: IfNotPresent
+          # 沿用镜像自带 CMD：prisma migrate deploy && node dist/src/main
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: beaconix-config
+            - secretRef:
+                name: beaconix-secrets
+          volumeMounts:
+            - name: storage
+              mountPath: /app/storage
+            - name: logs
+              mountPath: /app/logs
+          # 启动探针：给数据库迁移和 Nest 启动留出最多 5 分钟
+          startupProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          # 存活探针只判断进程是否还能响应，不依赖 DB / Redis，
+          # 避免依赖抖动引发无谓重启
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # 就绪探针会真正检查 PostgreSQL 与 Redis；
+          # 依赖不可用时摘掉流量，Pod 不重启
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # 【核心】给 Pod 分配合理的资源，防止单个应用把 4G 的 Worker 内存打爆
+          # 注意：示例里的 64Mi/256Mi 是 nginx 量级，Node 22 + Prisma 会 OOMKilled，
+          # 所以这里按实际占用给 512Mi 请求 / 1Gi 上限，再按节点内存调整。
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "2000m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              # 丢弃所有 capability，只保留 ICMP ping 所需的 NET_RAW
+              # （监控功能会调用系统 ping）
+              drop:
+                - ALL
+              add:
+                - NET_RAW
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: beaconix-storage
+        - name: logs
+          emptyDir: {}
+---
+# 2. 业务内部服务 (Service)
+apiVersion: v1
+kind: Service
+metadata:
+  name: beaconix-app-svc
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: beaconix
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: beaconix
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: beaconix
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+# 3. 对外暴露入口 (Traefik IngressRoute)
+#    同一域名按路径分流：
+#      /api/*            → beaconix-app-svc（API）
+#      /storage/public/* → beaconix-app-svc（公开附件静态目录）
+#      /*                → nginx-web      （前端静态站）
+#    API 两条路由 priority 更高，Traefik 优先匹配它们，其余请求才落到 nginx。
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: beaconix-app-route
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: beaconix
+    app.kubernetes.io/component: api
+spec:
+  entryPoints:
+    - web
+  routes:
+    # 后端 API。Nest 的全局前缀本身就是 /api，所以这里不做 StripPrefix。
+    - match: Host(`beaconix.app`) && PathPrefix(`/api`) # 域名换成真实的
+      kind: Rule
+      priority: 100
+      services:
+        - name: beaconix-app-svc
+          port: 80
+          scheme: http # 强制走 HTTP，避免 TLS 500 错误
+    # 公开附件（头像 / 上传图片）由 API 进程在 /storage/public 下静态提供。
+    # 改用 OSS / CDN 直链后这条可以删掉。
+    - match: Host(`beaconix.app`) && PathPrefix(`/storage/public`)
+      kind: Rule
+      priority: 90
+      services:
+        - name: beaconix-app-svc
+          port: 80
+          scheme: http
+    # 其余路径（含 /、前端路由、favicon、robots.txt）交给 nginx-web。
+    # 需与本次部署在同一命名空间、Service 监听 80；名字不同就改 name。
+    # Prometheus 抓取走 Pod 注解直连 3000，不经过这里。
+    - match: Host(`beaconix.app`)
+      kind: Rule
+      priority: 1
+      services:
+        - name: beaconix-web-svc
+          port: 80
+          scheme: http
+  # 需要 HTTPS 时改用 websecure 入口并挂证书（cert-manager 或已有 Secret）：
+  # entryPoints:
+  #   - websecure
+  # tls:
+  #   secretName: beaconix-tls
+
+
+---
+# -----------------------------------------------------------------------------
+# 2. 依赖组件（可选）
+#    使用外部托管 PostgreSQL / Redis 时，整节删除，并改写 Secret beaconix-secrets
+#    中的 DATABASE_URL / REDIS_URL。
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: beaconix-postgres
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: beaconix
+type: Opaque
+stringData:
+  POSTGRES_USER: "beaconix"
+  # 必须与 beaconix-secrets 中 DATABASE_URL 的密码一致
+  POSTGRES_PASSWORD: "CHANGE_ME_DB_PASSWORD"
+  POSTGRES_DB: "beaconix"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beaconix-postgres-svc
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: beaconix
+spec:
+  # StatefulSet 的稳定网络标识：beaconix-postgres-svc.beaconix.svc.cluster.local
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: beaconix-postgres
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: beaconix
+spec:
+  serviceName: beaconix-postgres-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+    spec:
+      # 数据卷落在 prod 节点的本地磁盘上，固定节点避免卷与 Pod 分离
+      nodeSelector:
+        node-role: prod
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: beaconix-postgres
+          env:
+            # 放在子目录里：local-path 卷根目录可能已有 lost+found
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: beaconix-redis-data
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: beaconix
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beaconix-redis-svc
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: beaconix
+spec:
+  selector:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beaconix-redis
+  namespace: beaconix
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: beaconix
+spec:
+  replicas: 1
+  strategy:
+    # RWO 卷不能同时挂给新旧 Pod
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/component: cache
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/component: cache
+    spec:
+      # 数据卷落在 prod 节点的本地磁盘上，固定节点避免卷与 Pod 分离
+      nodeSelector:
+        node-role: prod
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          # appendonly 保证重启后队列 / 缓存不丢；仅集群内可达。
+          # 需要密码时追加 --requirepass 并同步修改 REDIS_URL。
+          args:
+            - redis-server
+            - --appendonly
+            - "yes"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: beaconix-redis-data
+
+
+---
+# -----------------------------------------------------------------------------
+# 3. 可选加固：只允许本命名空间的应用 Pod 连接 PostgreSQL / Redis
+#    k3s 默认的 flannel + kube-router 支持 NetworkPolicy；若集群关闭了该功能，
+#    这些策略不生效但也不会报错。
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: beaconix-postgres-allow-app
+  namespace: beaconix
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/component: database
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: beaconix
+              app.kubernetes.io/component: api
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: beaconix-redis-allow-app
+  namespace: beaconix
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/component: cache
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: beaconix
+              app.kubernetes.io/component: api
+      ports:
+        - port: 6379
+          protocol: TCP
