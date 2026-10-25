@@ -1303,6 +1303,200 @@ describe('CheckerService', () => {
                 ),
             ).rejects.toBeInstanceOf(NotFoundException);
         });
+
+        it('filters the history by batch id', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({ id: 'monitor-1' });
+            prisma.checkLog.findMany.mockResolvedValue([]);
+            prisma.checkLog.count.mockResolvedValue(0);
+
+            await service.listCheckLogs(
+                'project-1',
+                'monitor-1',
+                { page: 1, limit: 20, roundId: 'monitor-1:1709620800000' },
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(prisma.checkLog.findMany).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: expect.objectContaining({
+                        roundId: 'monitor-1:1709620800000',
+                    }),
+                }),
+            );
+        });
+    });
+
+    describe('getRoundDetail', () => {
+        const roundId = 'monitor-1:1709620800000';
+
+        function batchRow(overrides: Record<string, unknown> = {}) {
+            return {
+                id: 'log-1',
+                monitorId: 'monitor-1',
+                roundId,
+                appliedAt: new Date('2026-03-05T12:01:00.000Z'),
+                success: true,
+                localSuccess: true,
+                rescuedByProbe: false,
+                latency: 12,
+                error: null,
+                statusCode: 200,
+                ruleMatched: false,
+                ruleGroupIds: [],
+                source: 'LOCAL',
+                checkedAt: new Date('2026-03-05T12:00:00.000Z'),
+                meta: {
+                    aggregation: {
+                        protected: false,
+                        protectedReason: null,
+                        effectiveProbeCount: 1,
+                        sampleCount: 1,
+                        successCount: 1,
+                        ratio: 100,
+                        threshold: 60,
+                        decision: 'CONFIRMED_SUCCESS',
+                        settledAt: '2026-03-05T12:01:00.000Z',
+                    },
+                },
+                ...overrides,
+            };
+        }
+
+        it('returns the settled batch with its probe reports', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({ id: 'monitor-1' });
+            prisma.checkLog.findFirst.mockResolvedValue(batchRow());
+            prisma.probeResult.findMany.mockResolvedValue([
+                {
+                    id: 'result-1',
+                    probeId: 'probe-1',
+                    target: 'https://api.example.com/health',
+                    success: true,
+                    error: null,
+                    latency: 20,
+                    statusCode: 200,
+                    checkedAt: new Date('2026-03-05T12:00:10.000Z'),
+                    receivedAt: new Date('2026-03-05T12:00:12.000Z'),
+                    appliedAt: new Date('2026-03-05T12:01:00.000Z'),
+                    probe: {
+                        id: 'probe-1',
+                        name: 'Tokyo probe',
+                        scope: 'TENANT',
+                        provider: 'TENCENT',
+                        region: 'ap-northeast-1',
+                        status: 'ONLINE',
+                        enabled: true,
+                        lastHeartbeat: new Date('2026-03-05T12:00:05.000Z'),
+                    },
+                },
+            ]);
+
+            const detail = await service.getRoundDetail(
+                'project-1',
+                'monitor-1',
+                roundId,
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(detail.roundId).toBe(roundId);
+            expect(detail.settled).toBe(true);
+            expect(detail.check.roundId).toBe(roundId);
+            expect(detail.aggregation).toMatchObject({
+                decision: 'CONFIRMED_SUCCESS',
+                successCount: 1,
+            });
+            expect(detail.results).toHaveLength(1);
+            expect(detail.results[0]).toMatchObject({
+                probeId: 'probe-1',
+                success: true,
+                latency: 20,
+                statusCode: 200,
+            });
+            expect(detail.results[0].probe).toMatchObject({
+                name: 'Tokyo probe',
+                region: 'ap-northeast-1',
+                status: 'ONLINE',
+            });
+        });
+
+        it('keeps the report when the probe was deleted', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({ id: 'monitor-1' });
+            prisma.checkLog.findFirst.mockResolvedValue(batchRow());
+            prisma.probeResult.findMany.mockResolvedValue([
+                {
+                    id: 'result-1',
+                    probeId: 'probe-gone',
+                    target: 'https://api.example.com/health',
+                    success: false,
+                    error: 'connect ECONNREFUSED',
+                    latency: 0,
+                    statusCode: null,
+                    checkedAt: new Date('2026-03-05T12:00:10.000Z'),
+                    receivedAt: new Date('2026-03-05T12:00:12.000Z'),
+                    appliedAt: null,
+                    probe: null,
+                },
+            ]);
+
+            const detail = await service.getRoundDetail(
+                'project-1',
+                'monitor-1',
+                roundId,
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(detail.results[0].probe).toBeNull();
+            expect(detail.results[0].probeId).toBe('probe-gone');
+            expect(detail.results[0].appliedAt).toBeNull();
+        });
+
+        it('reports an open batch as unsettled without aggregation', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({ id: 'monitor-1' });
+            prisma.checkLog.findFirst.mockResolvedValue(
+                batchRow({ appliedAt: null, meta: {} }),
+            );
+            prisma.probeResult.findMany.mockResolvedValue([]);
+
+            const detail = await service.getRoundDetail(
+                'project-1',
+                'monitor-1',
+                roundId,
+                { type: 'USER', userId: 'user-1' },
+            );
+
+            expect(detail.settled).toBe(false);
+            expect(detail.aggregation).toBeNull();
+            expect(detail.results).toEqual([]);
+        });
+
+        it('throws when the batch does not exist', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({ id: 'monitor-1' });
+            prisma.checkLog.findFirst.mockResolvedValue(null);
+            prisma.probeResult.findMany.mockResolvedValue([]);
+
+            await expect(
+                service.getRoundDetail('project-1', 'monitor-1', roundId, {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
+            ).rejects.toBeInstanceOf(NotFoundException);
+        });
+
+        it('throws when the monitor is not in the project', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue(null);
+
+            await expect(
+                service.getRoundDetail('project-1', 'monitor-1', roundId, {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
+            ).rejects.toBeInstanceOf(NotFoundException);
+        });
     });
 
     describe('rule evaluation', () => {

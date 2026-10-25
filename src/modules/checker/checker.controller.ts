@@ -22,7 +22,7 @@ import {
 } from '@nestjs/swagger';
 import { CheckerService } from './checker.service';
 import { QueryCheckLogsDto } from './dto';
-import { CheckLogEntity } from './entities';
+import { CheckLogEntity, CheckRoundEntity } from './entities';
 import { ProjectAccessGuard } from '../../common/authorization/project-access.guard';
 import { ProjectPermission } from '../../common/authorization/project-permission.decorator';
 import { CurrentPrincipal } from '../../common/authorization/current-principal.decorator';
@@ -92,6 +92,44 @@ export class CheckerController {
             projectId,
             monitorId,
             query,
+            principal,
+        );
+    }
+
+    @Get(':monitorId/rounds/:roundId')
+    @ProjectPermission('monitor.read', {
+        resourceType: 'MONITOR',
+        idParam: 'monitorId',
+    })
+    @ApiOperation({
+        summary: 'Get one check batch with its probe reports',
+        description:
+            'A batch (round) is anchored by one local check; every probe report that carried its roundId is listed in `results`, each with the probe that reported it.',
+    })
+    @ApiParam({ name: 'projectId', description: 'Project CUID' })
+    @ApiParam({ name: 'monitorId', description: 'Monitor CUID' })
+    @ApiParam({
+        name: 'roundId',
+        description: 'Batch (round) id, formatted `<monitorId>:<epochMs>`',
+    })
+    @ApiOkResponse({
+        type: CheckRoundEntity,
+        description:
+            'Batch detail: the check row, its vote summary and reports',
+    })
+    @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
+    @ApiForbiddenResponse({ description: 'Not a member' })
+    @ApiNotFoundResponse({ description: 'Monitor or batch not found' })
+    async getRound(
+        @Param('projectId') projectId: string,
+        @Param('monitorId') monitorId: string,
+        @Param('roundId') roundId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.checkerService.getRoundDetail(
+            projectId,
+            monitorId,
+            roundId,
             principal,
         );
     }

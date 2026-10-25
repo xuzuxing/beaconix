@@ -67,6 +67,13 @@ export class CheckLogEntity {
     @ApiProperty({ example: '2026-03-05T12:00:00.000Z' })
     checkedAt: Date;
 
+    @ApiPropertyOptional({
+        example: 'cmgu92m5x0005p8l4h8z6s3k6:1709620800000',
+        description:
+            'Batch (round) this row belongs to; null for rows written before batching',
+    })
+    roundId: string | null;
+
     constructor(partial: Partial<CheckLogEntity>) {
         Object.assign(this, partial);
     }

@@ -4,6 +4,7 @@ import {
     IsEnum,
     IsInt,
     IsOptional,
+    IsString,
     Max,
     Min,
 } from 'class-validator';
@@ -34,6 +35,15 @@ export class QueryCheckLogsDto {
     @IsOptional()
     @IsEnum(CheckSource)
     source?: CheckSource;
+
+    @ApiPropertyOptional({
+        description:
+            'Filter by batch (round) id - the aggregation window one local check anchored',
+        example: 'cmgu92m5x0005p8l4h8z6s3k6:1709620800000',
+    })
+    @IsOptional()
+    @IsString()
+    roundId?: string;
 
     @ApiPropertyOptional({ default: 1, minimum: 1 })
     @IsOptional()

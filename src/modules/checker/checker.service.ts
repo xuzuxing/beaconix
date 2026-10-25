@@ -40,7 +40,13 @@ import type {
     ProbeReport,
 } from './checkers';
 import { QueryCheckLogsDto } from './dto';
-import { CheckLogEntity } from './entities';
+import {
+    CheckLogEntity,
+    CheckRoundAggregationEntity,
+    CheckRoundEntity,
+    CheckRoundProbeEntity,
+    CheckRoundProbeResultEntity,
+} from './entities';
 import {
     MONITOR_CHECK_DEDUP_PREFIX,
     MONITOR_CHECK_JOB,
@@ -443,6 +449,7 @@ export class CheckerService {
         };
         if (query.success !== undefined) where.success = query.success;
         if (query.source) where.source = query.source;
+        if (query.roundId) where.roundId = query.roundId;
 
         const [logs, total] = await Promise.all([
             this.prisma.checkLog.findMany({
@@ -464,6 +471,92 @@ export class CheckerService {
                     totalPages: Math.ceil(total / limit),
                 },
             },
+            access.effectiveRole,
+        );
+    }
+
+    /**
+     * One batch (round): the local check row that anchored it plus every probe
+     * report that carried the same `roundId`.
+     *
+     * While the batch is still open the row carries the raw local verdict and
+     * `aggregation` is null; a settled batch carries the aggregated verdict and
+     * the vote summary the settlement wrote into `CheckLog.meta`.
+     */
+    async getRoundDetail(
+        projectId: string,
+        monitorId: string,
+        roundId: string,
+        principal: AccessPrincipal,
+    ): Promise<CheckRoundEntity> {
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'monitor.read',
+        );
+        const monitor = await this.prisma.monitor.findFirst({
+            where: { id: monitorId, projectId, deletedAt: null },
+            select: { id: true },
+        });
+        if (!monitor) throw new NotFoundException('Monitor not found');
+
+        const where = {
+            monitorId,
+            projectId,
+            organizationId: access.organizationId,
+            roundId,
+        };
+        const [check, results] = await Promise.all([
+            this.prisma.checkLog.findFirst({ where }),
+            this.prisma.probeResult.findMany({
+                where,
+                orderBy: { checkedAt: 'asc' },
+                include: {
+                    probe: {
+                        select: {
+                            id: true,
+                            name: true,
+                            scope: true,
+                            provider: true,
+                            region: true,
+                            status: true,
+                            enabled: true,
+                            lastHeartbeat: true,
+                        },
+                    },
+                },
+            }),
+        ]);
+        if (!check) throw new NotFoundException('Check round not found');
+
+        const meta = (check.meta ?? {}) as Record<string, unknown>;
+        return monitoringProjection(
+            new CheckRoundEntity({
+                roundId,
+                settled: check.appliedAt !== null,
+                check: new CheckLogEntity(check),
+                aggregation:
+                    (meta.aggregation as
+                        CheckRoundAggregationEntity | undefined) ?? null,
+                results: results.map(
+                    (row) =>
+                        new CheckRoundProbeResultEntity({
+                            id: row.id,
+                            probeId: row.probeId,
+                            probe: row.probe
+                                ? new CheckRoundProbeEntity(row.probe)
+                                : null,
+                            success: row.success,
+                            error: row.error,
+                            latency: row.latency,
+                            statusCode: row.statusCode,
+                            target: row.target,
+                            checkedAt: row.checkedAt,
+                            receivedAt: row.receivedAt,
+                            appliedAt: row.appliedAt,
+                        }),
+                ),
+            }),
             access.effectiveRole,
         );
     }
