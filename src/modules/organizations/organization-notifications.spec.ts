@@ -54,6 +54,10 @@ function fixture() {
     const service = new OrganizationsService(
         db as unknown as PrismaService,
         notifications as unknown as NotificationsService,
+        {
+            assertSlugAllowed: jest.fn().mockResolvedValue(undefined),
+            getReservedSlugs: jest.fn().mockResolvedValue([]),
+        } as never,
     );
     return { service, db, notifications };
 }

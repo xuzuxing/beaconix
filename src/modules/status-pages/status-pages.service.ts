@@ -9,6 +9,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { MultiLevelCacheService } from '../../infra/cache/multi-level-cache.service';
 import { QuotaService } from '../../shared/quota/quota.service';
+import { SettingsService } from '../settings';
 import { MonitorStatus } from '../../generated/prisma/enums';
 import type {
     MonitorModel,
@@ -79,6 +80,7 @@ export class StatusPagesService {
         private readonly prisma: PrismaService,
         private readonly quotaService: QuotaService,
         private readonly cache: MultiLevelCacheService,
+        private readonly settings: SettingsService,
     ) {}
 
     async create(
@@ -470,6 +472,10 @@ export class StatusPagesService {
     }
 
     private async ensureSlugAvailable(slug: string): Promise<string> {
+        // 状态页 slug 直接出现在公开 URL `/api/status/:slug` 上，平台自留名
+        // （`admin`、`api`…）优先于占用判断：报 400 而非 409。
+        await this.settings.assertSlugAllowed(slug, 'Status page slug');
+
         const existing = await this.prisma.statusPage.findUnique({
             where: { slug },
             select: { id: true },

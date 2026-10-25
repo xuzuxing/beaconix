@@ -68,6 +68,9 @@ function setup(overrides = {}) {
             prisma as never,
             notifications as never,
             new ProjectAccessService(prisma as never),
+            {
+                assertSlugAllowed: jest.fn().mockResolvedValue(undefined),
+            } as never,
         ),
         prisma,
         tx,

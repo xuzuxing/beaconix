@@ -1,4 +1,8 @@
 import { SettingValueType } from '../../generated/prisma/enums';
+import {
+    DEFAULT_RESERVED_SLUGS,
+    RESERVED_SLUGS_SETTING_KEY,
+} from './slug-policy';
 
 /** DB 里存在但不在内置清单中的配置行（理论上不会出现）统一归入该分组 */
 export const CUSTOM_SETTING_GROUP = 'custom';
@@ -140,6 +144,19 @@ const BASE_SETTING_DEFINITIONS: readonly SettingDefinition[] = [
         value: false,
         valueType: SettingValueType.BOOLEAN,
         description: '开启后除平台超级管理员外的访问一律被挡在维护页。',
+    },
+    {
+        // 读侧见 `slug-policy.ts`：组织 slug、状态页 slug 与项目 key 都按这份
+        // 清单拦住平台自留的名字（`admin`、`api`、`status`……），避免租户抢注
+        // 与平台路由/品牌撞车的短标识。
+        key: RESERVED_SLUGS_SETTING_KEY,
+        name: '保留 slug',
+        group: 'system',
+        value: [...DEFAULT_RESERVED_SLUGS],
+        valueType: SettingValueType.JSON,
+        description:
+            '不可被注册为组织 slug、状态页 slug 或项目 key 的名称，不区分大小写。留空或填非法值会回退内置清单。',
+        stringArray: true,
     },
     // ── SMTP 发信通道 ───────────────────────────────────────────────────
     {

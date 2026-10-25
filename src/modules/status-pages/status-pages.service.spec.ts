@@ -137,14 +137,18 @@ function createService(fixture: Fixture = {}) {
     const cache = {
         getOrSet: (_key: string, factory: () => unknown) => factory(),
     };
+    const settings = {
+        assertSlugAllowed: jest.fn().mockResolvedValue(undefined),
+    };
 
     const service = new StatusPagesService(
         prisma as unknown as PrismaService,
         quotaService as never,
         cache as never,
+        settings as never,
     );
 
-    return { service, prisma, tx, quotaService, cache };
+    return { service, prisma, tx, quotaService, cache, settings };
 }
 
 describe('deriveOverallStatus', () => {

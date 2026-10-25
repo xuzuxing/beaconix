@@ -1,6 +1,10 @@
 import * as crypto from 'crypto';
 import type { Logger } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client';
+import {
+    DEFAULT_RESERVED_SLUGS,
+    isReservedSlug,
+} from '../settings/slug-policy';
 
 /** Only the delegates onboarding touches, for either a client or a transaction. */
 type OnboardingDb = Pick<
@@ -33,6 +37,11 @@ export async function provisionOrganizationForUser(
     db: OnboardingDb,
     user: ProvisioningUser,
     logger: Pick<Logger, 'log' | 'warn'>,
+    /**
+     * 平台保留 slug 清单（settings `slug.reserved`，调用方从 SettingsService 读）。
+     * 缺省用内置默认值，保证直接用本函数的地方也不会给用户分出 `admin` 这类名字。
+     */
+    reservedSlugs: Iterable<string> = DEFAULT_RESERVED_SLUGS,
 ): Promise<ProvisionedOrganization | null> {
     const existingMembership = await db.membership.findFirst({
         where: { userId: user.id },
@@ -42,7 +51,7 @@ export async function provisionOrganizationForUser(
         return null;
     }
 
-    const slug = await buildUniqueSlug(db, user);
+    const slug = await buildUniqueSlug(db, user, reservedSlugs);
     const organization = await db.organization.create({
         data: {
             name: buildOrgName(user.name),
@@ -99,6 +108,7 @@ function buildOrgName(name: string): string {
 async function buildUniqueSlug(
     db: OnboardingDb,
     user: ProvisioningUser,
+    reservedSlugs: Iterable<string>,
 ): Promise<string> {
     const base =
         slugify(user.name) ||
@@ -107,17 +117,32 @@ async function buildUniqueSlug(
 
     for (let attempt = 1; attempt <= SLUG_ATTEMPTS; attempt++) {
         const candidate = attempt === 1 ? base : `${base}-${attempt}`;
-        if (!(await slugExists(db, candidate))) {
+        if (!(await slugTaken(db, candidate, reservedSlugs))) {
             return candidate;
         }
     }
 
     const candidate = `${base}-${crypto.randomBytes(3).toString('hex')}`;
-    if (!(await slugExists(db, candidate))) {
+    if (!(await slugTaken(db, candidate, reservedSlugs))) {
         return candidate;
     }
 
     return `${base}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+/**
+ * 候选名字是否不可用：已被占用，或命中平台保留字。
+ *
+ * 保留字与占用走同一套「换后缀」重试，而不是直接报错——注册引导必须给每个
+ * 新用户分出一个可用工作区，`admin@x.com` 拿不到 `admin`，退而取 `admin-2`。
+ */
+async function slugTaken(
+    db: OnboardingDb,
+    slug: string,
+    reservedSlugs: Iterable<string>,
+): Promise<boolean> {
+    if (isReservedSlug(slug, reservedSlugs)) return true;
+    return slugExists(db, slug);
 }
 
 async function slugExists(db: OnboardingDb, slug: string): Promise<boolean> {

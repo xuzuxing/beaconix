@@ -14,6 +14,7 @@ import type { NotificationDb } from '../notifications/notification-event';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { lockOrganizationMembers } from '../../common/authorization/access-locks';
+import { SettingsService } from '../settings';
 
 @Injectable()
 export class ProjectsService {
@@ -21,9 +22,14 @@ export class ProjectsService {
         private readonly prisma: PrismaService,
         private readonly notificationsService: NotificationsService,
         private readonly access: ProjectAccessService,
+        private readonly settings: SettingsService,
     ) {}
 
     async create(orgId: string, userId: string, dto: CreateProjectDto) {
+        // key 会出现在任务编号（PROJ-42）里，平台自留名（API / SYS / ADMIN…）
+        // 一律不可用；比较不区分大小写，所以清单里写小写即可。
+        await this.settings.assertSlugAllowed(dto.key, 'Project key');
+
         return this.prisma.$transaction(async (tx) => {
             await lockOrganizationMembers(tx, orgId, [userId]);
             const access = await this.access.organization(

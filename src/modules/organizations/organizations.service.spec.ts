@@ -3,9 +3,11 @@ import {
     DEFAULT_PROJECT_KEY,
     DEFAULT_PROJECT_NAME,
 } from './organizations.service';
+import { BadRequestException } from '@nestjs/common';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
 import type { NotificationsService } from '../notifications/notifications.service';
+import type { SettingsService } from '../settings';
 
 const user = { id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com' };
 
@@ -23,15 +25,21 @@ function createService() {
         subscription: { create: jest.fn() },
     };
 
+    const settings = {
+        getReservedSlugs: jest.fn().mockResolvedValue([]),
+        assertSlugAllowed: jest.fn().mockResolvedValue(undefined),
+    };
+
     const service = new OrganizationsService(
         prisma as unknown as PrismaService,
         {
             publish: jest.fn(),
             organizationRecipients: jest.fn(),
         } as unknown as NotificationsService,
+        settings as unknown as SettingsService,
     );
 
-    return { service, prisma };
+    return { service, prisma, settings };
 }
 
 describe('OrganizationsService', () => {
@@ -184,6 +192,40 @@ describe('OrganizationsService', () => {
                     data: expect.objectContaining({ slug: 'workspace' }),
                 }),
             );
+        });
+
+        it('skips platform-reserved names and suffixes them instead', async () => {
+            const { service, prisma, settings } = createService();
+            settings.getReservedSlugs.mockResolvedValue(['admin', 'api']);
+
+            await service.provisionForUser({
+                id: 'user-5',
+                name: 'Admin',
+                email: 'admin@example.com',
+            });
+
+            expect(prisma.organization.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({ slug: 'admin-2' }),
+                }),
+            );
+        });
+    });
+
+    describe('create', () => {
+        it('rejects a platform-reserved slug before the conflict check', async () => {
+            const { service, prisma, settings } = createService();
+            settings.assertSlugAllowed.mockRejectedValue(
+                new BadRequestException(
+                    'Organization slug "admin" is reserved by the platform',
+                ),
+            );
+
+            await expect(
+                service.create('user-1', { name: 'Acme', slug: 'admin' }),
+            ).rejects.toThrow('reserved by the platform');
+            expect(prisma.organization.findUnique).not.toHaveBeenCalled();
+            expect(prisma.organization.create).not.toHaveBeenCalled();
         });
     });
 

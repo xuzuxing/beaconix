@@ -17,6 +17,7 @@ import {
 import { OrganizationEntity } from './entities';
 import { claimPersistedObjects } from '../attachments/attachment-claims';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SettingsService } from '../settings';
 import { ADMIN_ROLES } from '../notifications/notification-event';
 import {
     lockIdentities,
@@ -43,9 +44,14 @@ export class OrganizationsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notifications: NotificationsService,
+        private readonly settings: SettingsService,
     ) {}
 
     async create(userId: string, dto: CreateOrganizationDto) {
+        // 平台自留名优先于查重判断：`admin` 这类名字无论库里有没有都不可注册，
+        // 报 400（名字本身不合法）而不是 409（被别人占了）。
+        await this.settings.assertSlugAllowed(dto.slug, 'Organization slug');
+
         const existing = await this.prisma.organization.findUnique({
             where: { slug: dto.slug },
         });
@@ -390,6 +396,7 @@ export class OrganizationsService {
             tx ?? this.prisma,
             user,
             this.logger,
+            await this.settings.getReservedSlugs(),
         );
     }
 

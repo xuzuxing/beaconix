@@ -581,4 +581,35 @@ describe('SettingsService', () => {
             service.getNumber('attachments.maxImageSizeMb', 1),
         ).resolves.toBe(16);
     });
+
+    it('serves the built-in reserved slug list and blocks those names', async () => {
+        prisma.setting.findUnique.mockResolvedValue(null);
+
+        await expect(service.getReservedSlugs()).resolves.toContain('admin');
+        await expect(service.isReservedSlug('ADMIN')).resolves.toBe(true);
+        await expect(service.isReservedSlug('acme')).resolves.toBe(false);
+        await expect(
+            service.assertSlugAllowed('admin', 'Organization slug'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        await expect(
+            service.assertSlugAllowed('acme', 'Organization slug'),
+        ).resolves.toBeUndefined();
+    });
+
+    it('honours the reserved slug list overridden in the admin page', async () => {
+        prisma.setting.findUnique.mockResolvedValue({
+            value: ['acme', 'acme-status'],
+            overridden: true,
+        });
+
+        await expect(service.isReservedSlug('acme')).resolves.toBe(true);
+        // 管理页覆盖后由管理员自行维护清单，内置默认不再参与判断
+        await expect(service.isReservedSlug('admin')).resolves.toBe(false);
+    });
+
+    it('falls back to the built-in list when the stored value is invalid', async () => {
+        prisma.setting.findUnique.mockResolvedValue({ value: 'admin' });
+
+        await expect(service.getReservedSlugs()).resolves.toContain('api');
+    });
 });

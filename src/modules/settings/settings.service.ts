@@ -16,6 +16,12 @@ import {
     SettingDefinition,
 } from './settings.defaults';
 import { isValidStringArray, normalizeStringArray } from './settings.util';
+import {
+    DEFAULT_RESERVED_SLUGS,
+    RESERVED_SLUGS_SETTING_KEY,
+    isReservedSlug as matchesReservedSlug,
+    normalizeReservedSlugs,
+} from './slug-policy';
 import { claimPersistedObjects } from '../attachments/attachment-claims';
 
 export interface AttachmentRuntimeSettings {
@@ -225,6 +231,35 @@ export class SettingsService {
             maxBlobSizeMb,
             maxFilesPerRequest,
         };
+    }
+
+    /**
+     * 平台保留 slug 清单：DB 覆盖值优先（管理页可增删），缺失或非法时回退内置默认。
+     */
+    async getReservedSlugs(): Promise<string[]> {
+        const value = await this.getJson<unknown>(
+            RESERVED_SLUGS_SETTING_KEY,
+            DEFAULT_RESERVED_SLUGS,
+        );
+
+        return normalizeReservedSlugs(value);
+    }
+
+    /** 该名字是否被平台保留（不区分大小写，两端空白不计） */
+    async isReservedSlug(slug: string): Promise<boolean> {
+        return matchesReservedSlug(slug, await this.getReservedSlugs());
+    }
+
+    /**
+     * 保留字校验的统一入口：命中即抛 400。
+     * `label` 进错误信息（组织 slug / 状态页 slug / 项目 key），不回显整份清单。
+     */
+    async assertSlugAllowed(slug: string, label: string): Promise<void> {
+        if (await this.isReservedSlug(slug)) {
+            throw new BadRequestException(
+                `${label} "${slug}" is reserved by the platform`,
+            );
+        }
     }
 
     private async getValue(key: string): Promise<unknown> {
