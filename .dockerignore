@@ -36,6 +36,7 @@ coverage/
 # Docker files themselves
 Dockerfile
 docker-compose*.yml
+deployment.yaml
 probes/docker-compose.probe-test.yml
 .dockerignore
 
