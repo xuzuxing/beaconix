@@ -192,6 +192,7 @@ export class MonitorInsightsService {
                     take: 50,
                     select: {
                         id: true,
+                        roundId: true,
                         success: true,
                         localSuccess: true,
                         rescuedByProbe: true,

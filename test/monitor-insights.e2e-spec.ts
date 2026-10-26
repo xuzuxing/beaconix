@@ -328,6 +328,12 @@ suite('Monitor insights (real PostgreSQL/HTTP)', () => {
                     (c: { source: string }) => c.source === 'LOCAL',
                 ),
             ).toBe(true);
+            // The batch id rides along so the client can open the batch detail.
+            expect(
+                body.data.checks.every(
+                    (c: Record<string, unknown>) => 'roundId' in c,
+                ),
+            ).toBe(true);
             expect(body.data.events).toHaveLength(2);
             expect(body.data.events[0]).toMatchObject({
                 status: 'ongoing',

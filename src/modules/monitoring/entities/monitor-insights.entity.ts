@@ -82,6 +82,7 @@ export class MonitorInsightsEntity {
         type: 'array',
         items: object({
             id: string,
+            roundId: nullableString,
             success: { type: 'boolean' },
             localSuccess: { type: 'boolean', nullable: true },
             rescuedByProbe: { type: 'boolean' },
