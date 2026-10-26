@@ -35,8 +35,32 @@ const NOTIFY_COLORS = {
     text: '#333333',
     muted: '#999999',
     border: '#cccccc',
-    danger: '#e54545',
+    warning: '#faa224',
+    danger: '#fa3824',
 } as const;
+
+/**
+ * 邮件语义色调：提示（默认蓝）/ 警告（#faa224）/ 错误（#fa3824）。
+ * 顶部横条与提示文字共用这套颜色。
+ */
+type NoticeTone = 'info' | 'warning' | 'error';
+
+const TONE_COLORS: Record<NoticeTone, string> = {
+    info: NOTIFY_COLORS.primary,
+    warning: NOTIFY_COLORS.warning,
+    error: NOTIFY_COLORS.danger,
+};
+
+/** 各类模板对应的色调，未列出的按「提示」处理 */
+const TEMPLATE_TONES: Partial<Record<EmailTemplate, NoticeTone>> = {
+    [EmailTemplate.TASK_DUE_SOON]: 'warning',
+    [EmailTemplate.PASSWORD_RESET]: 'warning',
+    [EmailTemplate.PASSWORD_RESET_OTP]: 'warning',
+    [EmailTemplate.TWO_FACTOR_DISABLED]: 'warning',
+    [EmailTemplate.TWO_FACTOR_RECOVERY_CODE_USED]: 'warning',
+    [EmailTemplate.TASK_OVERDUE]: 'error',
+    [EmailTemplate.MONITOR_DOWN]: 'error',
+};
 
 @Injectable()
 export class EmailService {
@@ -259,6 +283,7 @@ export class EmailService {
     private wrapNotificationLayout(
         body: string,
         branding: EmailBranding,
+        tone: NoticeTone = 'info',
     ): string {
         const siteName = escapeHtml(branding.siteName);
         const supportEmail = escapeHtml(branding.supportEmail);
@@ -277,7 +302,7 @@ export class EmailService {
                             <a href="${escapeHtml(this.webUrl)}" target="_blank" style="text-decoration: none;">
                                 <img border="0" src="${escapeHtml(branding.logoUrl)}" alt="${siteName}" height="36" style="height: 36px; max-width: 200px; width: auto; display: block;" />
                             </a>
-                            <p style="height: 2px; background-color: ${NOTIFY_COLORS.primary}; border: 0; font-size: 0; padding: 0; width: 100%; margin: 20px 0 0;"></p>
+                            <p style="height: 2px; background-color: ${TONE_COLORS[tone]}; border: 0; font-size: 0; padding: 0; width: 100%; margin: 20px 0 0;"></p>
                             <div style="background-color: #ffffff; padding: 23px 0 20px; box-shadow: 0 1px 1px 0 rgba(122, 55, 55, 0.2); text-align: left;">
                                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-weight: 300; margin-bottom: 10px; border-collapse: collapse; text-align: left;">
                                     <tr>
@@ -314,23 +339,26 @@ export class EmailService {
         return `<p style="font-size: 14px; color: ${NOTIFY_COLORS.text}; line-height: 24px; margin: 6px 0 0; overflow-wrap: break-word; word-break: break-all;">${html}</p>`;
     }
 
-    /** 次要提示（12px 灰）/ 风险提示（12px 红） */
+    /** 次要提示（12px 灰）/ 提示（蓝）/ 警告（橙）/ 错误（红） */
     private noticeHint(
         html: string,
-        tone: 'muted' | 'danger' = 'muted',
+        tone: 'muted' | NoticeTone = 'muted',
     ): string {
         const color =
-            tone === 'danger' ? NOTIFY_COLORS.danger : NOTIFY_COLORS.muted;
+            tone === 'muted' ? NOTIFY_COLORS.muted : TONE_COLORS[tone];
         return `<p style="font-size: 12px; color: ${color}; line-height: 22px; margin: 12px 0 0;">${html}</p>`;
     }
 
     /** 键值数据表：1px 灰边、标签列浅灰底 */
-    private dataTable(rows: Array<[string, string]>): string {
+    /** 键值数据表：1px 灰边、标签列浅灰底；三元组可给值指定色调 */
+    private dataTable(
+        rows: Array<[string, string] | [string, string, NoticeTone]>,
+    ): string {
         const cells = rows
-            .map(
-                ([label, value]) =>
-                    `<tr><td style="padding: 5px; border: 1px solid ${NOTIFY_COLORS.border}; background-color: #f7f8fa; color: #666666; width: 32%;">${label}</td><td style="padding: 5px; border: 1px solid ${NOTIFY_COLORS.border};">${value}</td></tr>`,
-            )
+            .map(([label, value, tone]) => {
+                const valueColor = tone ? ` color: ${TONE_COLORS[tone]};` : '';
+                return `<tr><td style="padding: 5px; border: 1px solid ${NOTIFY_COLORS.border}; background-color: #f7f8fa; color: #666666; width: 32%;">${label}</td><td style="padding: 5px; border: 1px solid ${NOTIFY_COLORS.border};${valueColor}">${value}</td></tr>`;
+            })
             .join('');
         return `<table cellpadding="5" cellspacing="0" border="1" bordercolor="${NOTIFY_COLORS.border}" style="font-size: 14px; table-layout: fixed; word-break: break-word; width: 100%; border-collapse: collapse; margin-top: 16px;">${cells}</table>`;
     }
@@ -475,6 +503,7 @@ export class EmailService {
             html: this.wrapNotificationLayout(
                 result.html + this.signOff(escapeHtml(branding.siteName)),
                 branding,
+                TEMPLATE_TONES[template] ?? 'info',
             ),
         };
     }
@@ -554,7 +583,7 @@ export class EmailService {
                 this.plainBlock(resetUrl),
                 this.noticeHint(
                     '如果不是你本人操作，忽略这封邮件即可，账号密码不会发生变更。',
-                    'danger',
+                    'error',
                 ),
             ].join(''),
         };
@@ -602,6 +631,7 @@ export class EmailService {
                 ]),
                 this.noticeHint(
                     '如无法按期完成，建议提前与项目负责人沟通并调整排期。',
+                    'warning',
                 ),
             ].join(''),
         };
@@ -629,7 +659,7 @@ export class EmailService {
                 ]),
                 this.noticeHint(
                     '若任务已完成，请及时在系统中更新状态，以免影响项目进度统计。',
-                    'danger',
+                    'error',
                 ),
             ].join(''),
         };
@@ -673,7 +703,7 @@ export class EmailService {
                 this.codeBlock(code),
                 this.noticeHint(
                     `验证码 ${payload.expiresInMinutes} 分钟内有效。如果不是你本人操作，忽略这封邮件即可，账号密码不会发生变更。`,
-                    'danger',
+                    'error',
                 ),
             ].join(''),
         };
@@ -700,11 +730,12 @@ export class EmailService {
                 this.dataTable([
                     ['监控目标', target],
                     ['响应耗时', latency],
-                    ['错误信息', error],
+                    ['错误信息', error, 'error'],
                     ['检测时间', checkedAt],
                 ]),
                 this.noticeHint(
                     '请尽快排查服务可用性；恢复正常后系统会再次发送通知。',
+                    'error',
                 ),
             ].join(''),
         };
@@ -755,7 +786,7 @@ export class EmailService {
                 this.dataTable([['操作时间', changedAt]]),
                 this.noticeHint(
                     '如果这不是您本人的操作，请立即重置密码并联系管理员。',
-                    'danger',
+                    'error',
                 ),
             ].join(''),
         };
@@ -777,7 +808,7 @@ export class EmailService {
                 this.dataTable([['操作时间', changedAt]]),
                 this.noticeHint(
                     '如果这不是您本人的操作，请立即重置密码并重新开启两步验证。',
-                    'danger',
+                    'error',
                 ),
             ].join(''),
         };
@@ -803,7 +834,7 @@ export class EmailService {
                 ]),
                 this.noticeHint(
                     '如果这不是您本人的操作，请立即重置密码并重新生成恢复码。',
-                    'danger',
+                    'error',
                 ),
             ].join(''),
         };

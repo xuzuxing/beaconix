@@ -202,6 +202,96 @@ describe('EmailService', () => {
             expect(html).not.toContain('data:image/png;base64,');
         });
 
+        describe('notice tone colors', () => {
+            const bannerColor = (html: string): string | undefined =>
+                html.match(
+                    /height: 2px; background-color: (#[0-9a-f]{6});/,
+                )?.[1];
+
+            const overduePayload = {
+                to: 'zuxing@example.com',
+                name: 'Zuxing',
+                taskTitle: '修复登录',
+                taskNumber: 12,
+                dueDate: '2026-03-01 10:00',
+                projectKey: 'BEA',
+            };
+
+            it('keeps the banner blue for informational notices', async () => {
+                jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                    () => undefined,
+                );
+                const { service, emails } = createService();
+
+                await service.send(EmailTemplate.NOTIFICATION, {
+                    to: 'zuxing@example.com',
+                    title: '项目有新的动态',
+                    body: '张三 评论了任务 BEA-1',
+                });
+
+                const { html } = emails.send.mock.calls[0][0] as {
+                    html: string;
+                };
+                expect(bannerColor(html)).toBe('#00a4ff');
+            });
+
+            it('paints the banner orange for warnings', async () => {
+                jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                    () => undefined,
+                );
+                const { service, emails } = createService();
+
+                await service.send(EmailTemplate.TASK_DUE_SOON, overduePayload);
+
+                const { html } = emails.send.mock.calls[0][0] as {
+                    html: string;
+                };
+                expect(bannerColor(html)).toBe('#faa224');
+                expect(html).toContain('color: #faa224; line-height: 22px');
+            });
+
+            it('paints the banner and hint red for errors', async () => {
+                jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                    () => undefined,
+                );
+                const { service, emails } = createService();
+
+                await service.send(EmailTemplate.TASK_OVERDUE, overduePayload);
+
+                const { html } = emails.send.mock.calls[0][0] as {
+                    html: string;
+                };
+                expect(bannerColor(html)).toBe('#fa3824');
+                expect(html).toContain('color: #fa3824; line-height: 22px');
+            });
+
+            it('paints the error row of the data table red', async () => {
+                jest.spyOn(Logger.prototype, 'log').mockImplementation(
+                    () => undefined,
+                );
+                const { service, emails } = createService();
+
+                await service.send(EmailTemplate.MONITOR_DOWN, {
+                    to: 'ops@acme.test',
+                    monitorName: 'Acme API',
+                    target: 'https://api.acme.test/health',
+                    status: 'DOWN',
+                    previousStatus: 'UP',
+                    error: 'connect ETIMEDOUT',
+                    latency: '30001ms',
+                    checkedAt: '2026-03-01 10:00',
+                });
+
+                const { html } = emails.send.mock.calls[0][0] as {
+                    html: string;
+                };
+                expect(bannerColor(html)).toBe('#fa3824');
+                expect(html).toContain('color: #fa3824;">connect ETIMEDOUT');
+                // 其余行不染色，避免整张表都变红
+                expect(html).not.toContain('color: #fa3824;">Acme API');
+            });
+        });
+
         it('links the invitation email to the web client with its token', async () => {
             jest.spyOn(Logger.prototype, 'log').mockImplementation(
                 () => undefined,
