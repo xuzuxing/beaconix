@@ -125,6 +125,8 @@ export class PaymentController {
                         : [[key, value]],
                 ),
             ).toString();
+        this.logger.debug('Alipay form-urlencoded rawBody', rawBody);
+        this.logger.debug('Alipay parse body', body);
 
         const result = await this.handleAlipayNotification(rawBody);
 
@@ -152,7 +154,8 @@ export class PaymentController {
         // payload captured by `rawBody: true` — never a re-serialized object.
         const rawBody =
             request.rawBody?.toString('utf8') ?? JSON.stringify(body);
-
+        this.logger.debug('WeChat Pay rawBody', rawBody);
+        this.logger.debug('WeChat Pay body', body);
         const result = await this.paymentService.handleWechatCallback(
             rawBody,
             readHeader(headers, 'wechatpay-signature') ?? '',
@@ -192,6 +195,9 @@ export class PaymentController {
     ) {
         const rawBody =
             request.rawBody?.toString('utf8') ?? JSON.stringify(body);
+        this.logger.debug('WeChat refund rawBody', rawBody);
+        this.logger.debug('WeChat refund headers', headers);
+        this.logger.debug('WeChat refund body', body);
 
         const result = await this.refundService.handleWechatRefundCallback(
             rawBody,
@@ -228,6 +234,7 @@ export class PaymentController {
         @Query() query: Record<string, string | string[] | undefined>,
         @Res({ passthrough: true }) response: Response,
     ) {
+        this.logger.debug('WeChat push URL verification query', query);
         const result = await this.virtualPayService.verifyPushUrl({ query });
 
         response.type('text/plain');
@@ -266,6 +273,8 @@ export class PaymentController {
         const rawBody =
             request.rawBody?.toString('utf8') ??
             (typeof body === 'string' ? body : '');
+        this.logger.debug('WeChat push URL verification rawBody', rawBody);
+        this.logger.debug('WeChat push URL verification query', query);
 
         const result = await this.virtualPayService.handleNotify({
             rawBody,

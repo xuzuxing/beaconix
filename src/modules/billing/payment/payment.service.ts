@@ -1,6 +1,7 @@
 import {
     BadRequestException,
     Injectable,
+    Logger,
     NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../infra/database/prisma.service';
@@ -30,6 +31,7 @@ export interface PaymentCallbackResponse {
 
 @Injectable()
 export class PaymentService {
+    private readonly logger = new Logger(PaymentService.name);
     constructor(
         private readonly prisma: PrismaService,
         private readonly paymentProviderFactory: PaymentProviderFactory,
@@ -127,6 +129,7 @@ export class PaymentService {
             signature,
             headers,
         );
+        this.logger.debug('callback', callback);
 
         if (callback.trade_state !== 'SUCCESS') {
             return { code: 'FAIL', message: 'trade_state is not SUCCESS' };

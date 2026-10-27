@@ -308,13 +308,15 @@ export function parseNotifyParams(rawBody: string): Record<string, string> {
         // `decodeURIComponent` 只解 `%XX`、不动 `+`，正好符合支付宝的编码。
         let value: string;
         try {
-            value = decodeURIComponent(rawValue);
+            // 先按 form-urlencoded 规则把裸 `+` 还原为空格，
+            // 再解码 %XX。`%2B` 经 decodeURIComponent 会还原成字面 `+`，
+            // 所以 sign 里的 `+` 不会被误伤。
+            value = decodeURIComponent(rawValue.replace(/\+/g, ' '));
         } catch {
-            // 非法百分号编码时退化为原样：验签会失败，但不能让回调 5xx。
-            value = rawValue;
+            value = rawValue.replace(/\+/g, ' ');
         }
 
-        if (value === '') continue;
+        // 保留空值：验签需要全部参数，空值也要拼成 key=
         params[key] = value;
     }
 
