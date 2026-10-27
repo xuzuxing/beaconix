@@ -460,6 +460,17 @@ describe('parseNotifyParams', () => {
             subject: 'Beaconix plan order BW1',
         });
     });
+
+    it('keeps the raw + and / in base64 sign values (Alipay sends them unencoded)', () => {
+        expect(
+            parseNotifyParams(
+                'sign=qgaoKAba+JOYk/PXO/++nWxPE==&out_trade_no=BW1',
+            ),
+        ).toEqual({
+            sign: 'qgaoKAba+JOYk/PXO/++nWxPE==',
+            out_trade_no: 'BW1',
+        });
+    });
 });
 
 describe('payMethodOf', () => {

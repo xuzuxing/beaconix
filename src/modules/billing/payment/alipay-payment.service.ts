@@ -295,7 +295,25 @@ export function mapAlipayRefundQuery(
 export function parseNotifyParams(rawBody: string): Record<string, string> {
     const params: Record<string, string> = {};
 
-    for (const [key, value] of new URLSearchParams(rawBody ?? '')) {
+    // 不能用 URLSearchParams：它按 form-urlencoded 标准把裸 `+` 当空格，而
+    // 支付宝通知的 `sign`（base64）里的 `+`/`/` 是**裸字符**（空格反而是
+    // `%20`）。用 URLSearchParams 会把 sign 里的 `+` 全部变成空格，验签必挂。
+    for (const pair of (rawBody ?? '').split('&')) {
+        if (!pair) continue;
+        const eq = pair.indexOf('=');
+        const key = eq === -1 ? pair : pair.slice(0, eq);
+        if (!key) continue;
+        const rawValue = eq === -1 ? '' : pair.slice(eq + 1);
+
+        // `decodeURIComponent` 只解 `%XX`、不动 `+`，正好符合支付宝的编码。
+        let value: string;
+        try {
+            value = decodeURIComponent(rawValue);
+        } catch {
+            // 非法百分号编码时退化为原样：验签会失败，但不能让回调 5xx。
+            value = rawValue;
+        }
+
         if (value === '') continue;
         params[key] = value;
     }

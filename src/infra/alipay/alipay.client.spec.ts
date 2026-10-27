@@ -229,10 +229,10 @@ describe('AlipayClient', () => {
     });
 
     describe('verifyNotify', () => {
-        it('delegates the parameter dictionary to the SDK signature check', async () => {
+        it('delegates the parameter dictionary to the SDK signature check (no double decode)', async () => {
             const { client, config } = createClient();
-            const checkNotifySign = jest.fn().mockReturnValue(true);
-            stubSdk(client, { checkNotifySign }, config);
+            const checkNotifySignV2 = jest.fn().mockReturnValue(true);
+            stubSdk(client, { checkNotifySignV2 }, config);
 
             const params = {
                 out_trade_no: 'BW123',
@@ -242,15 +242,15 @@ describe('AlipayClient', () => {
             };
 
             await expect(client.verifyNotify(params)).resolves.toBe(true);
-            expect(checkNotifySign).toHaveBeenCalledWith(params);
+            expect(checkNotifySignV2).toHaveBeenCalledWith(params);
         });
 
         it('treats a throwing verifier as a failed signature', async () => {
             const { client, config } = createClient();
-            const checkNotifySign = jest.fn().mockImplementation(() => {
+            const checkNotifySignV2 = jest.fn().mockImplementation(() => {
                 throw new Error('invalid key');
             });
-            stubSdk(client, { checkNotifySign }, config);
+            stubSdk(client, { checkNotifySignV2 }, config);
 
             await expect(
                 client.verifyNotify({ out_trade_no: 'BW123' }),

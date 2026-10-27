@@ -107,7 +107,10 @@ export class AlipayClient {
         const { sdk } = await this.sdk();
 
         try {
-            return sdk.checkNotifySign(params);
+            // `checkNotifySignV2` 不再对 value 做第二次 decode：`params` 已经由
+            // `parseNotifyParams` 解码过（`%20` → 空格，`+` 保持原样）。默认的
+            // `checkNotifySign` 会再 `decodeURIComponent` 一遍，形成双重解码。
+            return sdk.checkNotifySignV2(params);
         } catch (error) {
             this.logger.warn(
                 `Alipay notify verification threw: ${
