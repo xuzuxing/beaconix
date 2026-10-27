@@ -96,13 +96,20 @@ export class WechatVirtualPayClient {
     }> {
         const config = await this.runtimeConfig.virtualPay();
         const env = normalizeVirtualPayEnv(config.env);
-        const appKey =
-            env === 1 ? config.sandboxAppKey || config.appKey : config.appKey;
+        // 沙箱（env = 1）必须用沙箱 AppKey 签名。绝不能静默回退到现网 AppKey，
+        // 否则会出现「signData 声明 env=1、签名却用现网密钥」的自相矛盾请求，
+        // 微信可能据此按现网处理，导致用户被真实扣款。
+        const appKey = env === 1 ? config.sandboxAppKey : config.appKey;
 
         if (!config.mock) {
             if (!config.offerId) {
                 throw new WechatConfigurationError(
                     'WeChat virtual payment is not configured (wechat.virtualPay.offerId / WECHAT_VIRTUALPAY_OFFER_ID)',
+                );
+            }
+            if (env === 1 && !appKey) {
+                throw new WechatConfigurationError(
+                    'WeChat virtual payment sandbox AppKey is required when env = 1 (wechat.virtualPay.sandboxAppKey / WECHAT_VIRTUALPAY_SANDBOX_APP_KEY)',
                 );
             }
             if (!appKey) {

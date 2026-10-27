@@ -92,6 +92,22 @@ describe('WechatVirtualPayClient', () => {
         expect(sand.paySig).not.toBe(prod.paySig);
     });
 
+    it('refuses env = 1 without a sandbox AppKey instead of falling back to the production key', async () => {
+        const { client } = createClient({
+            overrides: { env: 1, sandboxAppKey: '' },
+        });
+
+        await expect(
+            client.buildPayData({
+                productId: 'p',
+                goodsPrice: 1,
+                outTradeNo: 'T1',
+                attach: 'A1',
+                sessionKey: 'sk',
+            }),
+        ).rejects.toThrow(/sandbox AppKey/);
+    });
+
     it('refuses to sign real payments without credentials', async () => {
         const { client } = createClient({
             overrides: { offerId: '', appKey: '' },
