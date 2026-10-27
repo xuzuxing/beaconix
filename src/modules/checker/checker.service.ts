@@ -139,11 +139,16 @@ type ProbeVerdictSample = Pick<
     'id' | 'probeId' | 'success' | 'checkedAt' | 'receivedAt'
 >;
 
-interface TenantProbeVerdict {
-    /** Currently bound, enabled and online tenant probes: the ratio denominator. */
-    effectiveProbeCount: number;
-    /** One latest valid sample per tenant probe. */
+interface ProbeVerdict {
+    /** Probes that could report for this batch: online tenant + assigned system. */
+    expectedProbeCount: number;
+    /**
+     * Reports that actually arrived for this batch - the ratio denominator.
+     * Probes that never reported are dropped instead of counting as failures.
+     */
     samples: ProbeVerdictSample[];
+    /** How many of `samples` came from tenant probes; the rest are system. */
+    tenantSampleCount: number;
 }
 
 /** Rule-tree verdict for one check round: matched = abnormal. */
@@ -610,19 +615,23 @@ export class CheckerService {
             evaluated: log.evaluated !== false,
         };
 
-        let effectiveProbeCount = 0;
+        let expectedProbeCount = 0;
+        let tenantProbeCount = 0;
+        let systemProbeCount = 0;
         let samples: ProbeVerdictSample[] = [];
         if (!guards.protected) {
-            const verdict = await this.fetchTenantProbeVerdict(
+            const verdict = await this.fetchProbeVerdict(
                 monitor,
                 roundId,
                 log.checkedAt,
             );
-            effectiveProbeCount = verdict.effectiveProbeCount;
+            expectedProbeCount = verdict.expectedProbeCount;
             samples = verdict.samples;
+            tenantProbeCount = verdict.tenantSampleCount;
+            systemProbeCount = samples.length - tenantProbeCount;
             const ready =
-                effectiveProbeCount === 0 ||
-                samples.length >= effectiveProbeCount;
+                expectedProbeCount === 0 ||
+                samples.length >= expectedProbeCount;
             if (!ready && !options.force) {
                 // Not everyone reported yet: close the batch at its deadline.
                 await this.scheduleDeadlineSettlement(
@@ -634,36 +643,20 @@ export class CheckerService {
             }
         }
 
-        const hasVote = !guards.protected && effectiveProbeCount > 0;
-        const evaluation =
-            hasVote && samples.length > 0
-                ? this.evaluateRound(monitor, localVerdict, {
-                      effectiveProbeCount,
-                      samples,
-                  })
-                : null;
+        // The denominator is what actually arrived: a probe that never reported
+        // for this batch is dropped instead of counting as a failure.
+        const votingProbeCount = samples.length;
+        const hasVote = !guards.protected && votingProbeCount > 0;
+        const evaluation = hasVote
+            ? this.evaluateRound(monitor, localVerdict, {
+                  expectedProbeCount,
+                  tenantSampleCount: tenantProbeCount,
+                  samples,
+              })
+            : null;
 
-        let passed = evaluation ? evaluation.passed : localVerdict.success;
+        const passed = evaluation ? evaluation.passed : localVerdict.success;
         const fallbackLocal = evaluation === null;
-        let systemRescue = false;
-
-        if (
-            evaluation === null &&
-            effectiveProbeCount === 0 &&
-            !guards.protected
-        ) {
-            // No tenant probe is bound: the legacy system probe rescue still
-            // applies to a failing local check. A protected batch (assertion,
-            // unevaluated, unsupported protocol, certificate policy) keeps the
-            // local verdict and never consults any probe.
-            if (
-                !localVerdict.success &&
-                (await this.systemProbeRescue(monitor, log.checkedAt))
-            ) {
-                passed = true;
-                systemRescue = true;
-            }
-        }
 
         const successCount = evaluation?.successCount ?? 0;
         const aggregatedError = evaluation?.error ?? null;
@@ -675,15 +668,11 @@ export class CheckerService {
         let rescuedByProbe = false;
 
         if (fallbackLocal) {
+            // No voting probe reported: the local verdict stands. System probes
+            // are part of the vote now, so there is no separate rescue path.
             finalSuccess = passed;
             failureKind = passed ? null : localVerdict.failureKind;
-            if (passed && systemRescue) {
-                rescuedByProbe = true;
-                decision = 'RESCUED';
-                serviceVerdict = 'SUCCESS';
-            } else {
-                decision = 'FALLBACK_LOCAL';
-            }
+            decision = 'FALLBACK_LOCAL';
         } else if (passed && localVerdict.success) {
             finalSuccess = true;
             failureKind = null;
@@ -733,12 +722,15 @@ export class CheckerService {
         const aggregation: AppliedAggregation = {
             protected: guards.protected,
             protectedReason: guards.protectedReason,
-            effectiveProbeCount,
+            effectiveProbeCount: votingProbeCount,
+            expectedProbeCount,
+            tenantProbeCount,
+            systemProbeCount,
             sampleCount: samples.length,
             successCount,
             ratio:
-                effectiveProbeCount > 0
-                    ? Math.round((successCount * 10000) / effectiveProbeCount) /
+                votingProbeCount > 0
+                    ? Math.round((successCount * 10000) / votingProbeCount) /
                       100
                     : finalSuccess
                       ? 100
@@ -959,30 +951,38 @@ export class CheckerService {
     }
 
     /**
-     * Currently bound, enabled and online tenant probes (the denominator) plus
-     * one latest valid observation per probe (the votes).
+     * Votes for one batch: bound, enabled and online tenant probes plus the
+     * system probes the scheduler assigned to this monitor.
      *
-     * System probes are not part of the primary set: they are auto-assigned and
-     * only rescue a local failure when no tenant probe is bound.
+     * `tenantProbesOnly` on the plan keeps the assigned system probes out of the
+     * vote even though they still run and report.
      */
-    private async fetchTenantProbeVerdict(
+    private async fetchProbeVerdict(
         monitor: MonitorModel,
         roundId: string,
         roundStart: Date,
-    ): Promise<TenantProbeVerdict> {
-        const tenantProbes = await this.prisma.probe.findMany({
-            where: {
-                organizationId: monitor.organizationId,
-                scope: 'TENANT',
-                enabled: true,
-                status: 'ONLINE',
-                monitors: { some: { monitorId: monitor.id } },
-            },
-            select: { id: true },
-        });
+    ): Promise<ProbeVerdict> {
+        const [tenantProbes, systemProbes] = await Promise.all([
+            this.prisma.probe.findMany({
+                where: {
+                    organizationId: monitor.organizationId,
+                    scope: 'TENANT',
+                    enabled: true,
+                    status: 'ONLINE',
+                    monitors: { some: { monitorId: monitor.id } },
+                },
+                select: { id: true },
+            }),
+            this.assignedSystemProbes(monitor),
+        ]);
 
-        if (tenantProbes.length === 0) {
-            return { effectiveProbeCount: 0, samples: [] };
+        const voters = [...tenantProbes, ...systemProbes];
+        if (voters.length === 0) {
+            return {
+                expectedProbeCount: 0,
+                tenantSampleCount: 0,
+                samples: [],
+            };
         }
 
         const since = new Date(
@@ -998,7 +998,7 @@ export class CheckerService {
                 target: monitor.target,
                 configRevision: monitor.configRevision,
                 checkedAt: { gte: since },
-                probeId: { in: tenantProbes.map((probe) => probe.id) },
+                probeId: { in: voters.map((probe) => probe.id) },
                 OR: [
                     { roundId },
                     ...(previousRoundId ? [{ roundId: previousRoundId }] : []),
@@ -1026,10 +1026,54 @@ export class CheckerService {
             if (!latest.has(row.probeId)) latest.set(row.probeId, row);
         }
 
+        const samples = [...latest.values()];
+        const tenantIds = new Set(tenantProbes.map((probe) => probe.id));
+
         return {
-            effectiveProbeCount: tenantProbes.length,
-            samples: [...latest.values()],
+            expectedProbeCount: voters.length,
+            tenantSampleCount: samples.filter((sample) =>
+                tenantIds.has(sample.probeId),
+            ).length,
+            samples,
         };
+    }
+
+    /**
+     * System probes that vote for this monitor. A monitor can opt into
+     * tenant-only judging (`tenantProbesOnly`): the assigned system probes still
+     * run and report, they just stay out of the vote.
+     *
+     * Redis holds the assignment table, so an unreachable cache means "no system
+     * votes" instead of failing the settlement.
+     */
+    private async assignedSystemProbes(
+        monitor: MonitorModel,
+    ): Promise<{ id: string }[]> {
+        if (monitor.tenantProbesOnly) return [];
+
+        let assigned: string[];
+        try {
+            assigned = await this.systemProbeScheduler.getAssignedProbes(
+                monitor.id,
+            );
+        } catch (error) {
+            this.logger.warn(
+                `System probe assignments unavailable for monitor ${monitor.id}: ${(error as Error).message}`,
+            );
+            return [];
+        }
+
+        if (assigned.length === 0) return [];
+
+        return this.prisma.probe.findMany({
+            where: {
+                id: { in: assigned },
+                scope: 'SYSTEM',
+                enabled: true,
+                status: 'ONLINE',
+            },
+            select: { id: true },
+        });
     }
 
     /** Round id of the batch that directly preceded `roundStart`. */
@@ -1054,14 +1098,16 @@ export class CheckerService {
     private evaluateRound(
         monitor: MonitorModel,
         localVerdict: { success: boolean; error: string | null },
-        verdict: TenantProbeVerdict,
+        verdict: ProbeVerdict,
     ): { passed: boolean; successCount: number; error: string | null } {
+        // Only the probes that reported vote: a missing report is not evidence
+        // against the target.
+        const denominator = verdict.samples.length;
         const successCount = verdict.samples.filter(
             (sample) => sample.success,
         ).length;
         const passed =
-            successCount * 100 >=
-            monitor.probeSuccessRatio * verdict.effectiveProbeCount;
+            successCount * 100 >= monitor.probeSuccessRatio * denominator;
 
         return {
             passed,
@@ -1071,41 +1117,10 @@ export class CheckerService {
                 : this.buildAggregatedError(
                       localVerdict,
                       successCount,
-                      verdict.effectiveProbeCount,
+                      denominator,
                       monitor.probeSuccessRatio,
                   ),
         };
-    }
-
-    /** Kept for the legacy rescue path: any successful system probe wins. */
-    private async systemProbeRescue(
-        monitor: MonitorModel,
-        roundStart: Date,
-    ): Promise<boolean> {
-        const systemProbeIds =
-            await this.systemProbeScheduler.getAssignedProbes(monitor.id);
-        if (systemProbeIds.length === 0) return false;
-
-        const since = new Date(
-            roundStart.getTime() - probeResultWindowMs(monitor.interval),
-        );
-        const results = await this.prisma.probeResult.findMany({
-            where: {
-                target: monitor.target,
-                monitorId: monitor.id,
-                probeId: { in: systemProbeIds },
-                checkedAt: { gte: since },
-                configRevision: monitor.configRevision,
-                probe: {
-                    scope: 'SYSTEM',
-                    enabled: true,
-                    status: 'ONLINE',
-                },
-            },
-            orderBy: { checkedAt: 'desc' },
-        });
-
-        return results.some((result) => result.success);
     }
 
     /** Registers the deadline job that closes a batch nobody completed. */

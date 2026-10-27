@@ -88,11 +88,18 @@ export class MonitorEntity {
         example: 100,
         minimum: 1,
         maximum: 100,
-        default: 1,
+        default: 100,
         description:
-            'Minimum success percentage of the currently bound tenant probes (the denominator is every effective tenant probe; the local check is only a fallback)',
+            'Minimum success percentage of the voting probes, 1-100 (100 = every voting probe must succeed). The denominator is what actually reported; the local check only decides when nothing reported',
     })
     probeSuccessRatio: number;
+
+    @ApiProperty({
+        example: false,
+        description:
+            'True: assigned system probes still run and report but stay out of the ratio (tenant probes only)',
+    })
+    tenantProbesOnly: boolean;
 
     @ApiProperty({
         example: true,

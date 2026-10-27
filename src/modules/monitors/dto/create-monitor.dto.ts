@@ -98,15 +98,25 @@ export class CreateMonitorDto {
         example: 100,
         minimum: 1,
         maximum: 100,
-        default: 1,
+        default: 100,
         description:
-            'Minimum success percentage of the currently bound tenant probes; the probe verdict overrides a local success and rescues a local failure',
+            'Minimum success percentage of the voting probes, 1-100 (100 = every voting probe must succeed). Probes that never reported for this batch are dropped from the denominator',
     })
     @ValidateIf((_, value: unknown) => value !== undefined)
     @IsInt()
     @Min(1)
     @Max(100)
     probeSuccessRatio?: number;
+
+    @ApiPropertyOptional({
+        example: false,
+        default: false,
+        description:
+            'Judge success on tenant probes only: assigned system probes still run and report but do not vote',
+    })
+    @IsOptional()
+    @IsBoolean()
+    tenantProbesOnly?: boolean;
 
     @ApiPropertyOptional({
         example: true,

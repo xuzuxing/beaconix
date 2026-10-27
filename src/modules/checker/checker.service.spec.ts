@@ -549,7 +549,7 @@ describe('CheckerService', () => {
             });
         });
 
-        it('keeps a failing local verdict UP when no tenant probe is bound and a system probe succeeded', async () => {
+        it('counts an assigned system probe as a vote when no tenant probe is bound', async () => {
             const {
                 service,
                 prisma,
@@ -558,7 +558,10 @@ describe('CheckerService', () => {
                 httpChecker,
             } = createService();
             prisma.monitor.findFirst.mockResolvedValue(monitorRow);
-            prisma.probe.findMany.mockResolvedValue([]);
+            prisma.probe.findMany.mockImplementation(
+                ({ where }: { where?: { id?: { in?: string[] } } }) =>
+                    Promise.resolve(where?.id?.in ? [{ id: 'sys-1' }] : []),
+            );
             systemProbeScheduler.getAssignedProbes.mockResolvedValue(['sys-1']);
             prisma.probeResult.findMany.mockResolvedValue([
                 probeSample('sys-1', true),
@@ -579,7 +582,12 @@ describe('CheckerService', () => {
                 success: true,
                 rescuedByProbe: true,
                 serviceVerdict: 'SUCCESS',
-                aggregation: { effectiveProbeCount: 0, decision: 'RESCUED' },
+                aggregation: {
+                    effectiveProbeCount: 1,
+                    tenantProbeCount: 0,
+                    systemProbeCount: 1,
+                    decision: 'RESCUED',
+                },
             });
         });
 
@@ -618,7 +626,8 @@ describe('CheckerService', () => {
                 success: false,
                 failureKind: 'TRANSPORT',
                 aggregation: {
-                    effectiveProbeCount: 2,
+                    effectiveProbeCount: 0,
+                    expectedProbeCount: 2,
                     sampleCount: 0,
                     decision: 'FALLBACK_LOCAL',
                 },
@@ -627,6 +636,76 @@ describe('CheckerService', () => {
     });
 
     describe('ratio verdict', () => {
+        it('counts assigned system probes in the ratio denominator', async () => {
+            const { service, prisma, stateService, systemProbeScheduler } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            prisma.probe.findMany.mockImplementation(
+                ({ where }: { where?: { id?: { in?: string[] } } }) =>
+                    Promise.resolve(
+                        where?.id?.in
+                            ? where.id.in.map((id) => ({ id }))
+                            : [{ id: 'tenant-1' }],
+                    ),
+            );
+            systemProbeScheduler.getAssignedProbes.mockResolvedValue([
+                'sys-1',
+                'sys-2',
+            ]);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('tenant-1', true),
+                probeSample('sys-1', true),
+                probeSample('sys-2', true),
+            ]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: true,
+                aggregation: {
+                    effectiveProbeCount: 3,
+                    tenantProbeCount: 1,
+                    systemProbeCount: 2,
+                    sampleCount: 3,
+                    decision: 'CONFIRMED_SUCCESS',
+                },
+            });
+        });
+
+        it('ignores assigned system probes when the monitor is tenant-only', async () => {
+            const { service, prisma, stateService, systemProbeScheduler } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                tenantProbesOnly: true,
+            });
+            prisma.probe.findMany.mockResolvedValue([{ id: 'tenant-1' }]);
+            prisma.probeResult.findMany.mockResolvedValue([
+                probeSample('tenant-1', false),
+            ]);
+
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+
+            expect(
+                systemProbeScheduler.getAssignedProbes,
+            ).not.toHaveBeenCalled();
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: false,
+                aggregation: {
+                    effectiveProbeCount: 1,
+                    tenantProbeCount: 1,
+                    systemProbeCount: 0,
+                    decision: 'OVERTURNED',
+                },
+            });
+        });
+
         it.each([
             { probes: 3, ratio: 100, successes: 3, passed: true },
             { probes: 3, ratio: 100, successes: 2, passed: false },
@@ -669,7 +748,7 @@ describe('CheckerService', () => {
             },
         );
 
-        it('counts a missing probe as a failure instead of shrinking the denominator', async () => {
+        it('drops unreported probes from the denominator', async () => {
             const { service, prisma, stateService, rounds } = createService();
             prisma.monitor.findFirst.mockResolvedValue({
                 ...monitorRow,
@@ -686,10 +765,12 @@ describe('CheckerService', () => {
                 force: true,
             });
 
+            // Two of three probes reported; the silent one is not a failure.
             expect(stateService.settle.mock.calls[0][2]).toMatchObject({
-                success: false,
+                success: true,
                 aggregation: {
-                    effectiveProbeCount: 3,
+                    effectiveProbeCount: 2,
+                    expectedProbeCount: 3,
                     sampleCount: 2,
                     successCount: 2,
                 },
@@ -785,7 +866,7 @@ describe('CheckerService', () => {
             });
         });
 
-        it('does not count a system probe as a primary vote', async () => {
+        it('does not vote with system probes that are not assigned to the monitor', async () => {
             const { service, prisma, stateService, rounds } = createService();
             prisma.monitor.findFirst.mockResolvedValue({
                 ...monitorRow,
@@ -803,7 +884,12 @@ describe('CheckerService', () => {
 
             expect(stateService.settle.mock.calls[0][2]).toMatchObject({
                 success: false,
-                aggregation: { effectiveProbeCount: 1, successCount: 0 },
+                aggregation: {
+                    effectiveProbeCount: 1,
+                    tenantProbeCount: 1,
+                    systemProbeCount: 0,
+                    successCount: 0,
+                },
             });
         });
     });

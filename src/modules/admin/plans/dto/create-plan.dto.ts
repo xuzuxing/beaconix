@@ -119,7 +119,7 @@ export class CreatePlanDto {
         example: 0,
         minimum: 0,
         description:
-            'Probes assignable to a single monitor; clamped by maxProbes. 0 means manual assignment is unavailable.',
+            'System probes auto-assigned to each monitor, picked from the online system probe pool. 0 disables the pool. Tenant probe binding is bounded by maxProbes only.',
     })
     @IsOptional()
     @IsInt()

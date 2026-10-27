@@ -1022,8 +1022,10 @@ model Monitor {
   timeout            Int         @default(5000)
   expectedStatus     Int         @default(200)
   failureThreshold   Int         @default(3)
-  /// 主力租户探针的成功比例门槛（1-100）；默认 1 表示至少 1 个有效租户探针成功。
-  probeSuccessRatio  Int         @default(1)
+  /// 投票探针的成功比例门槛，1-100 的百分比：100 表示所有投票探针都必须成功。
+  probeSuccessRatio  Int         @default(100)
+  /// true 表示成功率判定只看租户探针：分配到的系统探针照常执行，但不进入分子/分母。
+  tenantProbesOnly   Boolean     @default(false)
   checkSsl           Boolean     @default(false)
   sslExpiryThreshold Int         @default(30)
   enabled            Boolean     @default(true)
@@ -1545,8 +1547,8 @@ model Plan {
 
   maxMonitors Int @default(5)
   maxProbes   Int @default(0)
-  /// 单个监控最多可分配（绑定）的租户探针数量；0 表示不允许手动分配。
-  /// 有效上限还会被 maxProbes 夹住，见 QuotaService.getProbeAssignmentLimit()。
+  /// 每个监控自动分配的系统探针数量（按负载均衡从在线系统探针池里挑）；
+  /// 0 表示不分配系统探针。与租户探针的绑定数量无关——租户探针只受 maxProbes 约束。
   maxProbesPerMonitor Int @default(0)
   maxApiKeys  Int @default(5)
   maxMembers  Int @default(3)

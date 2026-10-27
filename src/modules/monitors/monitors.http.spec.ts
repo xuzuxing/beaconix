@@ -128,7 +128,7 @@ describe('Monitor HTTP integration', () => {
             configVersion: 1,
             revision: 1,
             // The database default, which the mock has to restate.
-            probeSuccessRatio: data.probeSuccessRatio ?? 1,
+            probeSuccessRatio: data.probeSuccessRatio ?? 100,
             state: null,
         }));
     });
@@ -494,7 +494,7 @@ describe('Monitor HTTP integration', () => {
             expect(
                 prisma.monitor.create.mock.calls[0][0].data.probeSuccessRatio,
             ).toBeUndefined();
-            expect(response.body.data.probeSuccessRatio).toBe(1);
+            expect(response.body.data.probeSuccessRatio).toBe(100);
         });
 
         it('persists an explicit ratio and returns it', async () => {

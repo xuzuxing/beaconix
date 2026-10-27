@@ -104,8 +104,14 @@ export interface AppliedAggregation {
     protected: boolean;
     protectedReason:
         'LEGACY_UNSUPPORTED' | 'UNEVALUATED' | 'ASSERTION' | 'SSL' | null;
-    /** Effective bound tenant probes at settlement: the ratio denominator. */
+    /** Effective voting probes at settlement: the ratio denominator (arrived reports). */
     effectiveProbeCount: number;
+    /** Probes that could have reported for this batch; the gap is missing reports. */
+    expectedProbeCount: number;
+    /** How much of the denominator came from tenant probes. */
+    tenantProbeCount: number;
+    /** How much of the denominator came from assigned system probes. */
+    systemProbeCount: number;
     /** Samples that took part in the vote (at most one per probe). */
     sampleCount: number;
     successCount: number;

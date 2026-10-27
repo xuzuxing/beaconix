@@ -203,7 +203,7 @@ describe('QuotaService', () => {
         });
     });
 
-    describe('per-monitor probe budget', () => {
+    describe('tenant probe binding budget', () => {
         const proPlan = {
             ...freePlan,
             code: 'PRO',
@@ -213,26 +213,26 @@ describe('QuotaService', () => {
             allowTenantProbe: true,
         };
 
-        it('rejects a probe set above the per-monitor budget', async () => {
+        it('rejects a probe set above the organization probe allowance', async () => {
             const { service, effectivePlanService } = createService();
             effectivePlanService.getEffectivePlan.mockResolvedValue(proPlan);
 
             await expect(
-                service.assertProbesAssignable('org-1', 4),
+                service.assertProbesAssignable('org-1', 11),
             ).rejects.toMatchObject({
                 response: {
                     code: 'QUOTA_EXCEEDED',
                     resource: 'probesPerMonitor',
-                    current: 4,
-                    limit: 3,
+                    current: 11,
+                    limit: 10,
                 },
             });
             await expect(
-                service.assertProbesAssignable('org-1', 3),
+                service.assertProbesAssignable('org-1', 10),
             ).resolves.toBeUndefined();
         });
 
-        it('clamps the per-monitor budget by the organization probe allowance', async () => {
+        it('ignores maxProbesPerMonitor, which sizes the system probe pool', async () => {
             const { service, effectivePlanService } = createService();
             effectivePlanService.getEffectivePlan.mockResolvedValue({
                 ...proPlan,
@@ -243,7 +243,7 @@ describe('QuotaService', () => {
             expect(await service.getProbeAssignmentLimit('org-1')).toBe(2);
         });
 
-        it('treats a plan without the column as no manual assignment', async () => {
+        it('falls back to the organization allowance when the column is absent', async () => {
             const { service, effectivePlanService } = createService();
             effectivePlanService.getEffectivePlan.mockResolvedValue({
                 ...freePlan,
@@ -251,15 +251,15 @@ describe('QuotaService', () => {
                 maxProbesPerMonitor: undefined,
             });
 
-            expect(await service.getProbeAssignmentLimit('org-1')).toBe(0);
+            expect(await service.getProbeAssignmentLimit('org-1')).toBe(10);
             await expect(
-                service.assertProbesAssignable('org-1', 1),
+                service.assertProbesAssignable('org-1', 11),
             ).rejects.toMatchObject({
-                response: { code: 'QUOTA_EXCEEDED', limit: 0 },
+                response: { code: 'QUOTA_EXCEEDED', limit: 10 },
             });
         });
 
-        it('exposes the per-monitor budget in the usage summary', async () => {
+        it('exposes the allowance as maxProbesPerMonitor in the usage summary', async () => {
             const { service, prisma, effectivePlanService } = createService();
             effectivePlanService.getEffectivePlan.mockResolvedValue(proPlan);
             prisma.monitor.count.mockResolvedValue(0);
@@ -270,7 +270,7 @@ describe('QuotaService', () => {
 
             const summary = await service.getUsageSummary('org-1');
 
-            expect(summary.maxProbesPerMonitor).toBe(3);
+            expect(summary.maxProbesPerMonitor).toBe(10);
         });
     });
 });

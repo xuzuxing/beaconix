@@ -22,9 +22,30 @@ export class CheckRoundAggregationEntity {
 
     @ApiProperty({
         example: 3,
-        description: 'Bound online tenant probes: the ratio denominator',
+        description:
+            'Reports that arrived for this batch: the ratio denominator. Probes that never reported are dropped instead of counting as failures',
     })
     effectiveProbeCount: number;
+
+    @ApiProperty({
+        example: 5,
+        description:
+            'Probes that could have reported for this batch (online tenant + assigned system). The gap against effectiveProbeCount is missing reports',
+    })
+    expectedProbeCount: number;
+
+    @ApiProperty({
+        example: 2,
+        description: 'How much of the denominator came from tenant probes',
+    })
+    tenantProbeCount: number;
+
+    @ApiProperty({
+        example: 1,
+        description:
+            'How much of the denominator came from assigned system probes',
+    })
+    systemProbeCount: number;
 
     @ApiProperty({
         example: 3,
@@ -136,7 +157,7 @@ export class CheckRoundProbeResultEntity {
     @ApiPropertyOptional({
         example: null,
         description:
-            'Set once the report was folded into a settlement; null means it was ignored (stale, orphan or outvoted)',
+            'Set once the ingest path processed this report - also when it was discarded as stale, off-revision or unattributed; null means it has not been processed yet',
     })
     appliedAt: Date | null;
 

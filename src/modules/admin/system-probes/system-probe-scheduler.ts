@@ -12,6 +12,8 @@ import {
     SystemProbeAssignmentStore,
     SystemProbeAssignments,
 } from './system-probe-assignment.store';
+import { QuotaService } from '../../../shared/quota/quota.service';
+import type { MonitorPolicy } from '../../../shared/quota/quota.service';
 
 /** Lock key/value guard around a recompute; see `rebalance()`. */
 const ASSIGNMENT_LOCK_KEY = 'sys_probe:rebalance:lock';
@@ -26,6 +28,7 @@ export class SystemProbeScheduler implements OnModuleInit {
         private readonly assignmentStore: SystemProbeAssignmentStore,
         private readonly redisService: RedisService,
         private readonly registry: ScheduledJobRegistry,
+        private readonly quotaService: QuotaService,
     ) {}
 
     async onModuleInit(): Promise<void> {
@@ -106,34 +109,38 @@ export class SystemProbeScheduler implements OnModuleInit {
 
         const monitors = await this.prisma.monitor.findMany({
             where: { enabled: true, deletedAt: null },
-            include: {
-                probes: {
-                    include: {
-                        probe: {
-                            select: {
-                                id: true,
-                                scope: true,
-                                enabled: true,
-                                status: true,
-                            },
-                        },
-                    },
-                },
+            select: {
+                id: true,
+                type: true,
+                organizationId: true,
+                tenantProbesOnly: true,
             },
         });
 
-        const needSystemProbe = monitors.filter((monitor) => {
-            // New protocols are local-only until the probe upgrade is implemented.
-            if (monitor.type !== 'HTTP' && monitor.type !== 'TCP') return false;
-            const activeTenantProbeCount = monitor.probes.filter(
-                (binding) =>
-                    binding.probe.scope === ProbeScope.TENANT &&
-                    binding.probe.enabled &&
-                    binding.probe.status === ProbeStatus.ONLINE,
-            ).length;
+        // The plan decides how many system probes each monitor gets:
+        // `maxProbesPerMonitor` sizes the automatic pool. 0 assigns none, which
+        // keeps the verdict on local + tenant probes only.
+        const policies = new Map<string, Promise<MonitorPolicy>>();
+        const policyFor = (organizationId: string) => {
+            const cached = policies.get(organizationId);
+            if (cached) return cached;
 
-            return activeTenantProbeCount < 2;
-        });
+            const pending = this.quotaService.getMonitorPolicy(organizationId);
+            policies.set(organizationId, pending);
+            return pending;
+        };
+
+        const desired: { id: string; probes: number }[] = [];
+        for (const monitor of monitors) {
+            // New protocols are local-only until the probe upgrade is implemented.
+            if (monitor.type !== 'HTTP' && monitor.type !== 'TCP') continue;
+            // Tenant-only judging: the system pool has nothing to run for it.
+            if (monitor.tenantProbesOnly) continue;
+
+            const policy = await policyFor(monitor.organizationId);
+            const count = Math.max(0, policy.maxProbesPerMonitor ?? 0);
+            if (count > 0) desired.push({ id: monitor.id, probes: count });
+        }
 
         const assignments: SystemProbeAssignments = Object.fromEntries(
             probes.map((probe) => [probe.id, []]),
@@ -142,28 +149,28 @@ export class SystemProbeScheduler implements OnModuleInit {
             probes.map((probe) => [probe.id, 0]),
         );
 
-        for (const monitor of needSystemProbe) {
-            const available = probes.filter(
-                (probe) =>
-                    probe.maxTenants === null ||
-                    probe.maxTenants === 0 ||
-                    probeLoad[probe.id] < probe.maxTenants,
-            );
+        // Least-loaded first, so a monitor's N probes are spread across regions
+        // instead of all landing on the same host.
+        for (const monitor of desired) {
+            const candidates = probes
+                .filter(
+                    (probe) =>
+                        probe.maxTenants === null ||
+                        probe.maxTenants === 0 ||
+                        probeLoad[probe.id] < probe.maxTenants,
+                )
+                .sort((a, b) => probeLoad[a.id] - probeLoad[b.id]);
 
-            if (available.length === 0) continue;
-
-            const selected = available.reduce((best, probe) =>
-                probeLoad[probe.id] < probeLoad[best.id] ? probe : best,
-            );
-
-            assignments[selected.id].push(monitor.id);
-            probeLoad[selected.id] += 1;
+            for (const probe of candidates.slice(0, monitor.probes)) {
+                assignments[probe.id].push(monitor.id);
+                probeLoad[probe.id] += 1;
+            }
         }
 
         await this.assignmentStore.set(assignments);
 
         this.logger.log(
-            `System probe assignment refreshed: ${probes.length} probe(s), ${Object.values(assignments).flat().length} monitor(s)`,
+            `System probe assignment refreshed: ${probes.length} probe(s), ${desired.length} monitor(s), ${Object.values(assignments).flat().length} assignment(s)`,
         );
 
         return assignments;

@@ -45,18 +45,13 @@ export type MonitorPolicy = Pick<
 >;
 
 /**
- * Effective budget of tenant probes a single monitor may bind.
- *
- * `maxProbesPerMonitor` is clamped by the organization-wide `maxProbes` so a
- * plan can never let one monitor consume more probes than the tenant owns.
- * `0` means manual assignment is not available on this plan.
+ * How many tenant probes one monitor may bind: the organization probe
+ * allowance. `maxProbesPerMonitor` sizes the system probe pool instead, so it no
+ * longer caps manual binding - a tenant can bind as many of its own probes as
+ * the plan's `maxProbes` allows.
  */
-export function probeAssignmentLimit(plan: {
-    maxProbes: number;
-    maxProbesPerMonitor?: number | null;
-}): number {
-    const perMonitor = plan.maxProbesPerMonitor ?? 0;
-    return Math.max(0, Math.min(plan.maxProbes, perMonitor));
+export function probeAssignmentLimit(plan: { maxProbes: number }): number {
+    return Math.max(0, plan.maxProbes);
 }
 
 @Injectable()
@@ -203,7 +198,7 @@ export class QuotaService {
         return probeAssignmentLimit(plan);
     }
 
-    /** Rejects a probe set larger than the per-monitor budget of the plan. */
+    /** Rejects a probe set larger than the organization probe allowance. */
     async assertProbesAssignable(
         organizationId: string,
         count: number,
@@ -220,7 +215,7 @@ export class QuotaService {
                 resource: 'probesPerMonitor',
                 current: count,
                 limit,
-                message: `当前套餐单个监控最多可分配 ${limit} 个探针，请升级套餐`,
+                message: `当前套餐最多可分配 ${limit} 个探针，请升级套餐`,
             });
         }
     }

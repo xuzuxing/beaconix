@@ -35,7 +35,7 @@ export class PlanEntity {
     @ApiProperty({
         example: 0,
         description:
-            'Probes assignable to a single monitor, clamped by maxProbes. 0 means manual assignment is unavailable.',
+            'System probes auto-assigned to each monitor. 0 disables the system probe pool. Tenant probe binding is bounded by maxProbes only.',
     })
     maxProbesPerMonitor: number;
 
