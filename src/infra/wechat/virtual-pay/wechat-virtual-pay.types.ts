@@ -145,14 +145,38 @@ export interface VirtualPayQueryOrderInput {
     env: WechatVirtualPayEnv;
 }
 
+/**
+ * `/xpay/refund_order` 的 `refund_reason` 枚举（**字符串**，不是数字）。
+ *
+ * 微信只接受这几个固定值，不接受自由文本。内部退款原因（自由文本）保存在
+ * `Refund.reason` 用于审计/展示，不上送渠道；若确实要上送，只能取下面的枚举。
+ */
+export const VIRTUAL_PAY_REFUND_REASONS = {
+    /** 暂无描述 */
+    NONE: '0',
+    /** 产品问题，影响使用或效果不佳 */
+    PRODUCT: '1',
+    /** 售后问题，无法满足需求 */
+    AFTER_SALE: '2',
+    /** 意愿问题，用户主动退款 */
+    USER_INTENT: '3',
+    /** 价格问题 */
+    PRICE: '4',
+    /** 其他原因 */
+    OTHER: '5',
+} as const;
+
+export type VirtualPayRefundReason =
+    (typeof VIRTUAL_PAY_REFUND_REASONS)[keyof typeof VIRTUAL_PAY_REFUND_REASONS];
+
 export interface VirtualPayRefundOrderInput {
     openid: string;
     outTradeNo: string;
     env: WechatVirtualPayEnv;
     /** 退款金额（分）；不传则全额退。 */
     refundFee?: number;
-    /** 退款原因，最长 80 字节。 */
-    reason?: string;
+    /** 微信枚举退款原因（`VIRTUAL_PAY_REFUND_REASONS`），可选。 */
+    reason?: VirtualPayRefundReason;
 }
 
 export interface VirtualPayNotifyProvideGoodsInput {

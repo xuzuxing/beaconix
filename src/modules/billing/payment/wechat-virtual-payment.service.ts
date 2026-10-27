@@ -1008,13 +1008,14 @@ export class WechatVirtualPaymentService implements RefundProvider {
 
         const { env } = await this.client.credentials();
 
+        // 注意：微信 `/xpay/refund_order` 的 `refund_reason` 只接受 0-5 枚举，
+        // 不接受自由文本（传自由文本会报 268490002）。内部退款原因继续保存在
+        // `Refund.reason` 用于审计/展示，这里不上送渠道。
         await this.client.refundOrder({
             openid: attempt.openid,
             outTradeNo: attempt.outTradeNo,
             env,
             refundFee: input.refundFee,
-            // 微信限制退款原因 80 字节，宁可截断也不要整单失败
-            reason: input.reason?.slice(0, 80),
         });
 
         return {

@@ -143,6 +143,10 @@ function createHarness(options?: {
             create: jest.fn().mockResolvedValue({ id: 'attempt-new' }),
             findUnique: jest.fn().mockResolvedValue(attempt),
             findMany: jest.fn().mockResolvedValue([]),
+            findFirst: jest.fn().mockResolvedValue({
+                outTradeNo: 'VABC123456789',
+                openid: 'o_user_openid',
+            }),
         },
         payment: { findUnique: jest.fn().mockResolvedValue(null) },
         refund: { findFirst: jest.fn().mockResolvedValue(null) },
@@ -183,6 +187,7 @@ function createHarness(options?: {
             paidFee: 2900,
             paidTime: 1700000100,
         }),
+        refundOrder: jest.fn().mockResolvedValue(undefined),
     };
     const miniprogramClient = {
         code2Session: jest.fn().mockResolvedValue({
@@ -581,6 +586,29 @@ describe('WechatVirtualPaymentService', () => {
 
             expect(result).toEqual({ checked: 1, settled: 0 });
             expect(harness.tx.order.update).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('refund (RefundProvider)', () => {
+        it('does not forward the free-text reason to the channel', async () => {
+            const harness = createHarness({ mock: false });
+
+            const result = await harness.service.refund({
+                outRefundNo: 'R123456',
+                outTradeNo: order.orderNo,
+                orderId: order.id,
+                refundFee: 2900,
+                totalFee: 2900,
+                reason: 'user changed their mind (free text)',
+            });
+
+            expect(harness.client.refundOrder).toHaveBeenCalledWith({
+                openid: 'o_user_openid',
+                outTradeNo: 'VABC123456789',
+                env: 0,
+                refundFee: 2900,
+            });
+            expect(result.status).toBe('PROCESSING');
         });
     });
 
