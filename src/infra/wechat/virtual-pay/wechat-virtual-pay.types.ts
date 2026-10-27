@@ -149,7 +149,7 @@ export interface VirtualPayQueryOrderInput {
  * `/xpay/refund_order` 的 `refund_reason` 枚举（**字符串**，不是数字）。
  *
  * 微信只接受这几个固定值，不接受自由文本。内部退款原因（自由文本）保存在
- * `Refund.reason` 用于审计/展示，不上送渠道；若确实要上送，只能取下面的枚举。
+ * `Refund.reason` 用于审计/展示，不上送渠道；渠道侧只上送下面的枚举。
  */
 export const VIRTUAL_PAY_REFUND_REASONS = {
     /** 暂无描述 */
@@ -169,14 +169,36 @@ export const VIRTUAL_PAY_REFUND_REASONS = {
 export type VirtualPayRefundReason =
     (typeof VIRTUAL_PAY_REFUND_REASONS)[keyof typeof VIRTUAL_PAY_REFUND_REASONS];
 
+/** `/xpay/refund_order` 的 `req_from`（退款来源）枚举。 */
+export const VIRTUAL_PAY_REFUND_REQ_FROM = {
+    /** 人工客服退款（客服发起） */
+    CUSTOMER_SERVICE: '1',
+    /** 用户自己发起退款流程 */
+    USER_SELF: '2',
+    /** 其它 */
+    OTHER: '3',
+} as const;
+
+export type VirtualPayRefundReqFrom =
+    (typeof VIRTUAL_PAY_REFUND_REQ_FROM)[keyof typeof VIRTUAL_PAY_REFUND_REQ_FROM];
+
 export interface VirtualPayRefundOrderInput {
     openid: string;
+    /** 下单时的 `OutTradeNo`（`order_id`）。 */
     outTradeNo: string;
     env: WechatVirtualPayEnv;
-    /** 退款金额（分）；不传则全额退。 */
-    refundFee?: number;
-    /** 微信枚举退款原因（`VIRTUAL_PAY_REFUND_REASONS`），可选。 */
-    reason?: VirtualPayRefundReason;
+    /** 本次退款单号（`refund_order_id`），8-32 位字母/数字/`_`/`-`。 */
+    refundOrderId: string;
+    /** 当前单剩余可退金额（`left_fee`，分），通过 `query_order` 或本地订单状态得到。 */
+    leftFee: number;
+    /** 本次退款金额（`refund_fee`，分），`(0, left_fee]`。 */
+    refundFee: number;
+    /** 商家自定义数据（`biz_meta`），长度 [0,1024]，查询时可原样返回。 */
+    bizMeta: string;
+    /** 退款原因（`refund_reason`），微信枚举 `VIRTUAL_PAY_REFUND_REASONS`。 */
+    reason: VirtualPayRefundReason;
+    /** 退款来源（`req_from`），微信枚举 `VIRTUAL_PAY_REFUND_REQ_FROM`。 */
+    reqFrom: VirtualPayRefundReqFrom;
 }
 
 export interface VirtualPayNotifyProvideGoodsInput {

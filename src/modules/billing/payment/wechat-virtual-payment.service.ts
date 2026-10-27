@@ -28,6 +28,8 @@ import {
     readXpayEvent,
     VIRTUAL_PAY_EVENTS,
     VIRTUAL_PAY_ORDER_STATUS,
+    VIRTUAL_PAY_REFUND_REASONS,
+    VIRTUAL_PAY_REFUND_REQ_FROM,
     WechatVirtualPayClient,
     WechatRuntimeConfigService,
 } from '../../../infra/wechat';
@@ -1008,14 +1010,20 @@ export class WechatVirtualPaymentService implements RefundProvider {
 
         const { env } = await this.client.credentials();
 
-        // 注意：微信 `/xpay/refund_order` 的 `refund_reason` 只接受 0-5 枚举，
-        // 不接受自由文本（传自由文本会报 268490002）。内部退款原因继续保存在
-        // `Refund.reason` 用于审计/展示，这里不上送渠道。
+        // 微信 `/xpay/refund_order` 的 `refund_reason` 只接受 0-5 枚举，不接受
+        // 自由文本（传自由文本会报 268490002）。内部自由文本原因无法可靠归类到
+        // 微信的 6 个枚举，统一上送「其他原因」；原文仍保存在 `Refund.reason`。
         await this.client.refundOrder({
             openid: attempt.openid,
             outTradeNo: attempt.outTradeNo,
             env,
+            refundOrderId: input.outRefundNo,
+            leftFee: input.leftFee ?? input.totalFee,
             refundFee: input.refundFee,
+            bizMeta: input.outTradeNo,
+            reason: VIRTUAL_PAY_REFUND_REASONS.OTHER,
+            // 系统目前不区分退款是客服发起还是用户自助，统一「其它」。
+            reqFrom: VIRTUAL_PAY_REFUND_REQ_FROM.OTHER,
         });
 
         return {

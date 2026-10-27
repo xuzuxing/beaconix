@@ -228,14 +228,14 @@ export class WechatVirtualPayClient {
 
         const body = JSON.stringify({
             openid: input.openid,
-            env: input.env,
             order_id: input.outTradeNo,
-            ...(input.refundFee === undefined
-                ? {}
-                : { refund_fee: input.refundFee }),
-            ...(input.reason === undefined
-                ? {}
-                : { refund_reason: input.reason }),
+            refund_order_id: input.refundOrderId,
+            left_fee: input.leftFee,
+            refund_fee: input.refundFee,
+            biz_meta: input.bizMeta,
+            refund_reason: input.reason,
+            req_from: input.reqFrom,
+            env: input.env,
         });
 
         await this.callXpay(REFUND_ORDER_PATH, appKey, body);

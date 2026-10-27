@@ -590,7 +590,7 @@ describe('WechatVirtualPaymentService', () => {
     });
 
     describe('refund (RefundProvider)', () => {
-        it('does not forward the free-text reason to the channel', async () => {
+        it('submits the channel-required refund fields with an enum reason', async () => {
             const harness = createHarness({ mock: false });
 
             const result = await harness.service.refund({
@@ -599,6 +599,7 @@ describe('WechatVirtualPaymentService', () => {
                 orderId: order.id,
                 refundFee: 2900,
                 totalFee: 2900,
+                leftFee: 2900,
                 reason: 'user changed their mind (free text)',
             });
 
@@ -606,7 +607,12 @@ describe('WechatVirtualPaymentService', () => {
                 openid: 'o_user_openid',
                 outTradeNo: 'VABC123456789',
                 env: 0,
+                refundOrderId: 'R123456',
+                leftFee: 2900,
                 refundFee: 2900,
+                bizMeta: 'BWMB3KXABC123',
+                reason: '5',
+                reqFrom: '3',
             });
             expect(result.status).toBe('PROCESSING');
         });

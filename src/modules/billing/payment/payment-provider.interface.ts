@@ -44,6 +44,11 @@ export interface PaymentProviderRefundInput {
     refundFee: number;
     /** 原订单金额（分），微信要求上送用于校验。 */
     totalFee: number;
+    /**
+     * 退款前该订单剩余可退金额（分）。虚拟支付 `/xpay/refund_order` 需要
+     * `left_fee`，其它渠道忽略。
+     */
+    leftFee?: number;
     reason?: string;
 }
 

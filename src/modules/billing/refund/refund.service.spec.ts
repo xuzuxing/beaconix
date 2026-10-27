@@ -390,6 +390,7 @@ describe('RefundService', () => {
                 transactionId: 'wx-tx-1',
                 refundFee: 19933,
                 totalFee: 29900,
+                leftFee: 29900,
                 reason: 'not satisfied',
             });
             expect(tx.order.update).toHaveBeenCalledWith(

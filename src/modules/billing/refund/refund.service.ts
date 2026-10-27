@@ -621,6 +621,8 @@ export class RefundService {
                     transactionId: payment.transactionId ?? undefined,
                     refundFee: refund.amount,
                     totalFee: order.amount,
+                    // 虚拟支付退款需要「剩余可退金额」（left_fee）
+                    leftFee: order.amount - order.refundedAmount,
                     reason: refund.reason ?? undefined,
                 });
 
