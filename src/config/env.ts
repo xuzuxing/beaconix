@@ -6,6 +6,6 @@ export function requireEnv(key: string): string {
     return value;
 }
 
-export function optionalEnv(key: string, fallback: string): string {
+export function optionalEnv(key: string, fallback: string = ''): string {
     return process.env[key] ?? fallback;
 }

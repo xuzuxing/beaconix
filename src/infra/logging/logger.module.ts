@@ -32,6 +32,7 @@ type PinoTransportStream = ReturnType<typeof pino.transport> & {
                 clsService: ClsService,
             ) => {
                 const logger = configService.get<LoggerConfig>('logger')!;
+                const env = configService.get<string>('app.env');
 
                 const params = createPinoConfig(
                     logger.dir,
@@ -43,11 +44,12 @@ type PinoTransportStream = ReturnType<typeof pino.transport> & {
                     {
                         serviceName: logger.serviceName,
                         toConsole: logger.toConsole,
-                        env: configService.get<string>('app.env'),
+                        env,
                         getRequestId: () =>
                             clsService.isActive()
                                 ? clsService.get<string>(CLS_KEY_REQUEST_ID)
                                 : undefined,
+                        loki: logger.loki,
                     },
                 );
 

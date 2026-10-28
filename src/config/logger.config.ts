@@ -1,6 +1,22 @@
 import { registerAs } from '@nestjs/config';
 import { optionalEnv } from './env';
 
+export interface LokiLogConfig {
+    /** Loki push endpoint, e.g. `http://loki:3100`. Empty means disabled. */
+    url?: string;
+    /** batching */
+    batching: {
+        interval: number;
+        maxBufferSize: number;
+    };
+    timeout?: number;
+    /** Optional HTTP basic auth for Loki. */
+    basicAuth?: {
+        username: string;
+        password: string;
+    };
+}
+
 export interface LoggerConfig {
     serviceName: string;
     dir: string;
@@ -10,6 +26,8 @@ export interface LoggerConfig {
     toFile: boolean;
     excludePaths: string[];
     sensitiveFields: string[];
+    /** Direct Loki push. Push is enabled only when `loki.url` is set. */
+    loki: LokiLogConfig;
 }
 
 function parseBoolean(value: string): boolean {
@@ -39,4 +57,17 @@ export const loggerConfig = registerAs('logger', (): LoggerConfig => ({
             'password,token,refreshToken,accessToken,authorization,cookie,secret,secretKey,apiKey',
         ),
     ),
+    loki: {
+        url: optionalEnv('LOGGER_LOKI_URL', ''),
+        batching: {
+            interval: Number(optionalEnv('LOGGER_LOKI_INTERVAL', '5')),
+            maxBufferSize: Number(
+                optionalEnv('LOGGER_LOKI_MAX_BUFFER_SIZE', '1000'),
+            ),
+        },
+        basicAuth: {
+            username: optionalEnv('LOGGER_LOKI_AUTH_USERNAME'),
+            password: optionalEnv('LOGGER_LOKI_AUTH_PASSWORD'),
+        },
+    },
 }));

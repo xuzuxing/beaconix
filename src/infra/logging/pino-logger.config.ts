@@ -1,5 +1,6 @@
 import type { Params } from 'nestjs-pino';
 import { toIsoString } from '../../common/utils/date.util';
+import { LokiLogConfig } from '../../config';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -268,6 +269,8 @@ interface PinoConfigOptions {
     env?: string;
     toConsole?: boolean;
     getRequestId?: () => string | undefined;
+    /** Direct Loki push; enabled only when `loki.url` is set. */
+    loki?: LokiLogConfig;
 }
 
 function createTransport(
@@ -279,8 +282,10 @@ function createTransport(
 ): TransportMultiOptions | undefined {
     const env = options.env || process.env.NODE_ENV || 'development';
     const toConsole = options.toConsole ?? true;
+    const { serviceName, loki } = options;
+    const hasLoki = Boolean(loki?.url);
 
-    if (!toFile && !(toConsole && prettyPrint)) {
+    if (!toFile && !(toConsole && prettyPrint) && !hasLoki) {
         return undefined;
     }
 
@@ -317,6 +322,27 @@ function createTransport(
     const targets: TransportTargetOptions[] = [];
     if (toConsole && prettyPrint) targets.push(prettyTarget);
     if (toFile) targets.push(fileTarget);
+    if (loki && hasLoki) {
+        targets.push({
+            target: require.resolve('pino-loki'),
+            level,
+            options: {
+                host: loki.url,
+                batching: loki.batching,
+                timeout: loki.timeout,
+                labels: {
+                    job: 'beaconix',
+                    service: serviceName,
+                    env,
+                    instance: os.hostname(),
+                },
+                silenceErrors: false,
+                replaceTimestamp: false,
+                structuredMetaKey: false,
+                ...(loki.basicAuth ?? loki.basicAuth),
+            },
+        });
+    }
 
     return { targets };
 }

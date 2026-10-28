@@ -6,6 +6,7 @@ import {
     ValidationPipe,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Logger as PinoNestLogger } from 'nestjs-pino';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
@@ -21,6 +22,11 @@ async function bootstrap() {
     const app = await NestFactory.create<NestExpressApplication>(AppModule, {
         rawBody: true,
     });
+
+    // Route Nest's framework and injected loggers through pino so they share
+    // the structured pipeline (and the optional Loki transport).
+    app.useLogger(app.get(PinoNestLogger));
+
     const configService = app.get(ConfigService);
     const appConfig = configService.get<AppConfig>('app')!;
     const logger = new Logger('Bootstrap');

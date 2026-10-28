@@ -143,6 +143,9 @@ importers:
       pino:
         specifier: ^10.4.0
         version: 10.4.0
+      pino-loki:
+        specifier: ^3.0.0
+        version: 3.0.0
       pino-pretty:
         specifier: ^13.2.0
         version: 13.2.0
@@ -3983,6 +3986,11 @@ packages:
 
   pino-http@11.0.0:
     resolution: {integrity: sha512-wqg5XIAGRRIWtTk8qPGxkbrfiwEWz1lgedVLvhLALudKXvg1/L2lTFgTGPJ4Z2e3qcRmxoFxDuSdMdMGNM6I1g==}
+
+  pino-loki@3.0.0:
+    resolution: {integrity: sha512-9TyUW5syTjp2nT70QcijJtIWUzdYUj+olQ7+fWNfm1/HrDGEWt86Q4ACzClH6DM6GBwtQimRDgneNczP+p4ypA==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   pino-pretty@13.2.0:
     resolution: {integrity: sha512-jjghD1ML+Di/WxjJDz6j6Y4FT7hIXOlb8h27AyJ+ohtAXJXH4PS/xkv7si+RCCIW59HMgZsMKTDgzdr0RhuRrg==}
@@ -8931,6 +8939,11 @@ snapshots:
       pino: 10.4.0
       pino-std-serializers: 7.1.0
       process-warning: 5.1.0
+
+  pino-loki@3.0.0:
+    dependencies:
+      pino-abstract-transport: 3.0.0
+      pump: 3.0.4
 
   pino-pretty@13.2.0:
     dependencies:

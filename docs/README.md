@@ -83,6 +83,7 @@ docs/
 | ----------------------------------------------------- | ----------------------------------------------------------------------------- |
 | [监控报表与定时通知](proposals/monitoring-reports.md) | 待评审/待开发；独立日聚合、报表订阅、快照与多渠道投递，不是监控概览的剩余工作 |
 | [云函数远程调用](proposals/cloud-probe-invocation.md) | 远程 SDK 调用规划；与当前 SCF 定时拉取部署方式区分                            |
+| [日志直推 Loki](proposals/logging-pipeline.md)         | 现有 pino 管道加 pino-loki 直推（LOGGER_LOKI_URL 存在即启用），不做域/多文件拆分，Loki+Grafana 统一查询 |
 
 ## 历史归档
 

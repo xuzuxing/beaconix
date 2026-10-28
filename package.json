@@ -40,7 +40,7 @@
     "mock:pay": "tsx scripts/mock-payment-callback.ts",
     "test:resend": "ts-node scripts/test-resend.ts",
     "test:smtp": "tsx scripts/test-smtp.ts",
-    "probe:cli": "node probes/agent/bin/beaconix-probe.js",
+    "probe:cli": "cross-env BEACON_API_URL=http://localhost:9000/api PROBE_ALLOW_INSECURE=true node probes/agent/bin/beaconix-probe.js",
     "probe:login": "node probes/agent/bin/beaconix-probe.js login",
     "probe:run": "node probes/agent/bin/beaconix-probe.js run",
     "probe:validate": "node probes/agent/bin/beaconix-probe.js validate",
@@ -51,6 +51,7 @@
     "probe:pack:scf": "node probes/agent/scripts/build-release.js --scf-only",
     "probe:verify": "node probes/agent/scripts/verify-release.js",
     "probe:publish": "node probes/agent/scripts/publish-release.js",
+    "probe:fleet": "cross-env BEACON_API_URL=http://localhost:9000/api BEACON_ADMIN_EMAIL=admin@beacon.dev BEACON_ADMIN_PASSWORD=Qwer1234 PROBE_ALLOW_INSECURE=true node probes/test-fleet/index.js run --count ",
     "probe:test": "node --test \"probes/agent/test/*.test.js\""
   },
   "dependencies": {
@@ -97,6 +98,7 @@
     "otplib": "^13.5.0",
     "pg": "^8.22.0",
     "pino": "^10.4.0",
+    "pino-loki": "^3.0.0",
     "pino-pretty": "^13.2.0",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
