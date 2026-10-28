@@ -25,6 +25,7 @@ import {
 import type { MonitorPolicy } from '../../shared/quota/quota.service';
 import { isIP } from 'node:net';
 import { parseTcpTarget } from '../checker/checkers/tcp.checker';
+import { assertLiteralPublicAddress } from '../checker/checkers/network-guard';
 import {
     CONFIG_VERSION,
     isDomain,
@@ -102,10 +103,6 @@ export class MonitorsService {
         await this.access.project(principal, projectId, 'monitor.manage');
         this.rejectNullFields(dto);
         const project = await this.ensureProjectExists(projectId);
-        await this.quotaService.assertCanCreate(
-            project.organizationId,
-            'monitors',
-        );
         await this.quotaService.assertIntervalAllowed(
             project.organizationId,
             dto.interval ?? 60,
@@ -145,6 +142,13 @@ export class MonitorsService {
             projectId,
             'monitor.manage',
             async (tx) => {
+                // Count inside the write transaction (the org row is already
+                // locked by `withProject`) so parallel creates cannot all pass.
+                await this.quotaService.assertCanCreateInTransaction(
+                    project.organizationId,
+                    'monitors',
+                    tx,
+                );
                 await this.assertChannelsBelongToOrg(
                     project.organizationId,
                     notificationChannelIds,
@@ -971,14 +975,36 @@ export class MonitorsService {
                 'HTTP monitor target must not contain URL credentials',
             );
         }
+
+        this.assertPublicLiteral(parsed.hostname);
+    }
+
+    /**
+     * Literal private addresses are rejected at save time so the user gets a
+     * clear error instead of a monitor that can never succeed. Domains are vetted
+     * at execution time, where the resolution happens anyway.
+     */
+    private assertPublicLiteral(hostname: string): void {
+        const host = hostname.replace(/^\[|\]$/g, '');
+        const verdict = assertLiteralPublicAddress(host);
+
+        if (!verdict.ok) {
+            throw new BadRequestException(
+                `Monitor target must be a public address (${verdict.reason}); use a probe to monitor internal hosts`,
+            );
+        }
     }
 
     private validateTcpTarget(target: string): void {
-        if (!parseTcpTarget(target)) {
+        const parsed = parseTcpTarget(target);
+
+        if (!parsed) {
             throw new BadRequestException(
                 'TCP monitor target must use host:port with port 1-65535',
             );
         }
+
+        this.assertPublicLiteral(parsed.host);
     }
 
     private async ensureMonitorExists(

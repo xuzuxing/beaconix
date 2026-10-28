@@ -1,47 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { execFile } from 'node:child_process';
 import { Resolver } from 'node:dns/promises';
-import { BlockList, isIP } from 'node:net';
+import { isIP } from 'node:net';
+import { isPublicAddress } from './network-guard';
 import { MonitorType } from '../../../generated/prisma/enums';
 import type { MonitorModel } from '../../../generated/prisma/models';
 import { isDomain, normalizeDomain } from '../../monitors/monitor-config';
 import type { CheckerStrategy } from './checker.interface';
 import type { CheckFailureKind, CheckResult } from './check-result';
 
-const blocked = new BlockList();
-for (const [address, prefix] of [
-    ['0.0.0.0', 8],
-    ['10.0.0.0', 8],
-    ['100.64.0.0', 10],
-    ['127.0.0.0', 8],
-    ['169.254.0.0', 16],
-    ['172.16.0.0', 12],
-    ['192.0.0.0', 24],
-    ['192.0.2.0', 24],
-    ['192.88.99.0', 24],
-    ['192.168.0.0', 16],
-    ['198.18.0.0', 15],
-    ['198.51.100.0', 24],
-    ['203.0.113.0', 24],
-    ['224.0.0.0', 3],
-] as const)
-    blocked.addSubnet(address, prefix, 'ipv4');
-const globalV6 = new BlockList();
-globalV6.addSubnet('2000::', 3, 'ipv6');
-blocked.addSubnet('2001:db8::', 32, 'ipv6');
-blocked.addSubnet('2002::', 16, 'ipv6');
-blocked.addSubnet('2001::', 23, 'ipv6');
-blocked.addSubnet('3fff::', 20, 'ipv6');
-
-export function isPublicPingAddress(address: string): boolean {
-    const version = isIP(address);
-    if (version === 4) return !blocked.check(address, 'ipv4');
-    return (
-        version === 6 &&
-        globalV6.check(address, 'ipv6') &&
-        !blocked.check(address, 'ipv6')
-    );
-}
+/**
+ * PING keeps its historical predicate name for callers, but the blocklist now
+ * lives in `network-guard` so HTTP/TCP/DNS-side checks share one definition.
+ */
+export const isPublicPingAddress = isPublicAddress;
 
 /** Separate provider keeps OS execution mockable without shell commands. */
 @Injectable()

@@ -18,11 +18,6 @@ export class QueryAuditLogsDto {
     @IsCuid()
     actorId?: string;
 
-    @ApiPropertyOptional({ description: 'Filter by organization ID' })
-    @IsOptional()
-    @IsCuid()
-    organizationId?: string;
-
     @ApiPropertyOptional({ description: 'Filter by project ID' })
     @IsOptional()
     @IsCuid()

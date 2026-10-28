@@ -20,6 +20,9 @@ src/generated/
 # IDE & OS
 .vscode/
 .idea/
+.agents/
+.claude/
+.workflow/
 .DS_Store
 
 # Logs
@@ -41,6 +44,10 @@ probes/docker-compose.probe-test.yml
 .dockerignore
 
 # Docs
+docs/
+plans/
+AGENTS.md
+CLAUDE.md
 README.md
 CONTRIBUTING.md
 SECURITY.md
@@ -50,6 +57,9 @@ LICENSE
 # Temp
 .temp/
 .tmp/
+
+# Runtime data
+storage/
 
 # Probe credentials and test fleet state
 .beaconix/

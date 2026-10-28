@@ -27,7 +27,12 @@ function createService() {
         membership: { count: jest.fn() },
         notificationChannel: { count: jest.fn() },
         apiKey: { count: jest.fn() },
+        $queryRaw: jest.fn(),
+        $transaction: jest.fn(),
     };
+    // The convenience wrapper opens its own transaction and takes the tenant
+    // lock inside it; reusing `prisma` as `tx` keeps the count mocks shared.
+    prisma.$transaction.mockImplementation((callback) => callback(prisma));
     const effectivePlanService = {
         getEffectivePlan: jest.fn().mockResolvedValue(freePlan),
         getEffectivePlanInTransaction: jest.fn().mockResolvedValue(freePlan),

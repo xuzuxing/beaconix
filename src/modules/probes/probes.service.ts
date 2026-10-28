@@ -135,11 +135,18 @@ export class ProbesService implements OnModuleInit {
         actorId?: string,
     ): Promise<ProbeEntity> {
         await this.quotaService.assertFeatureAllowed(orgId, 'tenantProbe');
-        await this.quotaService.assertCanCreate(orgId, 'probes');
 
         const secret = this.generateSecret('tnt');
 
         const probe = await this.prisma.$transaction(async (tx) => {
+            // Count and insert inside one transaction so parallel creates cannot
+            // both pass the quota check.
+            await this.quotaService.assertCanCreateInTransaction(
+                orgId,
+                'probes',
+                tx,
+            );
+
             const created = await tx.probe.create({
                 data: {
                     organizationId: orgId,

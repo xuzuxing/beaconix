@@ -17,9 +17,11 @@ import { CreatePaymentDto } from './dto';
 import { PaymentProviderFactory } from './payment-provider.factory';
 import type {
     PaymentCallbackHeaders,
+    PaymentProviderCallbackResult,
     PaymentProviderPayParams,
 } from './payment-provider.interface';
 import { settlePaidOrder } from './payment-settlement';
+import { resolvePaidAmountFen } from './callback-amount';
 
 type OrderForPayment = OrderModel;
 
@@ -131,10 +133,6 @@ export class PaymentService {
         );
         this.logger.debug('callback', callback);
 
-        if (callback.trade_state !== 'SUCCESS') {
-            return { code: 'FAIL', message: 'trade_state is not SUCCESS' };
-        }
-
         const payment = await this.prisma.payment.findFirst({
             where: {
                 channel,
@@ -149,6 +147,48 @@ export class PaymentService {
 
         if (payment.status === PaymentStatus.SUCCESS) {
             return { code: 'SUCCESS', message: '成功' };
+        }
+
+        if (callback.trade_state !== 'SUCCESS') {
+            // `PAYERROR` is terminal; `NOTPAY` / `USERPAYING` are intermediate
+            // states, so the payment must stay pending for a later callback.
+            if (callback.trade_state === 'PAYERROR') {
+                return this.rejectPayment(
+                    payment.id,
+                    callback,
+                    'Payment failed at the channel',
+                );
+            }
+
+            return { code: 'FAIL', message: 'trade_state is not SUCCESS' };
+        }
+
+        // A cancelled (timed-out) or refunded order must not be revived by a
+        // late callback: the order sweep already released it, and activating a
+        // subscription now would hand out service for an order the platform
+        // considers dead.
+        if (
+            payment.order.status !== OrderStatus.PENDING &&
+            payment.order.status !== OrderStatus.PAID
+        ) {
+            return this.rejectPayment(
+                payment.id,
+                callback,
+                `Order is ${payment.order.status}`,
+            );
+        }
+
+        // The money has to match what the order asked for. A signature-verified
+        // callback always carries the paid amount, so a missing amount is a
+        // malformed payload rather than a reason to trust the callback.
+        const paidFen = resolvePaidAmountFen(channel, callback);
+
+        if (paidFen === null || paidFen !== payment.amount) {
+            return this.rejectPayment(
+                payment.id,
+                callback,
+                `Amount mismatch (paid ${paidFen ?? 'unknown'}, expected ${payment.amount})`,
+            );
         }
 
         await this.prisma.$transaction(async (tx) => {
@@ -189,6 +229,33 @@ export class PaymentService {
     }
 
     // -- Helpers ---------------------------------------------------------
+
+    /**
+     * Records a callback we refuse to honour and answers the channel with FAIL.
+     *
+     * Every rejection path lands here so a bad callback leaves evidence: the
+     * payment moves to `FAILED` (never overwriting an already successful one)
+     * and the raw payload is kept for reconciliation.
+     */
+    private async rejectPayment(
+        paymentId: string,
+        callback: PaymentProviderCallbackResult,
+        reason: string,
+    ): Promise<PaymentCallbackResponse> {
+        this.logger.error(
+            `Payment callback rejected: ${reason} (payment ${paymentId})`,
+        );
+
+        await this.prisma.payment.updateMany({
+            where: { id: paymentId, status: { not: PaymentStatus.SUCCESS } },
+            data: {
+                status: PaymentStatus.FAILED,
+                rawCallback: callback as Prisma.InputJsonValue,
+            },
+        });
+
+        return { code: 'FAIL', message: reason };
+    }
 
     private extractPrepayId(params: PaymentProviderPayParams): string {
         // 支付宝没有 prepay_id：收银台 URL / 扫码链接存进同一列，便于排查对账。

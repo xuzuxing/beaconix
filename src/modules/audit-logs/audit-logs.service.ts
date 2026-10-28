@@ -36,7 +36,6 @@ export class AuditLogsService {
     async findAll(orgId: string, dto: QueryAuditLogsDto) {
         const {
             actorId,
-            organizationId,
             projectId,
             action,
             entity,
@@ -48,8 +47,9 @@ export class AuditLogsService {
         } = dto;
 
         const where: any = {
-            // Always scoped to the org
-            organizationId: organizationId ?? orgId,
+            // Tenant is taken from the path only: the query string must never be
+            // able to widen the scope to another organization.
+            organizationId: orgId,
         };
 
         if (actorId) where.actorId = actorId;

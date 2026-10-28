@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../infra/database/prisma.service';
-import { QueryAuditLogsDto } from '../../audit-logs/dto';
+import { QueryAdminAuditLogsDto } from './dto/query-admin-audit-logs.dto';
 import { AuditLogEntity } from '../../audit-logs/entities';
 
 const actorSelect = {
@@ -18,7 +18,7 @@ export class AdminAuditLogsService {
      * tenant-scoped AuditLogsService, this applies no forced organizationId
      * filter; every filter is opt-in from the query.
      */
-    async findAll(dto: QueryAuditLogsDto) {
+    async findAll(dto: QueryAdminAuditLogsDto) {
         const {
             actorId,
             organizationId,

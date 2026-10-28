@@ -293,34 +293,31 @@ export function mapAlipayRefundQuery(
 }
 
 export function parseNotifyParams(rawBody: string): Record<string, string> {
-    const params: Record<string, string> = {};
+    const params = new Map<string, string>();
 
-    // 不能用 URLSearchParams：它按 form-urlencoded 标准把裸 `+` 当空格，而
-    // 支付宝通知的 `sign`（base64）里的 `+`/`/` 是**裸字符**（空格反而是
-    // `%20`）。用 URLSearchParams 会把 sign 里的 `+` 全部变成空格，验签必挂。
     for (const pair of (rawBody ?? '').split('&')) {
         if (!pair) continue;
-        const eq = pair.indexOf('=');
-        const key = eq === -1 ? pair : pair.slice(0, eq);
+        const separatorIndex = pair.indexOf('=');
+        const rawKey =
+            separatorIndex === -1 ? pair : pair.slice(0, separatorIndex);
+        const key = decodeNotifyComponent(rawKey.replace(/\+/g, ' '));
         if (!key) continue;
-        const rawValue = eq === -1 ? '' : pair.slice(eq + 1);
+        const rawValue =
+            separatorIndex === -1 ? '' : pair.slice(separatorIndex + 1);
+        const value = key === 'sign' ? rawValue : rawValue.replace(/\+/g, ' ');
 
-        // `decodeURIComponent` 只解 `%XX`、不动 `+`，正好符合支付宝的编码。
-        let value: string;
-        try {
-            // 先按 form-urlencoded 规则把裸 `+` 还原为空格，
-            // 再解码 %XX。`%2B` 经 decodeURIComponent 会还原成字面 `+`，
-            // 所以 sign 里的 `+` 不会被误伤。
-            value = decodeURIComponent(rawValue.replace(/\+/g, ' '));
-        } catch {
-            value = rawValue.replace(/\+/g, ' ');
-        }
-
-        // 保留空值：验签需要全部参数，空值也要拼成 key=
-        params[key] = value;
+        params.set(key, decodeNotifyComponent(value));
     }
 
-    return params;
+    return Object.fromEntries(params);
+}
+
+function decodeNotifyComponent(value: string): string {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
 }
 
 /**

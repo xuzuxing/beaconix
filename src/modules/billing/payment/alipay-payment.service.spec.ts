@@ -1,3 +1,5 @@
+import { generateKeyPairSync, sign } from 'node:crypto';
+import { AlipaySdk } from 'alipay-sdk';
 import type {
     AlipayClient,
     AlipayRuntimeConfigService,
@@ -233,6 +235,64 @@ describe('AlipayPaymentService', () => {
             );
         });
 
+        it('passes encoded and raw signatures to the SDK without corrupting signed values', async () => {
+            const { service, client } = createService({ mock: false });
+            const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+                modulusLength: 2048,
+                publicKeyEncoding: { type: 'spki', format: 'pem' },
+                privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+            });
+            const sdk = new AlipaySdk({
+                appId: config.appId,
+                privateKey,
+                alipayPublicKey: publicKey,
+                signType: 'RSA2',
+            });
+            const params = {
+                app_id: config.appId,
+                out_trade_no: 'BWABC123',
+                trade_no: '2026102122001400000000000001',
+                trade_status: 'TRADE_SUCCESS',
+                total_amount: '29.00',
+                subject: '订阅 C++ 100% %2B',
+                gmt_payment: '2026-10-28 12:30:00',
+                buyer_id: '',
+            };
+            const content = Object.entries(params)
+                .sort(([firstKey], [secondKey]) =>
+                    firstKey.localeCompare(secondKey),
+                )
+                .map(([key, value]) => `${key}=${value}`)
+                .join('&');
+            const signature = sign(
+                'RSA-SHA256',
+                Buffer.from(content),
+                privateKey,
+            ).toString('base64');
+            client.verifyNotify.mockImplementation((notifyParams) =>
+                Promise.resolve(sdk.checkNotifySignV2(notifyParams)),
+            );
+
+            for (const encodedSign of [
+                encodeURIComponent(signature),
+                signature,
+            ]) {
+                const body = `${new URLSearchParams(params).toString()}&sign_type=RSA2&sign=${encodedSign}`;
+
+                await expect(
+                    service.verifyCallback(body),
+                ).resolves.toMatchObject({
+                    out_trade_no: params.out_trade_no,
+                    trade_state: 'SUCCESS',
+                });
+                expect(client.verifyNotify).toHaveBeenLastCalledWith({
+                    ...params,
+                    sign_type: 'RSA2',
+                    sign: signature,
+                });
+            }
+        });
+
         it('rejects a bad signature', async () => {
             const { service, client } = createService({ mock: false });
             client.verifyNotify.mockResolvedValue(false);
@@ -437,6 +497,73 @@ describe('yuanFromFen', () => {
 });
 
 describe('parseNotifyParams', () => {
+    it('parses the supplied sandbox notification with a raw signature and repeated fields', () => {
+        const signature =
+            'kPbQIjX+xQc8F0/A6/AocELIjhhZnGbcBN6G4MM/HmfWL4ZiHM6fWl5NQhzXJusaklZ1LFuMo+lHQUELAYeugH8LYFvxnNajOvZhuxNFbN2LhF0l/KL8ANtj8oyPM4NN7Qft2kWJTDJUpQOzCzNnV9hDxh5AaT9FPqRS6ZKxnzM=';
+        const rawBody =
+            'notify_time=2026-10-28 12:00:00&notify_type=trade_status_sync&notify_id=2026102800222001927128200510999999&sign=kPbQIjX+xQc8F0/A6/AocELIjhhZnGbcBN6G4MM/HmfWL4ZiHM6fWl5NQhzXJusaklZ1LFuMo+lHQUELAYeugH8LYFvxnNajOvZhuxNFbN2LhF0l/KL8ANtj8oyPM4NN7Qft2kWJTDJUpQOzCzNnV9hDxh5AaT9FPqRS6ZKxnzM=&sign_type=RSA2&trade_no=2026102822001428200510240999&app_id=9021000140652602&auth_app_id=9021000140652602&out_trade_no=TEST_ORDER_20261028_001&buyer_id=2088722040528202&buyer_logon_id=test***@sandbox.com&seller_id=2088721043529665&seller_email=mywesl5021@sandbox.com&trade_status=TRADE_SUCCESS&total_amount=0.01&receipt_amount=0.01&invoice_amount=0.01&buyer_pay_amount=0.01&point_amount=0.00&subject=Beaconix test order&gmt_create=2026-10-28 11:59:50&gmt_payment=2026-10-28 12:00:05&fund_bill_list=[{"amount":"0.01","fundChannel":"ALIPAYACCOUNT"}]Y&sign_type=RSA2&trade_no=2026102822001428200510240999&app_id=9021000140652602&auth_app_id=9021000140652602&out_trade_no=TEST_ORDER_20261028_001&buyer_id=2088722040528202&buyer_logon_id=test***@sandbox.com&seller_id=2088721043529665&seller_email=mywesl5021@sandbox.com&trade_status=TRADE_SUCCESS&total_amount=0.01&receipt_amount=0.01&invoice_amount=0.01&buyer_pay_amount=0.01&point_amount=0.00&subject=Beaconix test order&gmt_create=2026-10-28 11:59:50&gmt_payment=2026-10-28 12:00:05&fund_bill_list=[{"amount":"0.01","fundChannel":"ALIPAYACCOUNT"}]';
+
+        expect(parseNotifyParams(rawBody)).toEqual({
+            notify_time: '2026-10-28 12:00:00',
+            notify_type: 'trade_status_sync',
+            notify_id: '2026102800222001927128200510999999',
+            sign: signature,
+            sign_type: 'RSA2',
+            trade_no: '2026102822001428200510240999',
+            app_id: '9021000140652602',
+            auth_app_id: '9021000140652602',
+            out_trade_no: 'TEST_ORDER_20261028_001',
+            buyer_id: '2088722040528202',
+            buyer_logon_id: 'test***@sandbox.com',
+            seller_id: '2088721043529665',
+            seller_email: 'mywesl5021@sandbox.com',
+            trade_status: 'TRADE_SUCCESS',
+            total_amount: '0.01',
+            receipt_amount: '0.01',
+            invoice_amount: '0.01',
+            buyer_pay_amount: '0.01',
+            point_amount: '0.00',
+            subject: 'Beaconix test order',
+            gmt_create: '2026-10-28 11:59:50',
+            gmt_payment: '2026-10-28 12:00:05',
+            fund_bill_list: '[{"amount":"0.01","fundChannel":"ALIPAYACCOUNT"}]',
+        });
+    });
+
+    it('parses notify.json sandbox data from a raw notification string', () => {
+        const rawBody =
+            'gmt_create=2026-10-27 18:18:05&charset=utf-8&seller_email=mywesl5021@sandbox.com&subject=Beaconix plan order BWMVQJ82493A449B6E&sign=AkTMkGQyBE3sCl3ZuEev4Xq1lfg4DATSwMbX9HFYvyLJlujpXdQRamYWiKoZTadVLQ6yw3zMcYrxj/yHna7WJ5My+/o8JHMmzA0I9wFfeXsOJiTqSLeyJt53Qs7Oe9sKYfU4XuX/zBFRVdSIgM/a/qRwJWMDWRr0D9676gk/5YD5aXtdyIWzv7kVDuikLkboU9H03x9u1DC/t7aJcButDGU6xWJAPYb06m/EFo5oU3NGBE1floU4eWA8vKOmHL/DiAegLcde0eDGHjahv0EbWXcyWZi2DoiQkUJPPHaqFFnKBjdoCQOSDFI2jL2wWLNUu57qH0FWVdUZa8wLOks99g==&buyer_id=2088722040528202&invoice_amount=290.00&notify_id=2026102701222181818128200510158949&fund_bill_list=[{"amount":"290.00","fundChannel":"ALIPAYACCOUNT"}]&notify_type=trade_status_sync&trade_status=TRADE_SUCCESS&receipt_amount=290.00&buyer_pay_amount=290.00&app_id=9021000140652602&sign_type=RSA2&seller_id=2088721043529665&gmt_payment=2026-10-27 18:18:17&notify_time=2026-10-27 18:18:18&version=1.0&out_trade_no=BWMVQJ82493A449B6E&total_amount=290.00&trade_no=2026102722001428200510238322&auth_app_id=9021000140652602&buyer_logon_id=djdnuw5864@sandbox.com&point_amount=0.00';
+
+        expect(parseNotifyParams(rawBody)).toEqual({
+            gmt_create: '2026-10-27 18:18:05',
+            charset: 'utf-8',
+            seller_email: 'mywesl5021@sandbox.com',
+            subject: 'Beaconix plan order BWMVQJ82493A449B6E',
+            sign: 'AkTMkGQyBE3sCl3ZuEev4Xq1lfg4DATSwMbX9HFYvyLJlujpXdQRamYWiKoZTadVLQ6yw3zMcYrxj/yHna7WJ5My+/o8JHMmzA0I9wFfeXsOJiTqSLeyJt53Qs7Oe9sKYfU4XuX/zBFRVdSIgM/a/qRwJWMDWRr0D9676gk/5YD5aXtdyIWzv7kVDuikLkboU9H03x9u1DC/t7aJcButDGU6xWJAPYb06m/EFo5oU3NGBE1floU4eWA8vKOmHL/DiAegLcde0eDGHjahv0EbWXcyWZi2DoiQkUJPPHaqFFnKBjdoCQOSDFI2jL2wWLNUu57qH0FWVdUZa8wLOks99g==',
+            buyer_id: '2088722040528202',
+            invoice_amount: '290.00',
+            notify_id: '2026102701222181818128200510158949',
+            fund_bill_list:
+                '[{"amount":"290.00","fundChannel":"ALIPAYACCOUNT"}]',
+            notify_type: 'trade_status_sync',
+            trade_status: 'TRADE_SUCCESS',
+            receipt_amount: '290.00',
+            buyer_pay_amount: '290.00',
+            app_id: '9021000140652602',
+            sign_type: 'RSA2',
+            seller_id: '2088721043529665',
+            gmt_payment: '2026-10-27 18:18:17',
+            notify_time: '2026-10-27 18:18:18',
+            version: '1.0',
+            out_trade_no: 'BWMVQJ82493A449B6E',
+            total_amount: '290.00',
+            trade_no: '2026102722001428200510238322',
+            auth_app_id: '9021000140652602',
+            buyer_logon_id: 'djdnuw5864@sandbox.com',
+            point_amount: '0.00',
+        });
+    });
+
     it('parses the form-urlencoded body', () => {
         expect(
             parseNotifyParams('out_trade_no=BW1&trade_status=TRADE_SUCCESS'),
@@ -446,30 +573,89 @@ describe('parseNotifyParams', () => {
         });
     });
 
-    it('drops empty values so verification is not polluted', () => {
+    it('preserves empty values for the SDK to handle', () => {
         expect(parseNotifyParams('out_trade_no=BW1&buyer_id=&sign=x')).toEqual({
             out_trade_no: 'BW1',
+            buyer_id: '',
             sign: 'x',
         });
     });
 
-    it('does not decode values twice', () => {
+    it('decodes UTF-8, spaces and reserved characters exactly once', () => {
         expect(
-            parseNotifyParams('subject=Beaconix%20plan%20order%20BW1'),
+            parseNotifyParams(
+                'subject=%E8%AE%A2%E9%98%85+plan%20C%2B%2B%20%252B%20%25&passback_params=a%3Db%26c%3Dd',
+            ),
         ).toEqual({
-            subject: 'Beaconix plan order BW1',
+            subject: '订阅 plan C++ %2B %',
+            passback_params: 'a=b&c=d',
         });
     });
 
-    it('keeps the raw + and / in base64 sign values (Alipay sends them unencoded)', () => {
+    it.each([
+        'qgaoKAba+JOYk/PXO/++nWxPE==',
+        'qgaoKAba%2BJOYk%2FPXO%2F%2B%2BnWxPE%3D%3D',
+        'qgaoKAba%2bJOYk%2fPXO%2f%2b%2bnWxPE%3d%3d',
+        'qgaoKAba+JOYk%2FPXO/%2B+nWxPE=%3D',
+    ])(
+        'decodes the signature without changing literal plus signs: %s',
+        (signature) => {
+            expect(
+                parseNotifyParams(`sign=${signature}&out_trade_no=BW1`),
+            ).toEqual({
+                sign: 'qgaoKAba+JOYk/PXO/++nWxPE==',
+                out_trade_no: 'BW1',
+            });
+        },
+    );
+
+    it('decodes parameter names before applying signature rules', () => {
         expect(
-            parseNotifyParams(
-                'sign=qgaoKAba+JOYk/PXO/++nWxPE==&out_trade_no=BW1',
-            ),
+            parseNotifyParams('%73ign=a+b%2Fc%3D&out%5Ftrade%5Fno=BW1'),
         ).toEqual({
-            sign: 'qgaoKAba+JOYk/PXO/++nWxPE==',
+            sign: 'a+b/c=',
             out_trade_no: 'BW1',
         });
+    });
+
+    it('returns an empty dictionary for an empty body', () => {
+        expect(parseNotifyParams('')).toEqual({});
+    });
+
+    it('ignores empty segments and names but preserves valueless parameters', () => {
+        expect(
+            parseNotifyParams('&&=ignored&out_trade_no=BW1&&buyer_id&'),
+        ).toEqual({
+            out_trade_no: 'BW1',
+            buyer_id: '',
+        });
+    });
+
+    it('uses the last value for repeated decoded parameter names', () => {
+        expect(
+            parseNotifyParams('out_trade_no=BW1&out%5Ftrade_no=BW2'),
+        ).toEqual({
+            out_trade_no: 'BW2',
+        });
+    });
+
+    it('keeps malformed percent escapes without throwing', () => {
+        expect(
+            parseNotifyParams('subject=100%+plan&sign=a+b%ZZ&%broken=value'),
+        ).toEqual({
+            subject: '100% plan',
+            sign: 'a+b%ZZ',
+            '%broken': 'value',
+        });
+    });
+
+    it('stores prototype-like names as own properties', () => {
+        const params = parseNotifyParams('__proto__=value&constructor=other');
+
+        expect(Object.keys(params)).toEqual(['__proto__', 'constructor']);
+        expect(params['__proto__']).toBe('value');
+        expect(params['constructor']).toBe('other');
+        expect(Object.getPrototypeOf(params)).toBe(Object.prototype);
     });
 });
 

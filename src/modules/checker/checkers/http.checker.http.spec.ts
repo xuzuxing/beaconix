@@ -5,6 +5,9 @@ import { once } from 'node:events';
 import { gzipSync } from 'node:zlib';
 import { HttpChecker } from './http.checker';
 
+// 本文件用 loopback 起真实服务器；本地检查器默认阻断私网目标，这里显式放行。
+process.env.MONITOR_ALLOW_PRIVATE_TARGETS = 'true';
+
 /** Loopback-only real fetch/stream coverage; no project DB, Redis or external targets. */
 describe('HTTP assertion transport integration', () => {
     let server: Server;

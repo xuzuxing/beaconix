@@ -24,6 +24,21 @@ const payParams = {
     paySign: 'sign',
 };
 
+/**
+ * 验签通过的回调一定带实付金额：支付宝是元字符串 `total_amount`，微信是
+ * `amount.total`（分）。用例只写自己关心的字段，这里补齐金额。
+ */
+function withPaidAmount(callback: unknown): unknown {
+    if (!callback || typeof callback !== 'object') return callback;
+
+    const base =
+        'trade_status' in callback
+            ? { total_amount: (order.amount / 100).toFixed(2) }
+            : { amount: { total: order.amount } };
+
+    return { ...base, ...(callback as Record<string, unknown>) };
+}
+
 function createService() {
     const prisma = {
         order: { findUnique: jest.fn() },
@@ -32,6 +47,7 @@ function createService() {
             upsert: jest.fn(),
             findFirst: jest.fn(),
             findUnique: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
         $transaction: jest.fn(),
     };
@@ -39,6 +55,23 @@ function createService() {
         createPayment: jest.fn(),
         verifyCallback: jest.fn(),
     };
+    // 验签通过的回调一定带实付金额，而 `handleCallback` 现在会核对它。
+    // 用例只写自己关心的字段，这里统一补齐金额，避免每个用例重复一行。
+    const verifyMock = provider.verifyCallback;
+    const resolveValue = verifyMock.mockResolvedValue.bind(verifyMock);
+    verifyMock.mockResolvedValue = (callback: unknown) =>
+        resolveValue(withPaidAmount(callback));
+
+    // `Payment.amount` 是必填列，回调核对要读它；用例只关心订单与状态，
+    // 这里默认补成订单金额，需要时再显式覆盖。
+    const findPayment = prisma.payment.findFirst;
+    const resolvePayment = findPayment.mockResolvedValue.bind(findPayment);
+    findPayment.mockResolvedValue = (payment: unknown) =>
+        resolvePayment(
+            payment && typeof payment === 'object'
+                ? { amount: order.amount, ...payment }
+                : payment,
+        );
     const paymentProviderFactory = {
         get: jest.fn().mockReturnValue(provider),
     };
@@ -708,7 +741,129 @@ describe('PaymentService', () => {
             );
 
             expect(result.code).toBe('FAIL');
-            expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+            // 中间态（WAIT_BUYER_PAY）只回 FAIL：不改 payment、不进结算事务。
+            expect(prisma.$transaction).not.toHaveBeenCalled();
+            expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('callback guards', () => {
+        const pendingPayment = {
+            id: 'payment-1',
+            orderId: order.id,
+            status: 'PENDING',
+            amount: order.amount,
+            order,
+        };
+
+        function expectRejected(
+            prisma: ReturnType<typeof createService>['prisma'],
+            result: { code: string },
+        ) {
+            expect(result.code).toBe('FAIL');
+            expect(prisma.payment.updateMany).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: {
+                        id: 'payment-1',
+                        status: { not: PaymentStatus.SUCCESS },
+                    },
+                    data: expect.objectContaining({
+                        status: PaymentStatus.FAILED,
+                    }),
+                }),
+            );
+            expect(prisma.$transaction).not.toHaveBeenCalled();
+        }
+
+        it('rejects a callback whose amount is lower than the order', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: 'wx-tx-short',
+                trade_state: 'SUCCESS',
+                amount: { total: order.amount - 1 },
+            });
+            prisma.payment.findFirst.mockResolvedValue(pendingPayment);
+
+            const result = await service.handleWechatCallback(
+                '{}',
+                'signature',
+            );
+
+            expectRejected(prisma, result);
+        });
+
+        it('rejects a callback that carries no amount at all', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: 'wx-tx-no-amount',
+                trade_state: 'SUCCESS',
+                amount: {},
+            });
+            prisma.payment.findFirst.mockResolvedValue(pendingPayment);
+
+            const result = await service.handleWechatCallback(
+                '{}',
+                'signature',
+            );
+
+            expectRejected(prisma, result);
+        });
+
+        it('does not revive an order the sweep already cancelled', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: 'wx-tx-cancelled',
+                trade_state: 'SUCCESS',
+            });
+            prisma.payment.findFirst.mockResolvedValue({
+                ...pendingPayment,
+                order: { ...order, status: 'CANCELLED' },
+            });
+
+            const result = await service.handleWechatCallback(
+                '{}',
+                'signature',
+            );
+
+            expectRejected(prisma, result);
+        });
+
+        it('marks the payment failed when the channel reports PAYERROR', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: '',
+                trade_state: 'PAYERROR',
+            });
+            prisma.payment.findFirst.mockResolvedValue(pendingPayment);
+
+            const result = await service.handleWechatCallback(
+                '{}',
+                'signature',
+            );
+
+            expectRejected(prisma, result);
+        });
+
+        it('leaves the payment pending for intermediate trade states', async () => {
+            const { service, prisma, provider } = createService();
+            provider.verifyCallback.mockResolvedValue({
+                out_trade_no: order.orderNo,
+                transaction_id: '',
+                trade_state: 'USERPAYING',
+            });
+            prisma.payment.findFirst.mockResolvedValue(pendingPayment);
+
+            const result = await service.handleWechatCallback(
+                '{}',
+                'signature',
+            );
+
+            expect(result.code).toBe('FAIL');
+            expect(prisma.payment.updateMany).not.toHaveBeenCalled();
             expect(prisma.$transaction).not.toHaveBeenCalled();
         });
     });

@@ -3,6 +3,7 @@ import type { ArgumentMetadata, Type } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { QueryAuditLogsDto } from '../../modules/audit-logs/dto/query-audit-logs.dto';
+import { QueryAdminAuditLogsDto } from '../../modules/admin/audit-logs/dto/query-admin-audit-logs.dto';
 import { CreateOrderDto } from '../../modules/billing/order/dto/create-order.dto';
 import { CreateCommentDto } from '../../modules/comments/dto/create-comment.dto';
 import { TransferOwnershipDto } from '../../modules/organizations/dto/transfer-ownership.dto';
@@ -55,8 +56,15 @@ const dtoCases: DtoCase[] = [
         required: true,
     },
     {
+        // 租户侧查询没有 organizationId：租户恒取路径参数，查询串不能扩大范围。
         dto: QueryAuditLogsDto,
-        fields: ['actorId', 'organizationId', 'projectId', 'entityId'],
+        fields: ['actorId', 'projectId', 'entityId'],
+        source: 'query',
+    },
+    {
+        // 跨租户查询只对 SUPER_ADMIN 开放，organizationId 在这里是合法过滤条件。
+        dto: QueryAdminAuditLogsDto,
+        fields: ['organizationId'],
         source: 'query',
     },
     { dto: CreateOrderDto, fields: ['planId'], required: true },

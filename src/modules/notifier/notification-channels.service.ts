@@ -17,17 +17,26 @@ export class NotificationChannelsService {
     ) {}
 
     async create(orgId: string, dto: CreateNotificationChannelDto) {
-        await this.quotaService.assertCanCreate(orgId, 'channels');
         assertChannelConfig(dto.type, dto.config);
 
-        const channel = await this.prisma.notificationChannel.create({
-            data: {
-                organizationId: orgId,
-                type: dto.type,
-                name: dto.name,
-                config: dto.config,
-                enabled: dto.enabled ?? true,
-            },
+        const channel = await this.prisma.$transaction(async (tx) => {
+            // Count and insert inside one transaction so parallel creates cannot
+            // both pass the quota check.
+            await this.quotaService.assertCanCreateInTransaction(
+                orgId,
+                'channels',
+                tx,
+            );
+
+            return tx.notificationChannel.create({
+                data: {
+                    organizationId: orgId,
+                    type: dto.type,
+                    name: dto.name,
+                    config: dto.config,
+                    enabled: dto.enabled ?? true,
+                },
+            });
         });
 
         return new NotificationChannelEntity(channel);

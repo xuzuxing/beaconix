@@ -10,7 +10,7 @@ import {
     getSchemaPath,
 } from '@nestjs/swagger';
 import { SuperAdminGuard } from '../../../common/guards';
-import { QueryAuditLogsDto } from '../../audit-logs/dto';
+import { QueryAdminAuditLogsDto } from './dto/query-admin-audit-logs.dto';
 import { AuditLogEntity } from '../../audit-logs/entities';
 import { AdminAuditLogsService } from './admin-audit-logs.service';
 
@@ -47,7 +47,7 @@ export class AdminAuditLogsController {
     })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     @ApiForbiddenResponse({ description: 'Requires SUPER_ADMIN' })
-    async findAll(@Query() query: QueryAuditLogsDto) {
+    async findAll(@Query() query: QueryAdminAuditLogsDto) {
         return this.adminAuditLogsService.findAll(query);
     }
 }

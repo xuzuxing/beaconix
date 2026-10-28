@@ -105,6 +105,7 @@ function createService() {
     const systemProbeScheduler = { rebalance: jest.fn().mockResolvedValue({}) };
     const quotaService = {
         assertCanCreate: jest.fn().mockResolvedValue(undefined),
+        assertCanCreateInTransaction: jest.fn().mockResolvedValue(undefined),
         assertIntervalAllowed: jest.fn().mockResolvedValue(undefined),
         assertMonitorTypeAllowed: jest.fn().mockResolvedValue(undefined),
         assertProbesAssignable: jest.fn().mockResolvedValue(undefined),

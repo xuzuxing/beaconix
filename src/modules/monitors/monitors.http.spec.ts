@@ -41,6 +41,7 @@ describe('Monitor HTTP integration', () => {
     };
     const quota = {
         assertCanCreate: jest.fn(),
+        assertCanCreateInTransaction: jest.fn(),
         assertIntervalAllowed: jest.fn(),
         assertMonitorTypeAllowed: jest.fn(),
         assertProbesAssignable: jest.fn(),

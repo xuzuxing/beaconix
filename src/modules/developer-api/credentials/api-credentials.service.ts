@@ -46,14 +46,20 @@ export class ApiCredentialsService {
         createdById: string,
         dto: CreateApiKeyDto,
     ): Promise<ApiKeyEntity> {
-        await this.quotaService.assertCanCreate(orgId, 'apiKeys');
-
         if (dto.expiresAt && new Date(dto.expiresAt) <= new Date()) {
             throw new BadRequestException('expiresAt must be in the future');
         }
 
         const rawKey = generateToken(API_KEY_PREFIX);
         const record = await this.prisma.$transaction(async (tx) => {
+            // Count inside the write transaction so parallel creates cannot both
+            // pass the quota check.
+            await this.quotaService.assertCanCreateInTransaction(
+                orgId,
+                'apiKeys',
+                tx,
+            );
+
             const key = await tx.apiKey.create({
                 data: {
                     organizationId: orgId,

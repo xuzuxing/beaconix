@@ -2,6 +2,9 @@ import { createServer } from 'node:net';
 import type { Server, AddressInfo } from 'node:net';
 import { parseTcpTarget, TcpChecker } from './tcp.checker';
 
+// 本文件连接 loopback；本地检查器默认阻断私网目标，这里显式放行。
+process.env.MONITOR_ALLOW_PRIVATE_TARGETS = 'true';
+
 describe('parseTcpTarget', () => {
     it('parses host:port', () => {
         expect(parseTcpTarget('db.internal:5432')).toEqual({

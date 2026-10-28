@@ -19,8 +19,6 @@ import { OrgMemberGuard, RolesGuard } from '../../common/guards';
 @ApiTags('Audit Logs')
 @ApiBearerAuth('access-token')
 @Controller('organizations/:orgId/audit-logs')
-@UseGuards(RolesGuard)
-@Roles('ADMIN')
 @UseGuards(OrgMemberGuard, RolesGuard)
 @ApiExtraModels(AuditLogEntity)
 export class AuditLogsController {

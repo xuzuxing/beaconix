@@ -113,19 +113,48 @@ export class QuotaService {
         return { monitors, probes, members, channels, apiKeys };
     }
 
+    /**
+     * Count-based quota assertion without a surrounding transaction.
+     *
+     * Prefer `assertCanCreateInTransaction` from inside the write transaction:
+     * counting outside it lets N parallel creates all pass the same check.
+     */
     async assertCanCreate(
         organizationId: string,
         resource: QuotaResource,
     ): Promise<void> {
-        const plan = await this.getPlan(organizationId);
-        const usage = await this.getUsage(organizationId);
+        await this.prisma.$transaction((tx) =>
+            this.assertCanCreateInTransaction(organizationId, resource, tx),
+        );
+    }
+
+    /**
+     * Count-based quota assertion that holds the tenant lock.
+     *
+     * The `FOR UPDATE` on the organization row serialises concurrent creations
+     * for one tenant — the same technique member invitations already use — so the
+     * count and the insert cannot interleave.
+     */
+    async assertCanCreateInTransaction(
+        organizationId: string,
+        resource: QuotaResource,
+        tx: Prisma.TransactionClient,
+    ): Promise<void> {
+        await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
+
+        const plan =
+            (await this.effectivePlanService.getEffectivePlanInTransaction(
+                organizationId,
+                tx,
+            )) ?? FREE_FALLBACK;
+        const current = await this.countResource(tx, organizationId, resource);
         const limit = this.getLimit(plan, resource);
 
-        if (usage[resource] >= limit) {
+        if (current >= limit) {
             throw new ForbiddenException({
                 code: 'QUOTA_EXCEEDED',
                 resource,
-                current: usage[resource],
+                current,
                 limit,
                 message: `${RESOURCE_LABELS[resource]}已达上限（${limit}），请升级套餐`,
             });
@@ -290,6 +319,51 @@ export class QuotaService {
     }
 
     // -- Helpers ---------------------------------------------------------
+
+    /** Counts the live rows of one quota-managed resource for a tenant. */
+    private countResource(
+        db: Pick<
+            Prisma.TransactionClient,
+            | 'monitor'
+            | 'probe'
+            | 'membership'
+            | 'notificationChannel'
+            | 'apiKey'
+        >,
+        organizationId: string,
+        resource: QuotaResource,
+    ): Promise<number> {
+        if (resource === 'monitors') {
+            return db.monitor.count({
+                where: { organizationId, deletedAt: null },
+            });
+        }
+
+        if (resource === 'probes') {
+            return db.probe.count({
+                where: { organizationId, scope: ProbeScope.TENANT },
+            });
+        }
+
+        if (resource === 'members') {
+            return db.membership.count({ where: { organizationId } });
+        }
+
+        if (resource === 'apiKeys') {
+            return db.apiKey.count({
+                where: {
+                    organizationId,
+                    revokedAt: null,
+                    OR: [
+                        { expiresAt: null },
+                        { expiresAt: { gt: new Date() } },
+                    ],
+                },
+            });
+        }
+
+        return db.notificationChannel.count({ where: { organizationId } });
+    }
 
     private async getPlan(organizationId: string): Promise<QuotaPlan> {
         const plan =

@@ -23,10 +23,14 @@ function createService() {
             delete: jest.fn(),
         },
         notificationLog: { findMany: jest.fn(), count: jest.fn() },
+        $transaction: jest.fn(),
     };
+    // Creates now run inside a transaction (quota count + insert together).
+    prisma.$transaction.mockImplementation((callback) => callback(prisma));
 
     const quotaService = {
         assertCanCreate: jest.fn().mockResolvedValue(undefined),
+        assertCanCreateInTransaction: jest.fn().mockResolvedValue(undefined),
     };
 
     const service = new NotificationChannelsService(

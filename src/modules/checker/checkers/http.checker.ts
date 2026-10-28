@@ -14,6 +14,7 @@ import type { CheckerStrategy } from './checker.interface';
 import { validateHttpMonitorConfig } from '../../monitors/http-monitor-config';
 import { evaluateHttpAssertions } from './http-assertions';
 import { sanitizeMonitoringDiagnostic } from '../../../common/authorization/monitoring-projection';
+import { assertPublicHost } from './network-guard';
 
 export interface HttpCheckOptions {
     checkSsl?: boolean;
@@ -26,6 +27,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** How many leading characters of the response body to keep for rules. */
 const BODY_SNIPPET_LENGTH = 512;
 const BODY_BYTE_LIMIT = 2048;
+/** Redirect hops the guarded fetcher follows before giving up. */
+const MAX_REDIRECT_HOPS = 5;
+
+function isRedirectStatus(status: number): boolean {
+    return (
+        status === 301 ||
+        status === 302 ||
+        status === 303 ||
+        status === 307 ||
+        status === 308
+    );
+}
 const ASSERTION_ERRORS: Record<HttpAssertionFailure, string> = {
     KEYWORD: 'HTTP keyword assertion failed',
     JSON_VALUE: 'HTTP JSON field assertion failed',
@@ -130,15 +143,24 @@ export class HttpChecker implements CheckerStrategy {
         );
 
         try {
-            const response = await fetch(url, {
-                method: 'GET',
-                redirect: 'follow',
-                signal: controller.signal,
-                headers: {
-                    'user-agent': 'Beaconix-Monitor/1.0',
-                    accept: '*/*',
-                },
-            });
+            // Redirection is followed hop by hop so every hop is vetted: a
+            // public host answering 302 into the internal network must not turn
+            // the platform into an internal scanner.
+            const guarded = await this.fetchGuarded(
+                url,
+                controller.signal,
+                ensureDeadline,
+            );
+
+            if ('rejection' in guarded) {
+                return {
+                    ...this.failure(0, guarded.rejection),
+                    evaluated: false,
+                    failureKind: 'CONFIGURATION',
+                };
+            }
+
+            const response = guarded.response;
 
             headerLatency = Date.now() - startedAt;
             const latency = headerLatency;
@@ -318,6 +340,70 @@ export class HttpChecker implements CheckerStrategy {
         } finally {
             clearTimeout(timer);
             controller.abort();
+        }
+    }
+
+    /**
+     * Fetches `target`, refusing to connect to (or be redirected into) private
+     * and reserved addresses. Returns a rejection instead of a response when a
+     * hop is not allowed, so the caller can classify it as a configuration
+     * failure rather than a transport error.
+     */
+    private async fetchGuarded(
+        target: URL,
+        signal: AbortSignal,
+        ensureDeadline: () => void,
+    ): Promise<{ response: Response } | { rejection: string }> {
+        let current = target;
+
+        for (let hop = 0; ; hop += 1) {
+            const verdict = await assertPublicHost(current.hostname);
+
+            if (!verdict.ok) {
+                return {
+                    rejection: `Target "${current.hostname}" is not a public address (${verdict.reason})`,
+                };
+            }
+
+            ensureDeadline();
+
+            const response = await fetch(current, {
+                method: 'GET',
+                redirect: 'manual',
+                signal,
+                headers: {
+                    'user-agent': 'Beaconix-Monitor/1.0',
+                    accept: '*/*',
+                },
+            });
+
+            const location = isRedirectStatus(response.status)
+                ? response.headers.get('location')
+                : null;
+
+            if (!location) return { response };
+
+            if (hop >= MAX_REDIRECT_HOPS) {
+                return {
+                    rejection: `Too many redirects (more than ${MAX_REDIRECT_HOPS})`,
+                };
+            }
+
+            let next: URL;
+
+            try {
+                next = new URL(location, current);
+            } catch {
+                return { rejection: `Invalid redirect location "${location}"` };
+            }
+
+            if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+                return {
+                    rejection: `Redirect to unsupported protocol "${next.protocol}"`,
+                };
+            }
+
+            current = next;
         }
     }
 

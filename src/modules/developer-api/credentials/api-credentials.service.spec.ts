@@ -32,7 +32,10 @@ function createService() {
     const transaction = jest.fn((callback) => callback(prisma));
     Object.assign(prisma, { $transaction: transaction });
     const jwtService = { signAsync: jest.fn() };
-    const quotaService = { assertCanCreate: jest.fn() };
+    const quotaService = {
+        assertCanCreate: jest.fn(),
+        assertCanCreateInTransaction: jest.fn(),
+    };
     const notifications = {
         publish: jest.fn().mockResolvedValue(undefined),
         organizationRecipients: jest.fn().mockResolvedValue(['owner', 'admin']),
@@ -81,10 +84,9 @@ describe('ApiCredentialsService', () => {
                 scopes: ['monitors:read'],
             });
 
-            expect(quotaService.assertCanCreate).toHaveBeenCalledWith(
-                'org-1',
-                'apiKeys',
-            );
+            expect(
+                quotaService.assertCanCreateInTransaction,
+            ).toHaveBeenCalledWith('org-1', 'apiKeys', expect.anything());
             expect(result.key).toMatch(new RegExp(`^${API_KEY_PREFIX}`));
             expect(prisma.apiKey.create).toHaveBeenCalledTimes(1);
 

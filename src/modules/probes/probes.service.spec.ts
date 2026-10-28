@@ -133,6 +133,7 @@ function createService() {
     const billingService = {
         assertFeatureAllowed: jest.fn().mockResolvedValue(undefined),
         assertCanCreate: jest.fn().mockResolvedValue(undefined),
+        assertCanCreateInTransaction: jest.fn().mockResolvedValue(undefined),
         getProbeAssignmentLimit: jest.fn().mockResolvedValue(10),
     };
     const configService = {

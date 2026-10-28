@@ -4,6 +4,7 @@ import type { CheckResult } from './check-result';
 import { MonitorType } from '../../../generated/prisma/enums';
 import type { MonitorModel } from '../../../generated/prisma/models';
 import type { CheckerStrategy } from './checker.interface';
+import { assertPublicHost } from './network-guard';
 
 export interface TcpTarget {
     host: string;
@@ -45,6 +46,19 @@ export class TcpChecker implements CheckerStrategy {
                 success: false,
                 latency: 0,
                 error: `Invalid host:port target "${target}"`,
+                evaluated: false,
+                failureKind: 'CONFIGURATION',
+                checkedAt: new Date(),
+            };
+        }
+
+        const verdict = await assertPublicHost(parsed.host);
+
+        if (!verdict.ok) {
+            return {
+                success: false,
+                latency: 0,
+                error: `Target "${parsed.host}" is not a public address (${verdict.reason})`,
                 evaluated: false,
                 failureKind: 'CONFIGURATION',
                 checkedAt: new Date(),

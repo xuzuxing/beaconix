@@ -30,12 +30,31 @@ function createService() {
             count: jest.fn().mockResolvedValue(0),
             findUnique: jest.fn(),
             updateMany: jest.fn(),
+            update: jest.fn().mockResolvedValue({}),
         },
+        plan: { findUniqueOrThrow: jest.fn() },
+        subscription: {
+            findFirst: jest.fn().mockResolvedValue(null),
+            create: jest.fn(),
+            update: jest.fn(),
+        },
+        $queryRaw: jest.fn(),
+        $transaction: jest.fn(),
+    };
+    // 手工结算在一个事务里完成；测试里让 `prisma` 同时充当 `tx`。
+    prisma.$transaction.mockImplementation((callback) => callback(prisma));
+
+    const notifications = {
+        publish: jest.fn().mockResolvedValue(undefined),
+        organizationRecipients: jest.fn().mockResolvedValue(['owner']),
     };
 
-    const service = new AdminOrdersService(prisma as unknown as PrismaService);
+    const service = new AdminOrdersService(
+        prisma as unknown as PrismaService,
+        notifications as never,
+    );
 
-    return { service, prisma };
+    return { service, prisma, notifications };
 }
 
 describe('AdminOrdersService', () => {
@@ -131,13 +150,20 @@ describe('AdminOrdersService', () => {
         expect(cancelled.status).toBe('CANCELLED');
     });
 
-    it('marks a pending order as paid', async () => {
-        const { service, prisma } = createService();
+    it('marks a pending order as paid and settles the subscription', async () => {
+        const { service, prisma, notifications } = createService();
+        prisma.order.findUnique
+            .mockResolvedValueOnce(orderRow)
+            .mockResolvedValue({
+                ...orderRow,
+                status: 'PAID',
+                paidAt: new Date('2026-03-05T12:10:00.000Z'),
+            });
         prisma.order.updateMany.mockResolvedValue({ count: 1 });
-        prisma.order.findUnique.mockResolvedValue({
-            ...orderRow,
-            status: 'PAID',
-            paidAt: new Date('2026-03-05T12:10:00.000Z'),
+        prisma.plan.findUniqueOrThrow.mockResolvedValue({ sortOrder: 2 });
+        prisma.subscription.create.mockResolvedValue({
+            id: 'sub-1',
+            expiresAt: new Date('2026-04-04T12:00:00.000Z'),
         });
 
         const paid = await service.markPaid('order-1');
@@ -146,7 +172,31 @@ describe('AdminOrdersService', () => {
             where: { id: 'order-1', status: 'PENDING' },
             data: { status: 'PAID', paidAt: expect.any(Date) },
         });
+        // 收钱必须给到权益：订阅在同一事务里被激活。
+        expect(prisma.subscription.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                data: expect.objectContaining({
+                    organizationId: 'org-1',
+                    planId: 'plan-1',
+                }),
+            }),
+        );
+        expect(notifications.publish).toHaveBeenCalled();
         expect(paid.status).toBe('PAID');
+    });
+
+    it('refuses to mark an order that is no longer pending', async () => {
+        const { service, prisma } = createService();
+        prisma.order.findUnique.mockResolvedValue({
+            ...orderRow,
+            status: 'CANCELLED',
+        });
+        prisma.order.updateMany.mockResolvedValue({ count: 0 });
+
+        await expect(service.markPaid('order-1')).rejects.toThrow(
+            BadRequestException,
+        );
+        expect(prisma.subscription.create).not.toHaveBeenCalled();
     });
 
     it('refunds a paid order', async () => {

@@ -8,6 +8,8 @@ import type { Prisma } from '../../../generated/prisma/client';
 import { OrderStatus } from '../../../generated/prisma/enums';
 import { QueryAdminOrdersDto } from './dto';
 import { AdminOrderEntity } from './entities';
+import { NotificationsService } from '../../notifications/notifications.service';
+import { settlePaidOrder } from '../../billing/payment/payment-settlement';
 
 /** Relations flattened into every admin order row. */
 const orderInclude = {
@@ -20,7 +22,10 @@ type AdminOrderRow = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
 
 @Injectable()
 export class AdminOrdersService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly notifications: NotificationsService,
+    ) {}
 
     /**
      * Explicit cross-tenant order query for SUPER_ADMIN. Unlike the
@@ -98,18 +103,42 @@ export class AdminOrdersService {
     }
 
     /**
-     * PENDING -> PAID. Marks an order as settled outside the payment channel
-     * (manual/offline collection). Deliberately does not activate or renew a
-     * subscription — that stays with the payment callback.
+     * PENDING -> PAID for money collected outside the payment channel
+     * (manual/offline). Settles the subscription in the same transaction as the
+     * status change: collecting the money without granting the service used to
+     * leave the tenant paying for nothing, and nothing in the admin surface could
+     * repair it afterwards.
+     *
+     * The settlement is the same free function the channel callbacks use, so
+     * upgrade/renewal/queueing rules stay in one place. `paymentId` is only the
+     * notification idempotency key — no `Payment` row is written because there is
+     * no channel transaction to record.
      */
-    markPaid(id: string): Promise<AdminOrderEntity> {
-        return this.transition(
-            id,
-            OrderStatus.PENDING,
-            OrderStatus.PAID,
-            { paidAt: new Date() },
-            'mark as paid',
-        );
+    async markPaid(id: string): Promise<AdminOrderEntity> {
+        await this.prisma.$transaction(async (tx) => {
+            const order = await tx.order.findUnique({ where: { id } });
+
+            if (!order) throw new NotFoundException('Order not found');
+
+            const changed = await tx.order.updateMany({
+                where: { id, status: OrderStatus.PENDING },
+                data: { status: OrderStatus.PAID, paidAt: new Date() },
+            });
+
+            if (changed.count === 0) {
+                throw new BadRequestException(
+                    `Cannot mark as paid an order with status ${order.status}`,
+                );
+            }
+
+            await settlePaidOrder(tx, {
+                order,
+                paymentId: `manual:${order.id}`,
+                notifications: this.notifications,
+            });
+        });
+
+        return this.findOne(id);
     }
 
     /**
