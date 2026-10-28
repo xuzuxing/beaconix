@@ -25,8 +25,7 @@ WORKDIR /app
 # postinstall steps (prisma, bcrypt, esbuild) are skipped.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile \
+RUN pnpm install --frozen-lockfile \
         --registry=$NPM_REGISTRY \
         --network-concurrency=4 \
         --fetch-retries=5
@@ -82,11 +81,11 @@ COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 # Needed by some packages at runtime
 COPY package.json ./
 
-ARG APP_PORT=3000
-EXPOSE $APP_PORT
+ENV PORT=3000
+EXPOSE $PORT
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD wget -qO- http://localhost:$APP_PORT/api/health/live || exit 1
+    CMD wget -qO- http://localhost:${PORT}/api/health/live || exit 1
 
 # Run migrations first, then start the server
 # DATABASE_URL is injected by Render at container startup — not available at build time

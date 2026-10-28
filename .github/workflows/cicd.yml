@@ -134,7 +134,7 @@ jobs:
         run: |
           IMAGE_TAG="sha-${GITHUB_SHA::7}"
           FULL_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
-          sed -i "s|registry.xuzuxing.cn/beaconix/beaconix:latest|${FULL_IMAGE}|g" deployment.yaml
+          sed -i "s|registry.xuzuxing.cn/beaconix/beaconix-app:latest|${FULL_IMAGE}|g" deployment.yaml
           if ! grep -q "${FULL_IMAGE}" deployment.yaml; then
             echo "镜像替换失败，请检查 deployment.yaml 中的默认镜像地址"
             exit 1

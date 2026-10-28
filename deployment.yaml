@@ -119,7 +119,7 @@ metadata:
   namespace: beaconix
   labels:
     app.kubernetes.io/name: beaconix
-    app.kubernetes.io/component: api
+    app.kubernetes.io/component: app
 spec:
   accessModes:
     - ReadWriteOnce
@@ -135,7 +135,7 @@ metadata:
   namespace: beaconix
   labels:
     app.kubernetes.io/name: beaconix
-    app.kubernetes.io/component: api
+    app.kubernetes.io/component: app
     app.kubernetes.io/part-of: beaconix
 spec:
   # local-path 卷是 ReadWriteOnce，只能挂到单个节点，因此保持单副本。
@@ -150,12 +150,12 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: beaconix
-      app.kubernetes.io/component: api
+      app.kubernetes.io/component: app
   template:
     metadata:
       labels:
         app.kubernetes.io/name: beaconix
-        app.kubernetes.io/component: api
+        app.kubernetes.io/component: app
       annotations:
         # Prometheus 抓取（指标端点为 /api/metrics）。没有 Prometheus 时忽略即可。
         prometheus.io/scrape: "true"
@@ -171,9 +171,9 @@ spec:
       # 应用监听 SIGTERM 优雅退出（enableShutdownHooks），留出收尾时间
       terminationGracePeriodSeconds: 45
       containers:
-        - name: api
+        - name: app
           # 改成实际镜像地址，例如 ghcr.io/your-org/beaconix:1.0.0
-          image: registry.xuzuxing.cn/beaconix/beaconix:latest
+          image: registry.xuzuxing.cn/beaconix/beaconix-app:latest
           imagePullPolicy: IfNotPresent
           # 沿用镜像自带 CMD：prisma migrate deploy && node dist/src/main
           ports:
@@ -254,13 +254,13 @@ metadata:
   namespace: beaconix
   labels:
     app.kubernetes.io/name: beaconix
-    app.kubernetes.io/component: api
+    app.kubernetes.io/component: app
     app.kubernetes.io/part-of: beaconix
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: beaconix
-    app.kubernetes.io/component: api
+    app.kubernetes.io/component: app
   ports:
     - name: http
       port: 80
@@ -279,7 +279,7 @@ metadata:
   namespace: beaconix
   labels:
     app.kubernetes.io/name: beaconix
-    app.kubernetes.io/component: api
+    app.kubernetes.io/component: app
   annotations:
     # k3s 默认安装 Traefik；没装 Traefik 就删掉 ingressClassName，交给默认 controller
     traefik.ingress.kubernetes.io/router.entrypoints: web

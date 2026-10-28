@@ -939,7 +939,7 @@ Beacon implements multiple layers of security:
 | **HTTP Security** | Helmet middleware for security headers (CSP, HSTS, X-Frame-Options, etc.) |
 | **CORS** | Configurable origin allowlist |
 | **Rate Limiting** | Global throttle guard (default: 10 requests per 60 seconds), stricter limits on auth endpoints |
-| **Input Validation** | Whitelist-only DTO validation via `class-validator` with `forbidNonWhitelisted` |
+| **Input Validation** | Whitelist-only DTO validation via `class-validator`; unknown fields are stripped rather than rejected (`forbidNonWhitelisted: false`) |
 | **SQL Injection** | Prevented by Prisma's parameterized queries |
 | **XSS Prevention** | HTML escaping on all email template dynamic content |
 | **Soft Deletes** | Data recovery without permanent loss |
@@ -947,6 +947,7 @@ Beacon implements multiple layers of security:
 | **Sensitive Data** | Password, token, and refreshToken fields are redacted from audit log snapshots |
 | **Token Revocation** | Refresh tokens can be revoked on logout; all tokens revoked on password reset |
 | **Email Verification** | Required before login is allowed |
+| **Operational Metrics** | `GET /metrics` intentionally has no application-level auth (it sits behind LB → nginx, where `request.ip` is always the proxy). Block it at the network layer — LB / nginx allowlist, or do not expose the path publicly. It reveals route-level traffic, login outcomes and queue depth |
 
 ---
 

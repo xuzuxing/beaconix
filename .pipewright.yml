@@ -1,0 +1,82 @@
+version: 1
+stages:
+  - id: stg_src
+    name: 流水线源
+    kind: source
+    jobs:
+      - name: 代码源
+        type: git_source
+
+  - id: stg_test
+    name: 代码测试
+    kind: build
+    needs: [stg_src]
+    jobs:
+      - name: NestJS 测试
+        type: script
+        script:
+          image: node:22-alpine
+          commands:
+            - corepack enable
+            - pnpm install
+            - export DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/beaconix"
+            - pnpm prisma:generate
+            - pnpm run type-check
+            - pnpm format:check
+            - pnpm test
+
+  - id: stg_build_push
+    name: 镜像构建与推送
+    kind: build
+    needs: [stg_test]
+    jobs:
+      - id: job_build_image
+        name: 构建镜像
+        type: build_image
+        config:
+          buildModel: dockerfile
+          dockerfilePath: Dockerfile
+          context: .
+          artifactType: image
+      - id: job_push_image
+        name: 推送镜像
+        type: push_image
+        config:
+          registry: registry.xuzuxing.cn/beaconix
+          imageName: beaconix-app
+          tag: '${COMMIT_SHA}'
+
+  - id: stg_deploy
+    name: 应用部署
+    kind: deploy
+    needs: [stg_build_push]
+    jobs:
+      - name: 更新应用镜像
+        type: script
+        script:
+          image: alpine/k8s:1.35.8
+          env:
+            KUBE_CONFIG: ${KUBE_CONFIG}
+          commands:
+            - mkdir -p /root/.kube
+            - echo "$KUBE_CONFIG" > /root/.kube/config
+            - chmod 600 /root/.kube/config
+            - kubectl set image deployment/beaconix-app app=registry.xuzuxing.cn/beaconix/beaconix-app:${COMMIT_SHA} -n beaconix
+            - kubectl rollout status deployment/beaconix-app -n beaconix --timeout=600s
+
+  - id: stg_check
+    name: 通知
+    kind: notify
+    needs: [stg_deploy]
+    jobs:
+      - name: 健康门控
+        type: health_check
+        config:
+          expectStatus: '200'
+          intervalSeconds: '30'
+          retries: '5'
+          url: http://127.0.0.1:3000/
+      - name: 通知
+        type: notify
+        config:
+          channel: f448eace-cd6f-4455-9d68-ac9239b867d7
