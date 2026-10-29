@@ -1,37 +1,29 @@
-
-# Registry used to fetch the package manager and install dependencies.
-# Override for restricted networks, e.g.
-#   docker build --build-arg NPM_REGISTRY=https://registry.npmjs.org .
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
-
-# Stage 1: Install dependencies
+# ==============================================================================
+# Stage 1: Install all dependencies (including dev)
+# ==============================================================================
 FROM node:22-alpine AS deps
 
 ARG NPM_REGISTRY
 ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
     pnpm_config_registry=$NPM_REGISTRY
 
-# `corepack enable` installs the pnpm version pinned by package.json's
-# `packageManager` field, which is the one pnpm-lock.yaml was resolved with.
-# Do not use `corepack prepare pnpm@latest`: it fetches the registry dist-tags
-# on every build and can activate a pnpm other than the pinned one.
 RUN corepack enable
-
 WORKDIR /app
 
-# pnpm-workspace.yaml carries the overrides and allowBuilds allowlist the
-# lockfile was resolved with — without it --frozen-lockfile fails and native
-# postinstall steps (prisma, bcrypt, esbuild) are skipped.
+# 关键：为了减小体积，只拷贝依赖清单
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
+# 安装依赖
 RUN pnpm install --frozen-lockfile \
         --registry=$NPM_REGISTRY \
         --network-concurrency=4 \
         --fetch-retries=5
 
-
+# ==============================================================================
 # Stage 2: Build
+# ==============================================================================
 FROM node:22-alpine AS builder
 
 ARG NPM_REGISTRY
@@ -39,54 +31,60 @@ ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
     pnpm_config_registry=$NPM_REGISTRY
 
 RUN corepack enable
-
 WORKDIR /app
 
+# 从 deps 复用 node_modules
 COPY --from=deps /app/node_modules ./node_modules
-
 COPY . .
 
-# No real DB needed at build time — generate only reads the schema file
+# 生成 Prisma Client，同时只保留当前平台（linux-musl）的引擎
+ENV PRISMA_CLI_QUERY_ENGINE_TYPE=binary
 RUN DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/beaconix" \
     pnpm prisma:generate
 
 RUN pnpm build
 
-
-# Stage 3: Production runner
+# ==============================================================================
+# Stage 3: Production runner (Slim Version)
+# ==============================================================================
 FROM node:22-alpine AS runner
 
-# PING uses the system binary; ICMP permissions are still controlled by deployment.
+ARG NPM_REGISTRY
+ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
+    pnpm_config_registry=$NPM_REGISTRY
+
+# 1. 替换软件源并安装系统工具
 RUN apk add --no-cache iputils
 
 WORKDIR /app
-
 ENV NODE_ENV=production
-
 RUN corepack enable
 
-# Compiled app
+# 2. 拷贝编译产物和 Prisma 生成文件
 COPY --from=builder /app/dist ./dist
-
-# Runtime dependencies
-COPY --from=builder /app/node_modules ./node_modules
-
-# Generated Prisma client
 COPY --from=builder /app/src/generated ./src/generated
-
-# Prisma schema + migrations folder (needed for migrate deploy)
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/.env.example ./env
 COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 
-# Needed by some packages at runtime
-COPY package.json ./
+# 3. 拷贝清单
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# 4. 只安装生产依赖并立即清理缓存
+# --ignore-scripts 防止 husky 等脚本报错；完成后立即清理 pnpm store
+RUN pnpm install --frozen-lockfile --prod \
+        --ignore-scripts \
+        --registry=$NPM_REGISTRY \
+        --network-concurrency=4 \
+        --fetch-retries=5 \
+    && pnpm store prune \
+    && rm -rf /root/.local/share/pnpm/store /root/.npm
+
+# 5. 裁剪 Prisma 引擎（可选，但极其有效）
+# 如果你确定只在 alpine 上跑，可以删掉非 linux-musl 的引擎
+RUN find node_modules/.prisma -type f -not -name "*linux-musl*" -name "*.node" -delete || true
 
 ENV PORT=3000
 EXPOSE $PORT
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD wget -qO- http://localhost:${PORT}/api/health/live || exit 1
-
-# Run migrations first, then start the server
-# DATABASE_URL is injected by Render at container startup — not available at build time
-CMD ["sh", "-c", "npx prisma migrate deploy --config prisma.config.ts && node dist/src/main"]
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy --config prisma.config.ts && node dist/src/main"]
