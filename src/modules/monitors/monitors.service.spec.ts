@@ -8,6 +8,8 @@ import { MonitorsService } from './monitors.service';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import { MonitorSecretsService } from './monitor-secrets.service';
 import { ConfigService } from '@nestjs/config';
+import { QuotaService } from '../../shared/quota/quota.service';
+import type { EffectivePlanService } from '../../shared/subscription/effective-plan.service';
 
 const monitorRow = {
     id: 'monitor-1',
@@ -127,6 +129,7 @@ function createService() {
             .mockResolvedValue({ skipped: false, sent: 1, failed: 0 }),
     };
 
+    const access = mockProjectAccess(prisma);
     const service = new MonitorsService(
         prisma as unknown as PrismaService,
         systemProbeScheduler as never,
@@ -137,7 +140,7 @@ function createService() {
                 monitor: { secretKey: Buffer.alloc(32, 7).toString('base64') },
             }),
         ),
-        mockProjectAccess(prisma),
+        access,
     );
 
     return {
@@ -146,6 +149,7 @@ function createService() {
         systemProbeScheduler,
         quotaService,
         notifierService,
+        access,
     };
 }
 
@@ -284,6 +288,128 @@ describe('MonitorsService', () => {
         });
     });
     describe('create', () => {
+        it.each([
+            {
+                interval: 60,
+                types: ['HTTP'],
+                probes: [],
+                code: 'INTERVAL_TOO_SHORT',
+            },
+            {
+                interval: 300,
+                types: ['TCP'],
+                probes: [],
+                code: 'MONITOR_TYPE_NOT_ALLOWED',
+            },
+            {
+                interval: 300,
+                types: ['HTTP'],
+                probes: ['probe-1'],
+                code: 'QUOTA_EXCEEDED',
+            },
+            { interval: 300, types: ['HTTP'], probes: [], code: null },
+        ])(
+            'uses the locked plan for all creation policies: $code',
+            async ({ interval, types, probes, code }) => {
+                const {
+                    service,
+                    prisma,
+                    quotaService,
+                    access,
+                    systemProbeScheduler,
+                } = createService();
+                const tx = {
+                    $queryRaw: jest.fn().mockResolvedValue([]),
+                    monitor: {
+                        count: jest.fn().mockResolvedValue(0),
+                        create: jest
+                            .fn()
+                            .mockResolvedValue({ ...monitorRow, interval }),
+                    },
+                    probe: {
+                        count: jest.fn().mockResolvedValue(probes.length),
+                    },
+                };
+                prisma.probe.count.mockResolvedValue(probes.length);
+                const effectivePlan = {
+                    getEffectivePlan: jest
+                        .fn()
+                        .mockRejectedValue(
+                            new Error('escaped write transaction'),
+                        ),
+                    getEffectivePlanInTransaction: jest
+                        .fn()
+                        .mockImplementation(() => {
+                            expect(tx.$queryRaw).toHaveBeenCalled();
+                            return Promise.resolve({
+                                maxMonitors: 5,
+                                minInterval: 300,
+                                allowedMonitorTypes: types,
+                                maxProbes: 0,
+                                maxProbesPerMonitor: 0,
+                            });
+                        }),
+                };
+                const quota = new QuotaService(
+                    prisma as unknown as PrismaService,
+                    effectivePlan as unknown as EffectivePlanService,
+                );
+                quotaService.assertCanCreateInTransaction.mockImplementation(
+                    quota.assertCanCreateInTransaction.bind(quota),
+                );
+                quotaService.assertIntervalAllowed.mockImplementation(
+                    quota.assertIntervalAllowed.bind(quota),
+                );
+                quotaService.assertMonitorTypeAllowed.mockImplementation(
+                    quota.assertMonitorTypeAllowed.bind(quota),
+                );
+                quotaService.assertProbesAssignable.mockImplementation(
+                    quota.assertProbesAssignable.bind(quota),
+                );
+                jest.spyOn(access, 'withProject').mockImplementation(
+                    (_principal, _projectId, _action, work) =>
+                        work(tx as never, {} as never),
+                );
+
+                const result = service.create(
+                    'project-1',
+                    {
+                        name: 'API',
+                        type: 'HTTP',
+                        target: monitorRow.target,
+                        interval,
+                        probeIds: probes,
+                    },
+                    { type: 'USER', userId: 'user-1' },
+                );
+                if (code) {
+                    await expect(result).rejects.toMatchObject({
+                        response: { code },
+                    });
+                    expect(tx.monitor.create).not.toHaveBeenCalled();
+                    expect(
+                        systemProbeScheduler.rebalance,
+                    ).not.toHaveBeenCalled();
+                } else {
+                    await expect(result).resolves.toMatchObject({
+                        id: monitorRow.id,
+                    });
+                    expect(tx.monitor.create).toHaveBeenCalledTimes(1);
+                    expect(
+                        systemProbeScheduler.rebalance,
+                    ).toHaveBeenCalledTimes(1);
+                }
+                expect(
+                    effectivePlan.getEffectivePlanInTransaction,
+                ).toHaveBeenCalledTimes(1);
+                expect(
+                    effectivePlan.getEffectivePlanInTransaction,
+                ).toHaveBeenCalledWith('org-1', tx);
+                expect(effectivePlan.getEffectivePlan).not.toHaveBeenCalled();
+                expect(prisma.monitor.create).not.toHaveBeenCalled();
+            },
+        );
+
         it('creates the companion state row and flattens it into the response', async () => {
             const { service, prisma, systemProbeScheduler } = createService();
             prisma.monitor.create.mockResolvedValue({
@@ -956,7 +1082,96 @@ describe('MonitorsService', () => {
     });
 
     describe('restore', () => {
-        it('rechecks quota, type and interval when restoring', async () => {
+        it('clears an old capacity marker when restoring into an available slot', async () => {
+            const { service, prisma } = createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                deletedAt: new Date(),
+                quotaGraceEndsAt: new Date(0),
+            });
+            prisma.monitor.update.mockResolvedValue({
+                ...monitorRow,
+                quotaGraceEndsAt: null,
+            });
+            await service.restore('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+            expect(prisma.monitor.update).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        quotaGraceEndsAt: null,
+                        configRevision: { increment: 1 },
+                    }),
+                }),
+            );
+        });
+        it('only restores one monitor into the last slot across serialized tenant transactions', async () => {
+            const { service, prisma, quotaService, access } = createService();
+            let active = 0;
+            const tx = {
+                $queryRaw: jest.fn().mockResolvedValue([]),
+                monitor: {
+                    count: jest.fn(() => Promise.resolve(active)),
+                    update: jest.fn(() => {
+                        active += 1;
+                        return Promise.resolve(monitorRow);
+                    }),
+                },
+            };
+            const quota = new QuotaService(
+                prisma as unknown as PrismaService,
+                {
+                    getEffectivePlanInTransaction: jest
+                        .fn()
+                        .mockResolvedValue({ maxMonitors: 1 }),
+                } as unknown as EffectivePlanService,
+            );
+            quotaService.assertCanCreateInTransaction.mockImplementation(
+                (orgId, resource, db) =>
+                    quota.assertCanCreateInTransaction(orgId, resource, db),
+            );
+            // Model the org lock held by withProject until work finishes; the
+            // real quota service must count and restore under this same lease.
+            let previous = Promise.resolve();
+            jest.spyOn(access, 'withProject').mockImplementation(
+                (_principal, _project, _action, work) => {
+                    const run = previous.then(() =>
+                        work(tx as never, {} as never),
+                    );
+                    previous = run.then(
+                        () => undefined,
+                        () => undefined,
+                    );
+                    return run;
+                },
+            );
+            prisma.monitor.findFirst.mockImplementation(({ where }) =>
+                Promise.resolve({
+                    ...monitorRow,
+                    id: where.id,
+                    deletedAt: new Date(),
+                }),
+            );
+            const principal = { type: 'USER' as const, userId: 'user-1' };
+            const results = await Promise.allSettled([
+                service.restore('project-1', 'monitor-1', principal),
+                service.restore('project-1', 'monitor-2', principal),
+            ]);
+            expect(
+                results.filter((result) => result.status === 'fulfilled'),
+            ).toHaveLength(1);
+            expect(
+                results.find((result) => result.status === 'rejected'),
+            ).toMatchObject({
+                reason: { response: { code: 'QUOTA_EXCEEDED' } },
+            });
+            expect(active).toBe(1);
+            expect(tx.monitor.update).toHaveBeenCalledTimes(1);
+            expect(prisma.monitor.update).not.toHaveBeenCalled();
+            expect(quotaService.assertCanCreate).not.toHaveBeenCalled();
+        });
+        it('rechecks quota, type and interval in the restore transaction', async () => {
             const { service, prisma, quotaService } = createService();
             prisma.monitor.findFirst.mockResolvedValue({
                 ...monitorRow,
@@ -967,18 +1182,41 @@ describe('MonitorsService', () => {
                 type: 'USER',
                 userId: 'user-1',
             });
-            expect(quotaService.assertCanCreate).toHaveBeenCalledWith(
-                'org-1',
-                'monitors',
-            );
+            expect(quotaService.assertCanCreate).not.toHaveBeenCalled();
+            expect(
+                quotaService.assertCanCreateInTransaction,
+            ).toHaveBeenCalledWith('org-1', 'monitors', prisma);
             expect(quotaService.assertMonitorTypeAllowed).toHaveBeenCalledWith(
                 'org-1',
                 'HTTP',
+                prisma,
+                undefined,
             );
             expect(quotaService.assertIntervalAllowed).toHaveBeenCalledWith(
                 'org-1',
                 60,
+                prisma,
+                undefined,
             );
+        });
+        it('does not restore or rebalance when the transactional quota check rejects', async () => {
+            const { service, prisma, quotaService, systemProbeScheduler } =
+                createService();
+            prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                deletedAt: new Date(),
+            });
+            quotaService.assertCanCreateInTransaction.mockRejectedValueOnce(
+                new ForbiddenException({ code: 'QUOTA_EXCEEDED' }),
+            );
+            await expect(
+                service.restore('project-1', 'monitor-1', {
+                    type: 'USER',
+                    userId: 'user-1',
+                }),
+            ).rejects.toMatchObject({ response: { code: 'QUOTA_EXCEEDED' } });
+            expect(prisma.monitor.update).not.toHaveBeenCalled();
+            expect(systemProbeScheduler.rebalance).not.toHaveBeenCalled();
         });
         it('rejects restoring a monitor that is not deleted', async () => {
             const { service, prisma } = createService();

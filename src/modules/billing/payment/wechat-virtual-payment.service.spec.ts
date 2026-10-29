@@ -222,6 +222,9 @@ function createHarness(options?: {
         miniprogramClient as unknown as MiniprogramClient,
         runtimeConfig as unknown as WechatRuntimeConfigService,
         refunds as unknown as RefundService,
+        {
+            getEffectivePlanInTransaction: jest.fn().mockResolvedValue(null),
+        } as never,
     );
 
     return {

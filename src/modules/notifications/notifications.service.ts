@@ -163,6 +163,12 @@ export class NotificationsService {
                             to: user.email,
                             title: recipient.title ?? event.title,
                             body: recipient.body ?? event.body ?? event.title,
+                            ...(event.actionUrl
+                                ? {
+                                      actionUrl: event.actionUrl,
+                                      actionLabel: event.actionLabel,
+                                  }
+                                : {}),
                         },
                         `${key}:email`,
                         db,
@@ -522,6 +528,12 @@ export class NotificationsService {
         event: NotificationEvent,
         db: NotificationDb,
     ): Promise<Omit<NotificationAudience, 'userId'>> {
+        const meta =
+            event.meta &&
+            typeof event.meta === 'object' &&
+            !Array.isArray(event.meta)
+                ? (event.meta as Prisma.InputJsonObject)
+                : {};
         if (
             event.accessScope === 'ACCOUNT' ||
             event.type === 'ORGANIZATION_DELETED'
@@ -532,6 +544,28 @@ export class NotificationsService {
             return {
                 accessScope: 'ORGANIZATION',
                 organizationId: event.organizationId,
+                ...(event.resourceType === 'MonitorCapacityCycle' &&
+                event.resourceId
+                    ? {
+                          monitorCapacityCycleId: event.resourceId,
+                          monitorCapacityStage: event.type,
+                          ...(typeof meta.capacityStateKey === 'string'
+                              ? {
+                                    monitorCapacityStateKey:
+                                        meta.capacityStateKey,
+                                }
+                              : {}),
+                          ...(Array.isArray(meta.releasedMonitorIds)
+                              ? {
+                                    monitorCapacityReleasedIds:
+                                        meta.releasedMonitorIds as string[],
+                                }
+                              : {}),
+                          ...(typeof meta.deadline === 'string'
+                              ? { monitorCapacityDeadline: meta.deadline }
+                              : {}),
+                      }
+                    : {}),
                 ...(ADMIN_NOTIFICATION_TYPES.includes(event.type)
                     ? { organizationRoles: ADMIN_ROLES }
                     : {}),

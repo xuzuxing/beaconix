@@ -42,7 +42,7 @@ type QuotaPlan = Pick<PlanModel, keyof typeof FREE_FALLBACK>;
 export type MonitorPolicy = Pick<
     PlanModel,
     'allowedMonitorTypes' | 'minInterval' | 'maxProbes' | 'maxProbesPerMonitor'
->;
+> & { capacityRestrictedIds?: string[] };
 
 /**
  * How many tenant probes one monitor may bind: the organization probe
@@ -123,9 +123,13 @@ export class QuotaService {
         organizationId: string,
         resource: QuotaResource,
     ): Promise<void> {
-        await this.prisma.$transaction((tx) =>
-            this.assertCanCreateInTransaction(organizationId, resource, tx),
-        );
+        await this.prisma.$transaction(async (tx) => {
+            await this.assertCanCreateInTransaction(
+                organizationId,
+                resource,
+                tx,
+            );
+        });
     }
 
     /**
@@ -139,7 +143,7 @@ export class QuotaService {
         organizationId: string,
         resource: QuotaResource,
         tx: Prisma.TransactionClient,
-    ): Promise<void> {
+    ): Promise<QuotaPlan> {
         await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
 
         const plan =
@@ -147,6 +151,16 @@ export class QuotaService {
                 organizationId,
                 tx,
             )) ?? FREE_FALLBACK;
+        if (resource === 'probes') {
+            // Preserve the feature error for plans with no tenant probes,
+            // including FREE, whose numeric allowance is also zero.
+            await this.assertFeatureAllowed(
+                organizationId,
+                'tenantProbe',
+                tx,
+                plan,
+            );
+        }
         const current = await this.countResource(tx, organizationId, resource);
         const limit = this.getLimit(plan, resource);
 
@@ -159,13 +173,17 @@ export class QuotaService {
                 message: `${RESOURCE_LABELS[resource]}已达上限（${limit}），请升级套餐`,
             });
         }
+        // Reuse this locked plan for the remaining policy checks before writing.
+        return plan;
     }
 
     async assertIntervalAllowed(
         organizationId: string,
         interval: number,
+        tx?: Prisma.TransactionClient,
+        lockedPlan?: QuotaPlan,
     ): Promise<void> {
-        const plan = await this.getPlan(organizationId);
+        const plan = lockedPlan ?? (await this.getPlan(organizationId, tx));
 
         if (interval < plan.minInterval) {
             throw new ForbiddenException({
@@ -179,8 +197,10 @@ export class QuotaService {
     async assertMonitorTypeAllowed(
         organizationId: string,
         type: MonitorType,
+        tx?: Prisma.TransactionClient,
+        lockedPlan?: QuotaPlan,
     ): Promise<void> {
-        const plan = await this.getPlan(organizationId);
+        const plan = lockedPlan ?? (await this.getPlan(organizationId, tx));
         if (!plan.allowedMonitorTypes.includes(type)) {
             throw new ForbiddenException({
                 code: 'MONITOR_TYPE_NOT_ALLOWED',
@@ -195,23 +215,36 @@ export class QuotaService {
         type: MonitorType,
         interval: number,
         policy?: MonitorPolicy,
+        monitorId?: string,
     ): Promise<{ eligible: boolean; reason: string | null }> {
-        const plan = policy ?? (await this.getPlan(organizationId));
-        const reason = !plan.allowedMonitorTypes.includes(type)
-            ? 'MONITOR_TYPE_NOT_ALLOWED'
-            : interval < plan.minInterval
-              ? 'INTERVAL_TOO_SHORT'
-              : null;
+        const plan = policy ?? (await this.getMonitorPolicy(organizationId));
+        const reason =
+            monitorId && plan.capacityRestrictedIds?.includes(monitorId)
+                ? 'MONITOR_QUOTA_EXCEEDED'
+                : !plan.allowedMonitorTypes.includes(type)
+                  ? 'MONITOR_TYPE_NOT_ALLOWED'
+                  : interval < plan.minInterval
+                    ? 'INTERVAL_TOO_SHORT'
+                    : null;
         return { eligible: reason === null, reason };
     }
 
     async getMonitorPolicy(organizationId: string): Promise<MonitorPolicy> {
         const plan = await this.getPlan(organizationId);
+        const restricted = await this.prisma.monitor.findMany({
+            where: {
+                organizationId,
+                deletedAt: null,
+                quotaGraceEndsAt: { lte: new Date() },
+            },
+            select: { id: true },
+        });
         return {
             allowedMonitorTypes: plan.allowedMonitorTypes,
             minInterval: plan.minInterval,
             maxProbes: plan.maxProbes,
             maxProbesPerMonitor: plan.maxProbesPerMonitor,
+            capacityRestrictedIds: restricted.map(({ id }) => id),
         };
     }
 
@@ -252,8 +285,10 @@ export class QuotaService {
     async assertFeatureAllowed(
         organizationId: string,
         feature: QuotaFeature,
+        tx?: Prisma.TransactionClient,
+        lockedPlan?: QuotaPlan,
     ): Promise<void> {
-        const plan = await this.getPlan(organizationId);
+        const plan = lockedPlan ?? (await this.getPlan(organizationId, tx));
         const allowed =
             feature === 'tenantProbe'
                 ? plan.allowTenantProbe
@@ -365,9 +400,16 @@ export class QuotaService {
         return db.notificationChannel.count({ where: { organizationId } });
     }
 
-    private async getPlan(organizationId: string): Promise<QuotaPlan> {
-        const plan =
-            await this.effectivePlanService.getEffectivePlan(organizationId);
+    private async getPlan(
+        organizationId: string,
+        tx?: Prisma.TransactionClient,
+    ): Promise<QuotaPlan> {
+        const plan = tx
+            ? await this.effectivePlanService.getEffectivePlanInTransaction(
+                  organizationId,
+                  tx,
+              )
+            : await this.effectivePlanService.getEffectivePlan(organizationId);
 
         if (!plan) {
             return FREE_FALLBACK;

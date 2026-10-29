@@ -22,7 +22,10 @@ const freePlan = {
 
 function createService() {
     const prisma = {
-        monitor: { count: jest.fn() },
+        monitor: {
+            count: jest.fn(),
+            findMany: jest.fn().mockResolvedValue([]),
+        },
         probe: { count: jest.fn() },
         membership: { count: jest.fn() },
         notificationChannel: { count: jest.fn() },
@@ -47,6 +50,82 @@ function createService() {
 }
 
 describe('QuotaService', () => {
+    it('returns the same plan after locking and counting only through the write transaction', async () => {
+        const { service, prisma, effectivePlanService } = createService();
+        const tx = {
+            $queryRaw: jest.fn().mockResolvedValue([]),
+            monitor: { count: jest.fn().mockResolvedValue(4) },
+        };
+        await expect(
+            service.assertCanCreateInTransaction(
+                'org-1',
+                'monitors',
+                tx as never,
+            ),
+        ).resolves.toBe(freePlan);
+        expect(tx.monitor.count).toHaveBeenCalledWith({
+            where: { organizationId: 'org-1', deletedAt: null },
+        });
+        expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+            effectivePlanService.getEffectivePlanInTransaction.mock
+                .invocationCallOrder[0],
+        );
+        expect(
+            effectivePlanService.getEffectivePlanInTransaction.mock
+                .invocationCallOrder[0],
+        ).toBeLessThan(tx.monitor.count.mock.invocationCallOrder[0]);
+        expect(prisma.monitor.count).not.toHaveBeenCalled();
+        expect(effectivePlanService.getEffectivePlan).not.toHaveBeenCalled();
+    });
+
+    it('keeps the tenant-probe feature error when no plan exists', async () => {
+        const { service, prisma, effectivePlanService } = createService();
+        effectivePlanService.getEffectivePlanInTransaction.mockResolvedValue(
+            null,
+        );
+        await expect(
+            service.assertCanCreateInTransaction(
+                'org-1',
+                'probes',
+                prisma as never,
+            ),
+        ).rejects.toMatchObject({
+            response: { code: 'FEATURE_NOT_AVAILABLE', feature: 'tenantProbe' },
+        });
+        expect(prisma.probe.count).not.toHaveBeenCalled();
+        expect(effectivePlanService.getEffectivePlan).not.toHaveBeenCalled();
+    });
+
+    it('reads feature permissions through the supplied transaction', async () => {
+        const { service, effectivePlanService } = createService();
+        const tx = {} as never;
+        effectivePlanService.getEffectivePlan.mockResolvedValue({
+            ...freePlan,
+            allowTenantProbe: true,
+        });
+        await expect(
+            service.assertFeatureAllowed('org-1', 'tenantProbe', tx),
+        ).rejects.toMatchObject({
+            response: { code: 'FEATURE_NOT_AVAILABLE' },
+        });
+        expect(
+            effectivePlanService.getEffectivePlanInTransaction,
+        ).toHaveBeenCalledWith('org-1', tx);
+        expect(effectivePlanService.getEffectivePlan).not.toHaveBeenCalled();
+    });
+
+    it('reads restore type and interval limits using the supplied transaction', async () => {
+        const { service, effectivePlanService } = createService();
+        const tx = {} as never;
+        await service.assertMonitorTypeAllowed('org-1', 'HTTP', tx);
+        await expect(
+            service.assertIntervalAllowed('org-1', 60, tx),
+        ).rejects.toMatchObject({ response: { code: 'INTERVAL_TOO_SHORT' } });
+        expect(
+            effectivePlanService.getEffectivePlanInTransaction,
+        ).toHaveBeenCalledWith('org-1', tx);
+        expect(effectivePlanService.getEffectivePlan).not.toHaveBeenCalled();
+    });
     it('checks member limits with the supplied transaction only', async () => {
         const { service, prisma, effectivePlanService } = createService();
         const tx = { membership: { count: jest.fn().mockResolvedValue(2) } };

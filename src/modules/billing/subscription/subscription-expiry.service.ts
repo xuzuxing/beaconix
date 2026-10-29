@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { toIsoString } from '../../../common/utils/date.util';
 import { PrismaService } from '../../../infra/database/prisma.service';
@@ -12,6 +13,7 @@ import {
 } from '../../../generated/prisma/enums';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { ADMIN_ROLES } from '../../notifications/notification-event';
+import { EffectivePlanService } from '../../../shared/subscription/effective-plan.service';
 
 @Injectable()
 export class SubscriptionExpiryService implements OnModuleInit {
@@ -21,6 +23,8 @@ export class SubscriptionExpiryService implements OnModuleInit {
         private readonly prisma: PrismaService,
         private readonly registry: ScheduledJobRegistry,
         private readonly notifications: NotificationsService,
+        private readonly plans: EffectivePlanService,
+        private readonly config: ConfigService,
     ) {}
 
     onModuleInit(): void {
@@ -30,6 +34,53 @@ export class SubscriptionExpiryService implements OnModuleInit {
                 SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.subscriptionExpirySweep],
             handler: () => this.expireSubscriptions(),
         });
+        this.registry.register({
+            name: SCHEDULED_JOBS.monitorCapacitySweep,
+            pattern:
+                SCHEDULED_JOB_PATTERNS[SCHEDULED_JOBS.monitorCapacitySweep],
+            handler: () => this.reconcileCapacity(),
+        });
+    }
+
+    async reconcileCapacity(): Promise<void> {
+        const organizations = await this.prisma.organization.findMany({
+            where: {
+                deletedAt: null,
+                OR: [
+                    {
+                        monitorCapacityCycles: {
+                            some: { status: { in: ['GRACE', 'LIMITED'] } },
+                        },
+                    },
+                    {
+                        subscriptions: {
+                            some: {
+                                status: { in: ['ACTIVE', 'EXPIRED'] },
+                                expiresAt: { lte: new Date() },
+                            },
+                        },
+                    },
+                ],
+            },
+            select: { id: true },
+        });
+        const failures: unknown[] = [];
+        for (const { id } of organizations) {
+            try {
+                await this.plans.getEffectivePlan(id);
+            } catch (error) {
+                this.logger.error(
+                    `Monitor capacity reconciliation failed for organization ${id}`,
+                    error,
+                );
+                failures.push(error);
+            }
+        }
+        if (failures.length)
+            throw new AggregateError(
+                failures,
+                'Monitor capacity reconciliation failed',
+            );
     }
 
     async expireSubscriptions(): Promise<number> {
@@ -48,6 +99,11 @@ export class SubscriptionExpiryService implements OnModuleInit {
         for (const { organizationId } of candidates) {
             expired += await this.prisma.$transaction(async (tx) => {
                 await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
+                const effectivePlan =
+                    await this.plans.getEffectivePlanInTransaction(
+                        organizationId,
+                        tx,
+                    );
                 const subscriptions = await tx.subscription.findMany({
                     where: {
                         organizationId,
@@ -64,11 +120,7 @@ export class SubscriptionExpiryService implements OnModuleInit {
                     ],
                 });
                 const beforePlan = subscriptions[0]?.plan;
-                const afterPlan =
-                    subscriptions.find(
-                        (subscription) => subscription.expiresAt > now,
-                    )?.plan ??
-                    (await tx.plan.findUnique({ where: { code: 'FREE' } }));
+                const afterPlan = effectivePlan;
                 const admins = await this.notifications.organizationRecipients(
                     organizationId,
                     tx,
@@ -94,6 +146,18 @@ export class SubscriptionExpiryService implements OnModuleInit {
                         });
                         if (updated.count === 0) continue;
                         count += updated.count;
+                        // Capacity reconciliation already records the relevant
+                        // grace/limited email in this transaction. Do not send
+                        // a second generic expiry email for the same downgrade.
+                        const capacityCycle =
+                            await tx.monitorCapacityCycle.findFirst({
+                                where: {
+                                    organizationId,
+                                    sourceSubscriptionId: subscription.id,
+                                },
+                                orderBy: { createdAt: 'desc' },
+                            });
+                        if (capacityCycle) continue;
                         const effectivePlanChanged =
                             beforePlan?.id !== afterPlan?.id &&
                             subscription.planId === beforePlan?.id;
@@ -134,13 +198,57 @@ export class SubscriptionExpiryService implements OnModuleInit {
                                 ? 7
                                 : null;
                     if (days === null) continue;
+                    const nextSubscription = await tx.subscription.findFirst({
+                        where: {
+                            organizationId,
+                            OR: [
+                                {
+                                    status: 'ACTIVE',
+                                    startsAt: { lte: subscription.expiresAt },
+                                    expiresAt: { gt: subscription.expiresAt },
+                                },
+                                {
+                                    status: 'PAUSED',
+                                    pausedRemainingDays: { gt: 0 },
+                                },
+                            ],
+                        },
+                        include: { plan: true },
+                        orderBy: { plan: { sortOrder: 'desc' } },
+                    });
+                    const nextPlan =
+                        nextSubscription?.plan ??
+                        (await tx.plan.findUnique({ where: { code: 'FREE' } }));
+                    let impact = '';
+                    if (
+                        afterPlan &&
+                        nextPlan &&
+                        nextPlan.maxMonitors < afterPlan.maxMonitors
+                    ) {
+                        const configured = await tx.monitor.count({
+                            where: { organizationId, deletedAt: null },
+                        });
+                        if (configured > nextPlan.maxMonitors) {
+                            impact = ` 若届时实际降级为 ${nextPlan.name}，当前 ${configured} 个监控超出 ${nextPlan.maxMonitors} 个名额；数量超额部分在实际降级后宽限 72 小时，之后停止运行，配置和历史保留。`;
+                        }
+                    }
+                    const actionUrl = new URL(
+                        this.config.get<string>('app.webUrl') ??
+                            'http://localhost:3000',
+                    );
+                    actionUrl.searchParams.set(
+                        'organizationId',
+                        organizationId,
+                    );
                     await this.notifications.publish(
                         {
                             eventKey: `subscription-expiring:${subscription.id}:${expiry}:${days}`,
                             type: NotificationType.SUBSCRIPTION_EXPIRING,
                             accessScope: 'ORGANIZATION',
                             title: 'Subscription nearing expiry',
-                            body: `The ${subscription.plan.name} subscription expires within ${days} day${days === 1 ? '' : 's'}.`,
+                            body: `The ${subscription.plan.name} subscription expires within ${days} day${days === 1 ? '' : 's'} (${expiry}, UTC).${impact}`,
+                            actionUrl: actionUrl.toString(),
+                            actionLabel: '管理监控与套餐',
                             organizationId,
                             recipients,
                             includeActor: true,

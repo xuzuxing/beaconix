@@ -1,3 +1,7 @@
+import {
+    capacityRestricted,
+    MONITOR_CAPACITY_REASON,
+} from '../../shared/subscription/monitor-capacity.util';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../infra/database/prisma.service';
@@ -86,6 +90,7 @@ export class MonitorInsightsService {
                     select: {
                         id: true,
                         createdAt: true,
+                        quotaGraceEndsAt: true,
                         enabled: true,
                         checkSsl: true,
                         sslExpiryThreshold: true,
@@ -258,9 +263,17 @@ export class MonitorInsightsService {
                     latest: {
                         status: !monitor.enabled
                             ? 'PAUSED'
-                            : state?.status === 'PAUSED'
+                            : capacityRestricted(monitor, asOf)
                               ? 'UNKNOWN'
-                              : (state?.status ?? 'UNKNOWN'),
+                              : state?.status === 'PAUSED'
+                                ? 'UNKNOWN'
+                                : (state?.status ?? 'UNKNOWN'),
+                        executionBlockedReason: capacityRestricted(
+                            monitor,
+                            asOf,
+                        )
+                            ? MONITOR_CAPACITY_REASON
+                            : (state?.executionBlockedReason ?? null),
                         failCount: state?.failCount ?? 0,
                         lastCheckAt: state?.lastCheckAt
                             ? iso(state.lastCheckAt, tz)

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
     BadRequestException,
+    ForbiddenException,
     Injectable,
     Logger,
     NotFoundException,
@@ -33,6 +34,7 @@ import type { RuleContext, RuleNode } from '../rules/types';
 import { CheckerRegistry } from './checker.registry';
 import { QuotaService } from '../../shared/quota/quota.service';
 import type { MonitorPolicy } from '../../shared/quota/quota.service';
+import { capacityRestricted } from '../../shared/subscription/monitor-capacity.util';
 import type {
     CheckFailureKind,
     CheckMetadata,
@@ -242,6 +244,17 @@ export class CheckerService {
             monitor.organizationId,
             monitor.interval,
         );
+        const eligibility = await this.quotaService.monitorEligibility(
+            monitor.organizationId,
+            monitor.type,
+            monitor.interval,
+            undefined,
+            monitor.id,
+        );
+        if (!eligibility.eligible)
+            throw new ForbiddenException(
+                eligibility.reason ?? 'Monitor cannot execute',
+            );
 
         const result = await this.execute(monitor, ExecutionTrigger.MANUAL);
         const current = await this.access.project(
@@ -299,6 +312,8 @@ export class CheckerService {
             monitor.organizationId,
             monitor.type,
             monitor.interval,
+            undefined,
+            monitor.id,
         );
         if (!eligibility.eligible) return null;
 
@@ -355,6 +370,7 @@ export class CheckerService {
                             monitor.type,
                             monitor.interval,
                             policy,
+                            monitor.id,
                         ),
                     );
             }),
@@ -416,6 +432,8 @@ export class CheckerService {
             monitor.organizationId,
             monitor.type,
             monitor.interval,
+            undefined,
+            monitor.id,
         );
         if (!eligibility.eligible) return null;
 
@@ -848,7 +866,18 @@ export class CheckerService {
 
             try {
                 const state = await this.prisma.$transaction(async (tx) => {
+                    await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${monitor.organizationId} FOR SHARE`;
                     await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitor.id} FOR UPDATE`;
+                    const current = await tx.monitor.findFirst({
+                        where: { id: monitor.id, deletedAt: null },
+                    });
+                    if (
+                        !current ||
+                        !current.enabled ||
+                        current.revision !== monitor.revision ||
+                        capacityRestricted(current)
+                    )
+                        return null;
                     await tx.checkLog.create({
                         data: {
                             monitorId: monitor.id,
@@ -902,7 +931,7 @@ export class CheckerService {
                     });
                 });
 
-                return { state, roundId: anchoredRoundId };
+                return state ? { state, roundId: anchoredRoundId } : null;
             } catch (caught) {
                 // `(monitorId, roundId)` is unique: that batch id is taken.
                 if (
@@ -1179,6 +1208,8 @@ export class CheckerService {
             monitor.organizationId,
             monitor.type,
             monitor.interval,
+            undefined,
+            monitor.id,
         );
         if (!eligibility.eligible) {
             return {

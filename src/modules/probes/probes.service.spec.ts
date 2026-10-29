@@ -8,6 +8,8 @@ import { ProbesService } from './probes.service';
 import { hashSecret } from './probe-secret.util';
 import type { PrismaService } from '../../infra/database/prisma.service';
 import type { CheckerService } from '../checker/checker.service';
+import { QuotaService } from '../../shared/quota/quota.service';
+import type { EffectivePlanService } from '../../shared/subscription/effective-plan.service';
 
 const RAW_SECRET = 'secret-1';
 
@@ -134,6 +136,11 @@ function createService() {
         assertFeatureAllowed: jest.fn().mockResolvedValue(undefined),
         assertCanCreate: jest.fn().mockResolvedValue(undefined),
         assertCanCreateInTransaction: jest.fn().mockResolvedValue(undefined),
+        getMonitorPolicy: jest.fn().mockResolvedValue({
+            allowedMonitorTypes: ['HTTP', 'TCP', 'SSL', 'DNS', 'PING'],
+            minIntervalSeconds: 1,
+            capacityRestrictedIds: [],
+        }),
         getProbeAssignmentLimit: jest.fn().mockResolvedValue(10),
     };
     const configService = {
@@ -166,7 +173,125 @@ function createService() {
 }
 
 describe('ProbesService', () => {
+    it('rejects raw reports for a monitor whose capacity deadline passed', async () => {
+        const { service, prisma, checkerService } = createService();
+        const m = {
+            ...monitorSummary,
+            organizationId: 'org-1',
+            projectId: 'project-1',
+            configRevision: 1,
+            quotaGraceEndsAt: new Date(0),
+        };
+        prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
+        prisma.monitor.findMany.mockResolvedValue([m]);
+        prisma.monitor.findUniqueOrThrow.mockResolvedValue(m);
+        prisma.monitorProbe.findUnique.mockResolvedValue({});
+        await expect(
+            service.recordResults('secret-1', [
+                {
+                    target: m.target,
+                    monitorId: m.id,
+                    success: true,
+                    latency: 10,
+                    checkedAt: new Date().toISOString(),
+                    reportId: 'report',
+                    configRevision: 1,
+                },
+            ]),
+        ).rejects.toThrow('Monitor configuration changed');
+        expect(prisma.probeResult.create).not.toHaveBeenCalled();
+        expect(
+            checkerService.ingestProbeReportForMonitor,
+        ).not.toHaveBeenCalled();
+    });
+
+    it('consumes pending old reports without applying them while capacity is restricted', async () => {
+        const { service, prisma, checkerService } = createService();
+        const row = {
+            id: 'raw',
+            monitorId: 'monitor-1',
+            configRevision: 1,
+            appliedAt: null,
+            checkedAt: new Date(),
+        };
+        prisma.probeResult.findMany.mockResolvedValue([row]);
+        prisma.probeResult.findUniqueOrThrow.mockResolvedValue(row);
+        prisma.monitor.findUnique.mockResolvedValue({
+            ...monitorSummary,
+            configRevision: 1,
+            quotaGraceEndsAt: new Date(0),
+        });
+        await service.applyPendingResults();
+        expect(
+            checkerService.ingestProbeReportForMonitor,
+        ).not.toHaveBeenCalled();
+        expect(prisma.probeResult.update).toHaveBeenCalledWith({
+            where: { id: 'raw' },
+            data: { appliedAt: expect.any(Date) },
+        });
+    });
     describe('create', () => {
+        it.each([0, 1])(
+            'rejects a disabled tenant-probe feature before writing or notifying (maxProbes=%s)',
+            async (maxProbes) => {
+                const { service, prisma, billingService, notifications } =
+                    createService();
+                const tx = {
+                    $queryRaw: jest.fn().mockResolvedValue([]),
+                    probe: {
+                        count: jest.fn().mockResolvedValue(0),
+                        create: jest.fn(),
+                    },
+                };
+                prisma.$transaction.mockImplementation((work) => work(tx));
+                const effectivePlan = {
+                    getEffectivePlan: jest
+                        .fn()
+                        .mockResolvedValue({ allowTenantProbe: true }),
+                    getEffectivePlanInTransaction: jest
+                        .fn()
+                        .mockImplementation(() => {
+                            expect(tx.$queryRaw).toHaveBeenCalled();
+                            return Promise.resolve({
+                                maxProbes,
+                                allowTenantProbe: false,
+                            });
+                        }),
+                };
+                const quota = new QuotaService(
+                    prisma as unknown as PrismaService,
+                    effectivePlan as unknown as EffectivePlanService,
+                );
+                billingService.assertCanCreateInTransaction.mockImplementation(
+                    quota.assertCanCreateInTransaction.bind(quota),
+                );
+                await expect(
+                    service.create('org-1', {
+                        name: 'Probe',
+                        provider: 'TENCENT',
+                        region: 'ap-northeast-1',
+                        callbackUrl: 'https://probe.example.com/callback',
+                    }),
+                ).rejects.toMatchObject({
+                    response: {
+                        code: 'FEATURE_NOT_AVAILABLE',
+                        feature: 'tenantProbe',
+                    },
+                });
+                expect(
+                    effectivePlan.getEffectivePlanInTransaction,
+                ).toHaveBeenCalledTimes(1);
+                expect(
+                    effectivePlan.getEffectivePlanInTransaction,
+                ).toHaveBeenCalledWith('org-1', tx);
+                expect(effectivePlan.getEffectivePlan).not.toHaveBeenCalled();
+                expect(tx.probe.count).not.toHaveBeenCalled();
+                expect(tx.probe.create).not.toHaveBeenCalled();
+                expect(prisma.probe.create).not.toHaveBeenCalled();
+                expect(notifications.publish).not.toHaveBeenCalled();
+            },
+        );
+
         it('generates a shared secret for the new probe', async () => {
             const { service, prisma, notifications } = createService();
             prisma.probe.create.mockImplementation(
@@ -208,6 +333,21 @@ describe('ProbesService', () => {
     });
 
     describe('recordHeartbeat', () => {
+        it('withholds assignments excluded by the current capacity policy', async () => {
+            const { service, prisma, billingService } = createService();
+            prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());
+            prisma.probe.update.mockResolvedValue({
+                ...probeRow,
+                monitors: [
+                    { monitor: { ...monitorSummary, organizationId: 'org-1' } },
+                ],
+            });
+            billingService.getMonitorPolicy.mockResolvedValue({
+                capacityRestrictedIds: ['monitor-1'],
+            });
+            const result = await service.recordHeartbeat('secret-1');
+            expect(result.monitors).toEqual([]);
+        });
         it('marks a tenant probe online and returns directly bound monitors', async () => {
             const { service, prisma } = createService();
             prisma.probeSecret.findUnique.mockResolvedValue(secretMatch());

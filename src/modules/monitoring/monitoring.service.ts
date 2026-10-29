@@ -1,3 +1,4 @@
+import { capacityRestricted } from '../../shared/subscription/monitor-capacity.util';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { MonitorStatus } from '../../generated/prisma/enums';
@@ -105,7 +106,10 @@ export class MonitoringService {
 
         const recentIncidents = monitors
             .filter((monitor) => {
-                const status = monitor.state?.status ?? MonitorStatus.UNKNOWN;
+                const status =
+                    capacityRestricted(monitor) && monitor.enabled
+                        ? MonitorStatus.UNKNOWN
+                        : (monitor.state?.status ?? MonitorStatus.UNKNOWN);
                 return (
                     status === MonitorStatus.DOWN ||
                     status === MonitorStatus.DEGRADED
@@ -123,7 +127,11 @@ export class MonitoringService {
                         id: monitor.id,
                         name: monitor.name,
                         target: monitor.target,
-                        status: monitor.state?.status ?? MonitorStatus.UNKNOWN,
+                        status:
+                            capacityRestricted(monitor) && monitor.enabled
+                                ? MonitorStatus.UNKNOWN
+                                : (monitor.state?.status ??
+                                  MonitorStatus.UNKNOWN),
                         lastCheckAt: monitor.state?.lastCheckAt ?? null,
                         lastError: monitor.state?.lastError ?? null,
                     }),
@@ -164,7 +172,10 @@ export class MonitoringService {
         };
 
         for (const monitor of monitors) {
-            const status = monitor.state?.status ?? MonitorStatus.UNKNOWN;
+            const status =
+                capacityRestricted(monitor) && monitor.enabled
+                    ? MonitorStatus.UNKNOWN
+                    : (monitor.state?.status ?? MonitorStatus.UNKNOWN);
             counts[status] += 1;
         }
 

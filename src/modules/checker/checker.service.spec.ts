@@ -396,6 +396,31 @@ function bindProbes(
 }
 
 describe('CheckerService', () => {
+    it('blocks manual checks and queued executions after quantity grace without probing or alerting', async () => {
+        const { service, prisma, quotaService, httpChecker, notifierService } =
+            createService();
+        prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+        quotaService.monitorEligibility.mockResolvedValue({
+            eligible: false,
+            reason: 'MONITOR_QUOTA_EXCEEDED',
+        });
+        await expect(
+            service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            }),
+        ).rejects.toThrow('MONITOR_QUOTA_EXCEEDED');
+        expect(await service.executeMonitor('monitor-1')).toBeNull();
+        expect(quotaService.monitorEligibility).toHaveBeenCalledWith(
+            'org-1',
+            'HTTP',
+            60,
+            undefined,
+            'monitor-1',
+        );
+        expect(httpChecker.check).not.toHaveBeenCalled();
+        expect(notifierService.notifyAvailabilityAlert).not.toHaveBeenCalled();
+    });
     describe('batch anchored by the local check', () => {
         it('settles as soon as every bound probe reported', async () => {
             const { service, prisma, stateService, rounds } = createService();

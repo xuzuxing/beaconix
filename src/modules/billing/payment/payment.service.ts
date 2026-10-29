@@ -22,6 +22,7 @@ import type {
 } from './payment-provider.interface';
 import { settlePaidOrder } from './payment-settlement';
 import { resolvePaidAmountFen } from './callback-amount';
+import { EffectivePlanService } from '../../../shared/subscription/effective-plan.service';
 
 type OrderForPayment = OrderModel;
 
@@ -38,6 +39,7 @@ export class PaymentService {
         private readonly prisma: PrismaService,
         private readonly paymentProviderFactory: PaymentProviderFactory,
         private readonly notifications: NotificationsService,
+        private readonly plans: EffectivePlanService,
     ) {}
 
     async createPayment(
@@ -223,6 +225,10 @@ export class PaymentService {
                 paymentId: payment.id,
                 notifications: this.notifications,
             });
+            await this.plans.getEffectivePlanInTransaction(
+                payment.order.organizationId,
+                tx,
+            );
         });
 
         return { code: 'SUCCESS', message: '成功' };

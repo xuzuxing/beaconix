@@ -18,6 +18,11 @@ import { Prisma } from '../../generated/prisma/client';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { monitoringProjection } from '../../common/authorization/monitoring-projection';
+import {
+    capacityRestricted,
+    MONITOR_CAPACITY_REASON,
+    lockObservationMonitor,
+} from '../../shared/subscription/monitor-capacity.util';
 import type {
     CheckFailureKind,
     CheckMetadata,
@@ -203,7 +208,7 @@ export class StateService {
      */
     async record(monitorId: string, outcome: CheckOutcome) {
         return this.prisma.$transaction(async (tx) => {
-            await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitorId} FOR UPDATE`;
+            await lockObservationMonitor(tx, monitorId);
             const monitor = await tx.monitor.findFirst({
                 where: {
                     id: monitorId,
@@ -231,6 +236,7 @@ export class StateService {
             }
             if (
                 !monitor.enabled ||
+                capacityRestricted(monitor) ||
                 (outcome.revision !== undefined &&
                     monitor.revision !== outcome.revision) ||
                 (outcome.source !== CheckSource.PROBE &&
@@ -444,7 +450,7 @@ export class StateService {
     ) {
         try {
             return await this.prisma.$transaction(async (tx) => {
-                await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitorId} FOR UPDATE`;
+                await lockObservationMonitor(tx, monitorId);
                 const monitor = await tx.monitor.findFirst({
                     where: {
                         id: monitorId,
@@ -457,7 +463,8 @@ export class StateService {
                     include: { state: true },
                 });
 
-                if (!monitor || !monitor.enabled) return null;
+                if (!monitor || !monitor.enabled || capacityRestricted(monitor))
+                    return null;
                 if (
                     monitor.configRevision !== verdict.configRevision ||
                     monitor.revision !== verdict.revision
@@ -661,7 +668,7 @@ export class StateService {
         checkedAt: Date | null,
     ): Promise<string | null> {
         return this.prisma.$transaction(async (tx) => {
-            await tx.$queryRaw`SELECT "id" FROM "monitors" WHERE "id" = ${monitorId} FOR UPDATE`;
+            await lockObservationMonitor(tx, monitorId);
             const current = await tx.monitor.findFirst({
                 where: {
                     id: monitorId,
@@ -672,6 +679,7 @@ export class StateService {
                 include: { state: true },
             });
             const state = current?.state;
+            if (current && capacityRestricted(current)) return null;
             if (!state || state.lastCheckAt?.getTime() !== checkedAt?.getTime())
                 return null;
             if (state.availabilityAlertActive === active) {
@@ -782,7 +790,7 @@ export class StateService {
         } = {},
     ): Promise<boolean> {
         return this.prisma.$transaction(async (tx) => {
-            await tx.$queryRaw`SELECT "id" FROM "monitors" WHERE "id" = ${monitorId} FOR UPDATE`;
+            await lockObservationMonitor(tx, monitorId);
             const current = await tx.monitor.findFirst({
                 where: {
                     id: monitorId,
@@ -790,9 +798,9 @@ export class StateService {
                     enabled: true,
                     deletedAt: null,
                 },
-                select: { id: true },
+                select: { id: true, quotaGraceEndsAt: true },
             });
-            if (!current) return false;
+            if (!current || capacityRestricted(current)) return false;
             const changed = await tx.monitorState.updateMany({
                 where: { monitorId, ...expected },
                 data,
@@ -847,9 +855,12 @@ export class StateService {
                 name: monitor.name,
                 target: monitor.target,
                 type: monitor.type,
-                executionBlockedReason:
-                    monitor.state?.executionBlockedReason ?? null,
-                status: monitor.state?.status ?? MonitorStatus.UNKNOWN,
+                executionBlockedReason: capacityRestricted(monitor)
+                    ? MONITOR_CAPACITY_REASON
+                    : (monitor.state?.executionBlockedReason ?? null),
+                status: capacityRestricted(monitor)
+                    ? MonitorStatus.UNKNOWN
+                    : (monitor.state?.status ?? MonitorStatus.UNKNOWN),
                 failCount: monitor.state?.failCount ?? 0,
                 lastCheckAt: monitor.state?.lastCheckAt ?? null,
                 lastLatency: monitor.state?.lastLatency ?? null,

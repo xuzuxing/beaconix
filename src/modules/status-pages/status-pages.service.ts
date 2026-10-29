@@ -5,6 +5,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
+import { capacityRestricted } from '../../shared/subscription/monitor-capacity.util';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { MultiLevelCacheService } from '../../infra/cache/multi-level-cache.service';
@@ -271,7 +272,9 @@ export class StatusPagesService {
                 name: monitor.name,
                 type: monitor.type,
                 target: sanitizeMonitoringTarget(monitor.target),
-                status: state?.status ?? MonitorStatus.UNKNOWN,
+                status: capacityRestricted(monitor, asOf)
+                    ? MonitorStatus.UNKNOWN
+                    : (state?.status ?? MonitorStatus.UNKNOWN),
                 lastCheckAt: state?.lastCheckAt ?? null,
             };
 

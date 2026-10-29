@@ -19,6 +19,7 @@ export const SCHEDULED_JOBS = {
     attachmentCleanup: 'attachment-cleanup',
     orderExpirySweep: 'order-expiry-sweep',
     subscriptionExpirySweep: 'subscription-expiry-sweep',
+    monitorCapacitySweep: 'monitor-capacity-sweep',
     systemProbeAssignmentRefresh: 'system-probe-assignment-refresh',
     probeOfflineSweep: 'probe-offline-sweep',
     alertOutboxSweep: 'alert-outbox-sweep',
@@ -48,7 +49,9 @@ export const SCHEDULED_JOB_PATTERNS: Record<ScheduledJobName, string> = {
     'attachment-cleanup': '30 3 * * *',
     'order-expiry-sweep': '*/5 * * * *',
     'subscription-expiry-sweep': '0 * * * *',
-    'system-probe-assignment-refresh': '0 * * * *',
+    'monitor-capacity-sweep': '* * * * *',
+    // Capacity deadlines and retained-list changes must release scarce slots promptly.
+    'system-probe-assignment-refresh': '* * * * *',
     'probe-offline-sweep': '* * * * *',
     'alert-outbox-sweep': '* * * * *',
     'probe-ingest-sweep': '* * * * *',

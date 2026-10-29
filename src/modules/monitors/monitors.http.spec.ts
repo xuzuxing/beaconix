@@ -247,6 +247,8 @@ describe('Monitor HTTP integration', () => {
         expect(quota.assertMonitorTypeAllowed).toHaveBeenCalledWith(
             'org-1',
             'DNS',
+            prisma,
+            undefined,
         );
     });
 

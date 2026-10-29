@@ -103,14 +103,6 @@ export class MonitorsService {
         await this.access.project(principal, projectId, 'monitor.manage');
         this.rejectNullFields(dto);
         const project = await this.ensureProjectExists(projectId);
-        await this.quotaService.assertIntervalAllowed(
-            project.organizationId,
-            dto.interval ?? 60,
-        );
-        await this.quotaService.assertMonitorTypeAllowed(
-            project.organizationId,
-            dto.type,
-        );
         const config = validateMonitorConfig(dto.type, dto.config);
         const sealed = this.secrets.seal(config, {
             organizationId: project.organizationId,
@@ -129,10 +121,6 @@ export class MonitorsService {
             project.organizationId,
             probeIds,
         );
-        await this.quotaService.assertProbesAssignable(
-            project.organizationId,
-            probesToAssign.length,
-        );
 
         // The nested write creates the companion MonitorState row, the
         // channel bindings and the probe assignments in the same
@@ -144,10 +132,28 @@ export class MonitorsService {
             async (tx) => {
                 // Count inside the write transaction (the org row is already
                 // locked by `withProject`) so parallel creates cannot all pass.
-                await this.quotaService.assertCanCreateInTransaction(
+                const plan =
+                    await this.quotaService.assertCanCreateInTransaction(
+                        project.organizationId,
+                        'monitors',
+                        tx,
+                    );
+                await this.quotaService.assertIntervalAllowed(
                     project.organizationId,
-                    'monitors',
+                    dto.interval ?? 60,
                     tx,
+                    plan,
+                );
+                await this.quotaService.assertMonitorTypeAllowed(
+                    project.organizationId,
+                    dto.type,
+                    tx,
+                    plan,
+                );
+                await this.quotaService.assertProbesAssignable(
+                    project.organizationId,
+                    probesToAssign.length,
+                    plan,
                 );
                 await this.assertChannelsBelongToOrg(
                     project.organizationId,
@@ -730,25 +736,32 @@ export class MonitorsService {
         if (!monitor.deletedAt) {
             throw new BadRequestException('Monitor is not deleted');
         }
-        await this.quotaService.assertCanCreate(
-            monitor.organizationId,
-            'monitors',
-        );
-        await this.quotaService.assertMonitorTypeAllowed(
-            monitor.organizationId,
-            monitor.type,
-        );
-        await this.quotaService.assertIntervalAllowed(
-            monitor.organizationId,
-            monitor.interval,
-        );
-
         const updated = await this.access.withProject(
             principal,
             projectId,
             'monitor.restore',
-            (tx) =>
-                tx.monitor.update({
+            async (tx) => {
+                // Keep the tenant lock through both the quota check and the
+                // restore. A separate assertion transaction releases it early.
+                const plan =
+                    await this.quotaService.assertCanCreateInTransaction(
+                        monitor.organizationId,
+                        'monitors',
+                        tx,
+                    );
+                await this.quotaService.assertMonitorTypeAllowed(
+                    monitor.organizationId,
+                    monitor.type,
+                    tx,
+                    plan,
+                );
+                await this.quotaService.assertIntervalAllowed(
+                    monitor.organizationId,
+                    monitor.interval,
+                    tx,
+                    plan,
+                );
+                return tx.monitor.update({
                     where: {
                         id: monitorId,
                         projectId,
@@ -757,6 +770,8 @@ export class MonitorsService {
                     },
                     data: {
                         deletedAt: null,
+                        quotaGraceEndsAt: null,
+                        configRevision: { increment: 1 },
                         revision: { increment: 1 },
                         state: {
                             upsert: {
@@ -782,7 +797,8 @@ export class MonitorsService {
                         },
                     },
                     include: MONITOR_INCLUDE,
-                }),
+                });
+            },
         );
 
         await this.systemProbeScheduler.rebalance();
@@ -1089,6 +1105,7 @@ export class MonitorsService {
             monitor.type,
             monitor.interval,
             effectivePolicy,
+            monitor.id,
         );
         const reason = !monitor.enabled
             ? 'PAUSED'
@@ -1109,7 +1126,10 @@ export class MonitorsService {
                 (binding) => new MonitorProbeEntity(binding.probe),
             ),
             maxProbes: probeAssignmentLimit(effectivePolicy),
-            status: state?.status ?? 'UNKNOWN',
+            status:
+                reason === 'MONITOR_QUOTA_EXCEEDED'
+                    ? 'UNKNOWN'
+                    : (state?.status ?? 'UNKNOWN'),
             failCount: state?.failCount ?? 0,
             lastCheckAt: state?.lastCheckAt ?? null,
             lastLatency: state?.lastLatency ?? null,

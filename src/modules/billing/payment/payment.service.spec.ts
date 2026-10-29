@@ -84,6 +84,9 @@ function createService() {
         prisma as unknown as PrismaService,
         paymentProviderFactory as unknown as PaymentProviderFactory,
         notifications as never,
+        {
+            getEffectivePlanInTransaction: jest.fn().mockResolvedValue(null),
+        } as never,
     );
 
     return { service, prisma, provider, paymentProviderFactory, notifications };

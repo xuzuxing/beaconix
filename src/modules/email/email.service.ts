@@ -412,6 +412,13 @@ export class EmailService {
                         this.paragraph(
                             escapeHtml(notice.body).replace(/\n/g, '<br />'),
                         ),
+                        notice.actionUrl &&
+                        /^https?:\/\//i.test(notice.actionUrl)
+                            ? this.button(
+                                  escapeHtml(notice.actionLabel ?? '查看详情'),
+                                  escapeHtml(notice.actionUrl),
+                              )
+                            : '',
                     ].join(''),
                 };
                 break;

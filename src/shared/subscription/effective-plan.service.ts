@@ -3,6 +3,7 @@ import { PrismaService } from '../../infra/database/prisma.service';
 import { SubscriptionStatus } from '../../generated/prisma/enums';
 import type { PlanModel } from '../../generated/prisma/models';
 import type { Prisma } from '../../generated/prisma/client';
+import { MonitorCapacityService } from './monitor-capacity.service';
 
 export interface SubscriptionStackEntry {
     id: string;
@@ -24,7 +25,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class EffectivePlanService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly capacity: MonitorCapacityService,
+    ) {}
 
     /**
      * The effective plan is the highest-priority ACTIVE, unexpired
@@ -35,21 +39,6 @@ export class EffectivePlanService {
      * waiting for the hourly sweep.
      */
     async getEffectivePlan(organizationId: string): Promise<PlanModel | null> {
-        const paused = await this.prisma.subscription.count({
-            where: {
-                organizationId,
-                status: SubscriptionStatus.PAUSED,
-                pausedRemainingDays: { not: null },
-            },
-        });
-
-        if (paused === 0) {
-            return this.getEffectivePlanInTransaction(
-                organizationId,
-                this.prisma,
-            );
-        }
-
         return this.prisma.$transaction(async (tx) => {
             // Serialize restores with payment callbacks and the expiry sweep.
             await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
@@ -62,7 +51,11 @@ export class EffectivePlanService {
         tx: Prisma.TransactionClient,
     ): Promise<PlanModel | null> {
         const now = new Date();
-        await this.restorePausedSubscription(tx, organizationId, now);
+        const resumedSubscriptionId = await this.restorePausedSubscription(
+            tx,
+            organizationId,
+            now,
+        );
 
         const subscription = await tx.subscription.findFirst({
             where: {
@@ -75,16 +68,20 @@ export class EffectivePlanService {
             orderBy: { plan: { sortOrder: 'desc' } },
         });
 
-        if (subscription) {
-            return subscription.plan;
-        }
-
-        return tx.plan.findUnique({ where: { code: 'FREE' } });
+        const plan =
+            subscription?.plan ??
+            (await tx.plan.findUnique({ where: { code: 'FREE' } }));
+        if (plan)
+            await this.capacity.reconcile(tx, organizationId, plan, now, {
+                resumedSubscriptionId,
+            });
+        return plan;
     }
 
     async getSubscriptionStack(
         organizationId: string,
     ): Promise<SubscriptionStack> {
+        const reconciledPlan = await this.getEffectivePlan(organizationId);
         const now = new Date();
 
         const [subscriptions, freePlan] = await Promise.all([
@@ -120,7 +117,8 @@ export class EffectivePlanService {
                 subscription.status === SubscriptionStatus.ACTIVE &&
                 subscription.startsAt <= now,
         );
-        const effectivePlan = active.length > 0 ? active[0].plan : freePlan;
+        const effectivePlan =
+            reconciledPlan ?? (active.length > 0 ? active[0].plan : freePlan);
 
         return {
             effectivePlan,
@@ -157,7 +155,7 @@ export class EffectivePlanService {
         tx: Prisma.TransactionClient,
         organizationId: string,
         now: Date,
-    ): Promise<void> {
+    ): Promise<string | undefined> {
         const paused = await tx.subscription.findFirst({
             where: {
                 organizationId,
@@ -241,5 +239,6 @@ export class EffectivePlanService {
                 pausedRemainingDays: null,
             },
         });
+        return paused.id;
     }
 }

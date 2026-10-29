@@ -191,6 +191,7 @@ describe('NotifierService outbox revision protection', () => {
     it.each([
         { revision: 2, configRevision: 1 },
         { revision: 1, configRevision: 2 },
+        { revision: 1, configRevision: 1, quotaGraceEndsAt: new Date(0) },
     ])(
         'skips a queued delivery after its definition changes: %j',
         async (change) => {

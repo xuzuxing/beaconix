@@ -1,4 +1,11 @@
 import { HttpChecker } from './http.checker';
+import { lookup } from 'node:dns/promises';
+
+jest.mock('node:dns/promises', () => ({
+    ...jest.requireActual('node:dns/promises'),
+    lookup: jest.fn(),
+}));
+const mockLookup = jest.mocked(lookup);
 
 function mockFetch(implementation: () => unknown) {
     const spy = jest.fn(() => Promise.resolve(implementation()));
@@ -10,13 +17,33 @@ function response(status: number, body = ''): Response {
     return new Response(body, { status });
 }
 
+/** Wait until the check reaches body reading before advancing its deadline. */
+function bodyReadStarted(stream: ReadableStream<Uint8Array>): Promise<void> {
+    return new Promise((resolve) => {
+        const getReader = stream.getReader.bind(stream);
+        jest.spyOn(stream, 'getReader').mockImplementation(() => {
+            const reader = getReader();
+            resolve();
+            return reader;
+        });
+    });
+}
+
 describe('HttpChecker', () => {
     const checker = new HttpChecker();
     const originalFetch = global.fetch;
 
+    beforeEach(() => {
+        // These tests mock the HTTP transport; DNS must also stay offline.
+        mockLookup
+            .mockReset()
+            .mockResolvedValue([{ address: '1.1.1.1', family: 4 }] as never);
+    });
+
     afterEach(() => {
         global.fetch = originalFetch;
         jest.restoreAllMocks();
+        jest.useRealTimers();
     });
 
     it('succeeds when the status matches', async () => {
@@ -264,22 +291,35 @@ describe('HttpChecker', () => {
     });
 
     it('times out and cancels a stalled response body', async () => {
+        jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
         const cancel = jest.fn();
-        mockFetch(
-            () =>
-                new Response(
-                    new ReadableStream({
-                        start() {},
-                        cancel,
-                    }),
-                ),
-        );
-        const result = await checker.check('https://example.com', 30, 200);
-        expect(result).toMatchObject({
+        const stream = new ReadableStream<Uint8Array>({ cancel });
+        const reading = bodyReadStarted(stream);
+        mockFetch(() => new Response(stream));
+        const pending = checker.check('https://example.com', 30, 200);
+        await reading;
+        expect(cancel).not.toHaveBeenCalled();
+        await jest.advanceTimersByTimeAsync(30);
+        expect(await pending).toMatchObject({
             success: false,
             failureKind: 'TIMEOUT',
+            statusCode: 200,
         });
-        expect(cancel).toHaveBeenCalled();
+        expect(cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('times out during DNS without fetching a response', async () => {
+        jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
+        mockLookup.mockImplementation(() => new Promise(() => {}));
+        const fetch = mockFetch(() => response(200));
+        const pending = checker.check('https://example.com', 30, 200);
+        await jest.advanceTimersByTimeAsync(30);
+        expect(await pending).toMatchObject({
+            success: false,
+            failureKind: 'TIMEOUT',
+            statusCode: null,
+        });
+        expect(fetch).not.toHaveBeenCalled();
     });
 
     it('does not swallow a response stream failure', async () => {
@@ -303,20 +343,19 @@ describe('HttpChecker', () => {
     it.each(['error', 'stall'])(
         'preserves a known HTTP assertion when the body %s occurs',
         async (mode) => {
-            mockFetch(
-                () =>
-                    new Response(
-                        new ReadableStream({
-                            start(controller) {
-                                if (mode === 'error')
-                                    controller.error(new Error('broken body'));
-                            },
-                        }),
-                        { status: 503 },
-                    ),
-            );
-            const result = await checker.check('https://example.com', 30, 200);
-            expect(result).toMatchObject({
+            jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
+            const stream = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    if (mode === 'error')
+                        controller.error(new Error('broken body'));
+                },
+            });
+            const reading = bodyReadStarted(stream);
+            mockFetch(() => new Response(stream, { status: 503 }));
+            const pending = checker.check('https://example.com', 30, 200);
+            await reading;
+            await jest.advanceTimersByTimeAsync(30);
+            expect(await pending).toMatchObject({
                 success: false,
                 statusCode: 503,
                 failureKind: 'ASSERTION',
@@ -541,24 +580,24 @@ describe('HttpChecker', () => {
         });
 
         it('does not assume EOF at the exact byte limit', async () => {
+            jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
             const cancel = jest.fn();
-            mockFetch(
-                () =>
-                    new Response(
-                        new ReadableStream({
-                            start(controller) {
-                                controller.enqueue(
-                                    new TextEncoder().encode('x'.repeat(1024)),
-                                );
-                            },
-                            cancel,
-                        }),
-                    ),
-            );
-            const result = await checker.check('https://example.com', 30, 200, {
+            const stream = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.enqueue(
+                        new TextEncoder().encode('x'.repeat(1024)),
+                    );
+                },
+                cancel,
+            });
+            const reading = bodyReadStarted(stream);
+            mockFetch(() => new Response(stream));
+            const pending = checker.check('https://example.com', 30, 200, {
                 config: { keyword: 'x', maxBodyBytes: 1024 },
             });
-            expect(result).toMatchObject({
+            await reading;
+            await jest.advanceTimersByTimeAsync(30);
+            expect(await pending).toMatchObject({
                 success: false,
                 failureKind: 'TIMEOUT',
             });
@@ -658,24 +697,22 @@ describe('HttpChecker', () => {
         });
 
         it('waits for body completion and cancels on timeout even after a keyword match', async () => {
+            jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
             const cancel = jest.fn();
-            mockFetch(
-                () =>
-                    new Response(
-                        new ReadableStream({
-                            start(controller) {
-                                controller.enqueue(
-                                    new TextEncoder().encode('healthy'),
-                                );
-                            },
-                            cancel,
-                        }),
-                    ),
-            );
-            const result = await checker.check('https://example.com', 30, 200, {
+            const stream = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode('healthy'));
+                },
+                cancel,
+            });
+            const reading = bodyReadStarted(stream);
+            mockFetch(() => new Response(stream));
+            const pending = checker.check('https://example.com', 30, 200, {
                 config: { keyword: 'healthy' },
             });
-            expect(result).toMatchObject({
+            await reading;
+            await jest.advanceTimersByTimeAsync(30);
+            expect(await pending).toMatchObject({
                 success: false,
                 failureKind: 'TIMEOUT',
                 statusCode: 200,

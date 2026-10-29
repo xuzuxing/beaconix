@@ -122,6 +122,30 @@ describe('deriveState', () => {
     });
 });
 
+describe('capacity execution fences', () => {
+    it('rejects observations and settlement at the deadline without recording a fault', async () => {
+        const { service, prisma, alerts } = createService();
+        prisma.monitor.findFirst.mockResolvedValue({
+            ...monitorRow,
+            quotaGraceEndsAt: new Date(Date.now() - 1),
+            state: stateRow,
+        });
+        expect(
+            await service.record('monitor-1', { success: false, latency: 20 }),
+        ).toBeNull();
+        expect(
+            await service.settle(
+                'monitor-1',
+                'round',
+                {} as SettledRoundVerdict,
+            ),
+        ).toBeNull();
+        expect(prisma.checkLog.create).not.toHaveBeenCalled();
+        expect(prisma.monitorState.upsert).not.toHaveBeenCalled();
+        expect(alerts.record).not.toHaveBeenCalled();
+    });
+});
+
 describe('StateService', () => {
     describe('settle', () => {
         const roundId = 'monitor-1:1700000000000';

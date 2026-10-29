@@ -53,6 +53,21 @@ function createService() {
 }
 
 describe('MonitoringService', () => {
+    it('reports UNKNOWN at the capacity deadline before the sweep updates stored UP', async () => {
+        const { service, prisma } = createService();
+        prisma.monitor.findMany.mockResolvedValue([
+            monitor({
+                quotaGraceEndsAt: new Date(Date.now() - 1),
+                state: { ...monitor().state, status: 'UP' },
+            }),
+        ]);
+        prisma.checkLog.count.mockResolvedValue(0);
+        const result = await service.getProjectOverview('project-1', {
+            type: 'USER',
+            userId: 'user-1',
+        });
+        expect(result.byStatus).toMatchObject({ UP: 0, UNKNOWN: 1 });
+    });
     describe('getOrganizationOverview', () => {
         it('queries every monitor in the organization', async () => {
             const { service, prisma } = createService();
