@@ -52,6 +52,22 @@ function createScheduler() {
 }
 
 describe('SystemProbeScheduler', () => {
+    it('reserves scarce system-probe capacity for retained monitors', async () => {
+        const { scheduler, prisma, quotaService } = createScheduler();
+        quotaService.getMonitorPolicy.mockResolvedValue({
+            ...basePolicy,
+            maxProbesPerMonitor: 1,
+            capacityRestrictedIds: ['excluded'],
+        });
+        prisma.probe.findMany.mockResolvedValue([
+            { ...baseProbe, id: 'probe', maxTenants: 1 },
+        ]);
+        prisma.monitor.findMany.mockResolvedValue([
+            { id: 'excluded', type: 'HTTP', organizationId: 'org' },
+            { id: 'retained', type: 'HTTP', organizationId: 'org' },
+        ]);
+        expect(await scheduler.rebalance()).toEqual({ probe: ['retained'] });
+    });
     it('assigns N least-loaded system probes to every HTTP/TCP monitor', async () => {
         const { scheduler, prisma, redisService, quotaService } =
             createScheduler();

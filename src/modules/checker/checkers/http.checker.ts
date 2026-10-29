@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { toIsoString } from '../../../common/utils/date.util';
 import { connect } from 'node:tls';
+import { isIP } from 'node:net';
+import { Agent } from 'undici';
 import { describeCheckError } from './check-result';
 import type {
     CheckMetadata,
@@ -14,7 +16,8 @@ import type { CheckerStrategy } from './checker.interface';
 import { validateHttpMonitorConfig } from '../../monitors/http-monitor-config';
 import { evaluateHttpAssertions } from './http-assertions';
 import { sanitizeMonitoringDiagnostic } from '../../../common/authorization/monitoring-projection';
-import { assertPublicHost } from './network-guard';
+import { pinnedLookup, resolvePublicHost } from './network-guard';
+import type { PinnedAddress } from './network-guard';
 
 export interface HttpCheckOptions {
     checkSsl?: boolean;
@@ -126,6 +129,7 @@ export class HttpChecker implements CheckerStrategy {
         let bodyContains: string | null = null;
         let meta: Extract<CheckMetadata, { protocol: 'HTTP' }> | undefined;
         const controller = new AbortController();
+        const dispatchers: Agent[] = [];
         const ensureDeadline = () => {
             if (
                 controller.signal.aborted ||
@@ -150,6 +154,7 @@ export class HttpChecker implements CheckerStrategy {
                 url,
                 controller.signal,
                 ensureDeadline,
+                dispatchers,
             );
 
             if ('rejection' in guarded) {
@@ -199,7 +204,11 @@ export class HttpChecker implements CheckerStrategy {
             if (options.checkSsl) {
                 try {
                     const remaining = timeout - (Date.now() - startedAt);
-                    ssl = await this.inspectSslCertificate(url, remaining);
+                    ssl = await this.inspectSslCertificate(
+                        url,
+                        remaining,
+                        guarded.initialAddress,
+                    );
                     ensureDeadline();
                 } catch (error) {
                     return {
@@ -340,6 +349,11 @@ export class HttpChecker implements CheckerStrategy {
         } finally {
             clearTimeout(timer);
             controller.abort();
+            await Promise.all(
+                dispatchers.map((dispatcher) =>
+                    dispatcher.destroy().catch(() => {}),
+                ),
+            );
         }
     }
 
@@ -353,11 +367,16 @@ export class HttpChecker implements CheckerStrategy {
         target: URL,
         signal: AbortSignal,
         ensureDeadline: () => void,
-    ): Promise<{ response: Response } | { rejection: string }> {
+        dispatchers: Agent[],
+    ): Promise<
+        | { response: Response; initialAddress: PinnedAddress }
+        | { rejection: string }
+    > {
         let current = target;
+        let initialAddress: PinnedAddress | undefined;
 
         for (let hop = 0; ; hop += 1) {
-            const verdict = await assertPublicHost(current.hostname);
+            const verdict = await resolvePublicHost(current.hostname, signal);
 
             if (!verdict.ok) {
                 return {
@@ -366,22 +385,33 @@ export class HttpChecker implements CheckerStrategy {
             }
 
             ensureDeadline();
+            initialAddress ??= verdict;
+            // The URL stays intact for Host, SNI and certificate validation;
+            // only socket DNS lookup is replaced with the checked address.
+            const dispatcher = new Agent({
+                connect: { lookup: pinnedLookup(verdict) },
+            });
+            dispatchers.push(dispatcher);
 
-            const response = await fetch(current, {
+            const requestOptions = {
                 method: 'GET',
-                redirect: 'manual',
+                redirect: 'manual' as const,
                 signal,
+                dispatcher,
                 headers: {
                     'user-agent': 'Beaconix-Monitor/1.0',
                     accept: '*/*',
                 },
-            });
+            };
+            const response = await fetch(current, requestOptions);
 
             const location = isRedirectStatus(response.status)
                 ? response.headers.get('location')
                 : null;
 
-            if (!location) return { response };
+            if (!location) return { response, initialAddress };
+            // Discard redirect bodies before opening the next connection.
+            await response.body?.cancel();
 
             if (hop >= MAX_REDIRECT_HOPS) {
                 return {
@@ -400,6 +430,11 @@ export class HttpChecker implements CheckerStrategy {
             if (next.protocol !== 'http:' && next.protocol !== 'https:') {
                 return {
                     rejection: `Redirect to unsupported protocol "${next.protocol}"`,
+                };
+            }
+            if (next.username || next.password) {
+                return {
+                    rejection: 'Redirect URL must not contain credentials',
                 };
             }
 
@@ -527,6 +562,7 @@ export class HttpChecker implements CheckerStrategy {
     private inspectSslCertificate(
         url: URL,
         timeout: number,
+        address: PinnedAddress,
     ): Promise<SslCertificateInfo> {
         if (url.protocol !== 'https:') {
             return Promise.reject(
@@ -536,9 +572,11 @@ export class HttpChecker implements CheckerStrategy {
 
         return new Promise<SslCertificateInfo>((resolve, reject) => {
             const socket = connect({
-                host: url.hostname,
+                host: address.address,
                 port: Number(url.port) || 443,
-                servername: url.hostname,
+                servername: isIP(url.hostname.replace(/^\[|\]$/g, ''))
+                    ? undefined
+                    : url.hostname,
                 rejectUnauthorized: false,
                 timeout,
             });

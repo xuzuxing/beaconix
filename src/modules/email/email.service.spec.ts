@@ -84,6 +84,23 @@ const payload = {
 };
 
 describe('EmailService', () => {
+    it('renders capacity notification actions and escapes their label and URL', async () => {
+        const { service, emails } = createService();
+        await service.send(EmailTemplate.NOTIFICATION, {
+            to: 'owner@example.test',
+            title: '监控数量宽限期',
+            body: '72 小时后限制运行',
+            actionUrl:
+                'https://beacon.example/?organizationId=org&source=email',
+            actionLabel: '<管理套餐>',
+        });
+        const html = emails.send.mock.calls[0][0].html;
+        expect(html).toContain(
+            'href="https://beacon.example/?organizationId=org&amp;source=email"',
+        );
+        expect(html).toContain('&lt;管理套餐&gt;');
+        expect(html).toContain('72 小时后限制运行');
+    });
     beforeEach(() => {
         (createTransport as jest.Mock).mockReset();
     });

@@ -260,6 +260,18 @@ describe('StatusPagesService', () => {
     });
 
     describe('getPublicBySlug', () => {
+        it('masks historical UP at the capacity deadline without waiting for the sweep', async () => {
+            const { service, prisma, tx } = createService();
+            prisma.statusPage.findUnique.mockResolvedValue(statusPageRow);
+            tx.monitor.findMany.mockResolvedValue([
+                monitor({
+                    quotaGraceEndsAt: AS_OF,
+                    state: { ...monitorRow.state, status: 'UP' },
+                }),
+            ]);
+            const result = await service.getPublicBySlug('acme-status');
+            expect(result.monitors[0].status).toBe('UNKNOWN');
+        });
         it('derives the 24h uptime per monitor from one aggregate', async () => {
             const { service, prisma, tx } = createService({
                 uptimeRows: [

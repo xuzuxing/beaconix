@@ -31,7 +31,9 @@ function createService() {
         run(prisma),
     );
 
-    const service = new EffectivePlanService(prisma);
+    const service = new EffectivePlanService(prisma, {
+        reconcile: jest.fn().mockResolvedValue(null),
+    } as never);
 
     return { service, prisma };
 }
@@ -188,6 +190,9 @@ describe('EffectivePlanService', () => {
 
     it('builds the subscription stack and marks the effective plan', async () => {
         const { service, prisma } = createService();
+        prisma.subscription.findFirst.mockImplementation(({ where }) =>
+            where.status === 'ACTIVE' ? { plan: proPlan } : null,
+        );
         prisma.subscription.findMany.mockResolvedValue([
             {
                 id: 'sub-team',
@@ -219,6 +224,9 @@ describe('EffectivePlanService', () => {
 
     it('shows frozen entries in the stack without making them effective', async () => {
         const { service, prisma } = createService();
+        prisma.subscription.findFirst.mockImplementation(({ where }) =>
+            where.status === 'ACTIVE' ? { plan: teamPlan } : null,
+        );
         prisma.subscription.findMany.mockResolvedValue([
             {
                 id: 'sub-team',

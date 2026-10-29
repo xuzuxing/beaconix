@@ -61,6 +61,7 @@ function fixture(channel = 'EMAIL') {
             findFirst: jest.fn().mockResolvedValue({ id: 'invite' }),
             findMany: jest.fn().mockResolvedValue([]),
         },
+        monitorCapacityCycle: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     prisma.$transaction.mockImplementation((work) => work(prisma));
     const email = { send: jest.fn().mockResolvedValue(undefined) };
@@ -80,6 +81,36 @@ function fixture(channel = 'EMAIL') {
 }
 
 describe('Notification delivery worker', () => {
+    it('skips a queued capacity reminder when renewal already resolved its cycle', async () => {
+        const { service, email, job, prisma } = fixture();
+        Object.assign(job.payload.audience, {
+            monitorCapacityCycleId: 'cycle',
+            monitorCapacityStage: 'MONITOR_CAPACITY_GRACE_ENDING',
+            organizationRoles: ['OWNER', 'ADMIN'],
+        });
+        await service.processPending();
+        expect(email.send).not.toHaveBeenCalled();
+        expect(prisma.notificationDelivery.updateMany).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                data: expect.objectContaining({ status: 'SKIPPED' }),
+            }),
+        );
+    });
+
+    it('retries a failed capacity email with the same delivery key', async () => {
+        const { service, email, job } = fixture();
+        Object.assign(job.payload.audience, {
+            monitorCapacityCycleId: 'cycle',
+            monitorCapacityStage: 'MONITOR_CAPACITY_RESTORED',
+        });
+        email.send.mockRejectedValueOnce(new Error('temporary mail failure'));
+        await service.processPending();
+        await service.processPending();
+        expect(email.send.mock.calls.map((call) => call[2])).toEqual([
+            'stable-key',
+            'stable-key',
+        ]);
+    });
     it('skips queued SSE after membership or account eligibility is lost', async () => {
         const { service, prisma, streams } = fixture('SSE');
         prisma.user.findFirst.mockResolvedValue(null);

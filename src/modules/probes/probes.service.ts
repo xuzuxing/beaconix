@@ -32,6 +32,7 @@ import { ADMIN_ROLES } from '../notifications/notification-event';
 import type { InputJsonValue } from '../../generated/prisma/internal/prismaNamespace';
 import { SystemProbeScheduler } from '../admin/system-probes/system-probe-scheduler';
 import { QuotaService } from '../../shared/quota/quota.service';
+import { capacityRestricted } from '../../shared/subscription/monitor-capacity.util';
 import {
     CheckerService,
     roundAttributionWindowMs,
@@ -79,6 +80,7 @@ const MONITOR_SELECT = {
     organizationId: true,
     projectId: true,
     enabled: true,
+    quotaGraceEndsAt: true,
     deletedAt: true,
 } as const;
 
@@ -134,8 +136,6 @@ export class ProbesService implements OnModuleInit {
         dto: CreateProbeDto,
         actorId?: string,
     ): Promise<ProbeEntity> {
-        await this.quotaService.assertFeatureAllowed(orgId, 'tenantProbe');
-
         const secret = this.generateSecret('tnt');
 
         const probe = await this.prisma.$transaction(async (tx) => {
@@ -537,8 +537,26 @@ export class ProbesService implements OnModuleInit {
                               monitor.deletedAt === null && monitor.enabled,
                       );
 
+        const policies = new Map<
+            string,
+            Awaited<ReturnType<QuotaService['getMonitorPolicy']>>
+        >();
+        for (const monitor of monitors) {
+            if (monitor.organizationId && !policies.has(monitor.organizationId))
+                policies.set(
+                    monitor.organizationId,
+                    await this.quotaService.getMonitorPolicy(
+                        monitor.organizationId,
+                    ),
+                );
+        }
         const supportedMonitors = monitors.filter(
-            (monitor) => monitor.type === 'HTTP' || monitor.type === 'TCP',
+            (monitor) =>
+                (monitor.type === 'HTTP' || monitor.type === 'TCP') &&
+                !capacityRestricted(monitor) &&
+                !policies
+                    .get(monitor.organizationId)
+                    ?.capacityRestrictedIds?.includes(monitor.id),
         );
 
         await this.writeExecution({
@@ -642,6 +660,11 @@ export class ProbesService implements OnModuleInit {
                       }),
             },
         });
+        for (const orgId of [
+            ...new Set(authorized.map(({ organizationId }) => organizationId)),
+        ]) {
+            if (orgId) await this.quotaService.getMonitorPolicy(orgId);
+        }
         const prepared = fresh.map((result) => {
             if (!result.checkedAt)
                 throw new BadRequestException(
@@ -704,6 +727,13 @@ export class ProbesService implements OnModuleInit {
         });
         prepared.sort((a, b) => a.monitor.id.localeCompare(b.monitor.id));
         const rows = await this.prisma.$transaction(async (tx) => {
+            for (const organizationId of [
+                ...new Set(
+                    prepared.map(({ monitor }) => monitor.organizationId),
+                ),
+            ].sort()) {
+                await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR SHARE`;
+            }
             const saved: { id: string; appliedAt: Date | null }[] = [];
             for (const item of prepared) {
                 await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${item.monitor.id} FOR UPDATE`;
@@ -743,6 +773,7 @@ export class ProbesService implements OnModuleInit {
                 if (
                     current.configRevision !== item.canonical.configRevision ||
                     !current.enabled ||
+                    capacityRestricted(current) ||
                     current.deletedAt
                 ) {
                     throw new ConflictException(
@@ -842,6 +873,7 @@ export class ProbesService implements OnModuleInit {
             !monitor ||
             monitor.deletedAt ||
             !monitor.enabled ||
+            capacityRestricted(monitor) ||
             monitor.configRevision !== row.configRevision ||
             Date.now() - row.checkedAt.getTime() > 900_000
         ) {

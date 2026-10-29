@@ -31,6 +31,7 @@ import type { HourlyAvailabilityRow } from './availability.util';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 import type { AccessPrincipal } from '../../common/authorization/access.types';
 import { monitoringProjection } from '../../common/authorization/monitoring-projection';
+import { capacityRestricted } from '../../shared/subscription/monitor-capacity.util';
 
 type Tx = Prisma.TransactionClient;
 type Metrics = {
@@ -243,7 +244,8 @@ export class MonitoringDashboardService {
                 for (const m of monitors) {
                     const status = !m.enabled
                         ? 'paused'
-                        : !m.state ||
+                        : capacityRestricted(m, asOf) ||
+                            !m.state ||
                             ['UNKNOWN', 'PAUSED'].includes(m.state.status)
                           ? 'unknown'
                           : (m.state.status.toLowerCase() as

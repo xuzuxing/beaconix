@@ -1,6 +1,6 @@
 # 007：P0 缺口修复方案
 
-> 状态：方案定稿，进入实施。日期：2026-10-28。
+> 状态：主要修复已实施，持续补齐验收；A6 恢复事务与 A7 DNS pin 已补齐（见 §9）。日期：2026-10-28。
 > 上游：[006 下一阶段开发计划](./006-next-phase-plan.md) 的「P0 — 阻断上线」8 项。
 > 基线：`master` `c7980a4` + 工作树未提交改动（`Dockerfile`/`.dockerignore`/`package.json`/`pnpm-lock.yaml`/`alipay-payment.service(.spec).ts`/`.pipewright.yml`/`scripts/notify.json`）与本方案无关，不动。
 
@@ -154,4 +154,23 @@
 
 ## 8. 回滚
 
-每项独立可回滚：A1 恢复 DTO 字段与 where 表达式；A2-A4 移除金额/状态判定与 `FAILED` 写入；A7 将配置默认改为 `true` 即回到旧行为（无需回滚代码）；A8 `metrics.allowPrivateOnly=false` 且不配 token 即公开；A6 调用点保持事务外断言即可（新增事务版方法惰性无害）；A5 恢复旧 `transition` 调用。
+每项独立可回滚：A1 恢复 DTO 字段与 where 表达式；A2-A4 移除金额/状态判定与 `FAILED` 写入；A7 设置 `MONITOR_ALLOW_PRIVATE_TARGETS=true` 可放行私网目标，DNS pin 仍保留；A8 已撤销应用层准入，无相关配置可回滚，访问控制依赖网络层；A6 调用点恢复事务外断言；A5 恢复旧 `transition` 调用。回滚安全修复会重新引入对应风险。
+
+## 9. 补齐记录（2026-10-28）
+
+- **A6 恢复事务**：`MonitorsService.restore` 的配额计数、类型和间隔校验移入 `access.withProject` 回调，与恢复写入共享事务和组织行锁；套餐查询使用同一 `tx`。新增最后一个名额下并发恢复的回归用例（模拟组织事务串行，使用真实 `QuotaService`），以及校验拒绝后不恢复、不 rebalance 的用例；真实 PostgreSQL 并发验证仍按 §5 留待独立库 e2e。
+- **A7 DNS pin**：`resolvePublicHost` 校验全部 DNS 地址并返回选中的 IP；HTTP 使用 Undici dispatcher 固定连接 IP，保留原 URL 的 Host/SNI 和证书校验；每跳重定向独立解析、校验和固定 IP；证书读取的额外 TLS 连接复用初始目标已校验的 IP。TCP 直接连接校验后的 IP。DNS 失败或超时不再回退到未校验解析。`MONITOR_ALLOW_PRIVATE_TARGETS` 仍支持私有化部署，探针侧行为不变。
+- **验证覆盖**：网络准入、DNS rebinding、重定向、TLS 证书连接参数、真实本地 HTTP/TCP 传输、配额与恢复回归均已补充。TLS 额外连接使用 socket mock 验证；未新增真实 HTTPS 证书服务器。
+- **本地结果**：`pnpm type-check`、`pnpm lint:check`、`pnpm build` 通过；全量 Jest 171 suites / 2307 tests 通过，lint 收尾后相关 3 suites / 79 tests 再次通过；独立代码复核无阻塞项。
+- **范围**：本次收口恢复事务和执行阶段 DNS pin。建监控时对域名的提前解析、其他创建策略断言整体移入事务等原计划剩余项不计作本轮完成；套餐到期后的资源处置策略仍待业务讨论。
+
+## 10. A6 创建策略补齐（2026-10-29）
+
+- `MonitorsService.create` 的数量、间隔、类型和租户探针绑定预算校验均在 `access.withProject` 写入事务内完成；数量断言先获取组织行锁并返回有效套餐，其余策略复用该快照。通知渠道与探针归属在写入前使用同一 `tx` 再次验证。
+- `MonitorsService.restore` 的类型和间隔断言复用数量校验取得的套餐，避免事务内重复查询和重放订阅状态。
+- `ProbesService.create` 的功能开关、数量、创建及通知共享事务。探针创建断言在锁内先校验 `tenantProbe`，再计数，保留 FREE / 无套餐 fallback 的 `FEATURE_NOT_AVAILABLE` 错误优先级。
+- 通知渠道和 API Key 创建原已使用事务内数量断言，本轮确认保留。
+- 回归使用真实 `QuotaService` 与独立事务 mock，覆盖间隔、类型、绑定预算拒绝及正常创建；覆盖免费套餐、无套餐 fallback、失败不写入 / 不发送创建通知，以及锁→套餐→计数顺序和单次套餐读取。
+- 最终验证：`pnpm type-check`、`pnpm lint:check`、`pnpm build` 通过；全量 Jest 173 suites / 2346 tests 通过，独立代码复核通过。
+- 按用户要求跳过真实 PostgreSQL 迁移及并发验收；该项保持未验收，不以 mock 并发或离线测试代替。
+- 本轮未增加保存监控时的域名提前解析；执行时 DNS pin 沿用 §9 实现。套餐到期资源策略和前端对接文档已在 `plans/008-subscription-downgrade.md` 与 `docs/api/subscription-monitor-capacity.md` 落地。

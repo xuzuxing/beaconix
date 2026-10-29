@@ -6,6 +6,7 @@
 
 | 想查什么                             | 文档                                                                           |
 | ------------------------------------ | ------------------------------------------------------------------------------ |
+| 套餐降级、保留监控与邮件通知的前端接入 | [监控数量限制对接](api/subscription-monitor-capacity.md)                         |
 | 项目介绍、启动与基础配置             | [仓库 README](../README.md)                                                    |
 | 监控详情接口与指标口径               | [Monitor Insights](api/monitor-insights.md)                                    |
 | 监控迁移、观测上报、告警运行与验收   | [监控运行指南](guides/monitoring-operations.md)                                |
@@ -42,6 +43,7 @@ docs/
 
 | 文档                                        | 内容                                                 |
 | ------------------------------------------- | ---------------------------------------------------- |
+| [监控数量限制对接](api/subscription-monitor-capacity.md) | 容量接口、名单选择、截止批次、执行状态、错误与通知接入 |
 | [Monitor Insights](api/monitor-insights.md) | 查询参数、快照窗口、指标、时间线、事件和历史覆盖状态 |
 | [响应格式与分页](api/response-format.md)    | 全局包裹层、`items` 分页契约、`@SkipTransform` 例外        |
 

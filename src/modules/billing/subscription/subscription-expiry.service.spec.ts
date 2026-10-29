@@ -1,10 +1,11 @@
+import { ConfigService } from '@nestjs/config';
 import { SubscriptionExpiryService } from './subscription-expiry.service';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date('2026-10-11T12:00:00Z');
-const pro = { id: 'pro', name: 'Pro', sortOrder: 2 };
-const team = { id: 'team', name: 'Team', sortOrder: 1 };
-const free = { id: 'free', name: 'Free', sortOrder: 0 };
+const pro = { id: 'pro', name: 'Pro', sortOrder: 2, maxMonitors: 100 };
+const team = { id: 'team', name: 'Team', sortOrder: 1, maxMonitors: 20 };
+const free = { id: 'free', name: 'Free', sortOrder: 0, maxMonitors: 5 };
 
 function subscription(id: string, days: number, plan = pro) {
     return {
@@ -23,8 +24,11 @@ function createService(rows: ReturnType<typeof subscription>[]) {
         $queryRaw: jest.fn(),
         subscription: {
             findMany: jest.fn().mockResolvedValue(rows),
+            findFirst: jest.fn().mockResolvedValue(null),
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
+        monitorCapacityCycle: { findFirst: jest.fn().mockResolvedValue(null) },
+        monitor: { count: jest.fn().mockResolvedValue(0) },
         plan: { findUnique: jest.fn().mockResolvedValue(free) },
     };
     const prisma = {
@@ -42,11 +46,62 @@ function createService(rows: ReturnType<typeof subscription>[]) {
         prisma as never,
         registry as never,
         notifications as never,
+        {
+            getEffectivePlanInTransaction: jest
+                .fn()
+                .mockImplementation(
+                    () =>
+                        rows
+                            .filter((row) => row.expiresAt > NOW)
+                            .sort(
+                                (a, b) => b.plan.sortOrder - a.plan.sortOrder,
+                            )[0]?.plan ?? free,
+                ),
+        } as never,
+        new ConfigService({ app: { webUrl: 'https://beacon.example' } }),
     );
     return { service, prisma, tx, notifications, registry };
 }
 
 describe('SubscriptionExpiryService', () => {
+    it('registers a minute capacity sweep alongside the existing expiry sweep', () => {
+        const { service, registry } = createService([]);
+        service.onModuleInit();
+        expect(registry.register).toHaveBeenCalledWith(
+            expect.objectContaining({
+                name: 'monitor-capacity-sweep',
+                pattern: '* * * * *',
+            }),
+        );
+    });
+
+    it('includes a precise UTC expiry, quantity impact and management link before expiry', async () => {
+        const { service, tx, notifications } = createService([
+            subscription('sub', 2),
+        ]);
+        tx.monitor.count.mockResolvedValue(10);
+        await service.expireSubscriptions();
+        expect(notifications.publish).toHaveBeenCalledWith(
+            expect.objectContaining({
+                type: 'SUBSCRIPTION_EXPIRING',
+                email: true,
+                body: expect.stringContaining('72 小时'),
+                actionUrl: 'https://beacon.example/?organizationId=org',
+            }),
+            tx,
+        );
+    });
+
+    it('avoids a duplicate generic expiry email when the capacity transition already emitted one', async () => {
+        const { service, tx, notifications } = createService([
+            subscription('sub', -1),
+        ]);
+        tx.monitorCapacityCycle.findFirst.mockResolvedValue({
+            id: 'cycle',
+        });
+        expect(await service.expireSubscriptions()).toBe(1);
+        expect(notifications.publish).not.toHaveBeenCalled();
+    });
     beforeEach(() => {
         jest.useFakeTimers().setSystemTime(NOW);
     });

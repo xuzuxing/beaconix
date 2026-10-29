@@ -22,6 +22,8 @@ export interface EmailPayloadMap {
         to: string;
         title: string;
         body: string;
+        actionUrl?: string;
+        actionLabel?: string;
     };
     [EmailTemplate.INVITATION]: {
         to: string;

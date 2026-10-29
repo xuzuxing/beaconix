@@ -1,6 +1,7 @@
 import { NotificationAccessService } from './notification-access.service';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
 import { ADMIN_NOTIFICATION_TYPES } from './notification-event';
+import { capacityStateKey } from '../../shared/subscription/monitor-capacity.util';
 
 function fixture() {
     const db = {
@@ -30,6 +31,7 @@ function fixture() {
         invitation: {
             findMany: jest.fn().mockResolvedValue([{ id: 'invite' }]),
         },
+        monitorCapacityCycle: { findFirst: jest.fn().mockResolvedValue(null) },
         $queryRaw: jest.fn().mockResolvedValue([]),
         $transaction: jest.fn(),
     };
@@ -44,6 +46,51 @@ function fixture() {
 }
 
 describe('Notification current access policy', () => {
+    it('suppresses restoration and limit messages superseded by another retention selection', async () => {
+        const { service, db } = fixture();
+        const state = {
+            id: 'cycle',
+            status: 'LIMITED',
+            toPlanId: 'free',
+            limit: 1,
+            retainedMonitorIds: ['b'],
+            restrictedMonitorIds: ['a'],
+        };
+        const audience = {
+            accessScope: 'ORGANIZATION' as const,
+            userId: 'user',
+            organizationId: 'org',
+            monitorCapacityCycleId: 'cycle',
+            monitorCapacityStage: 'MONITOR_CAPACITY_RESTORED',
+            monitorCapacityStateKey: capacityStateKey(state),
+        };
+        db.monitorCapacityCycle.findFirst.mockResolvedValue({
+            ...state,
+            retainedMonitorIds: ['a'],
+            restrictedMonitorIds: ['b'],
+        });
+        expect(await service.eligible(audience, db as never, true)).toBe(false);
+        audience.monitorCapacityStage = 'MONITOR_CAPACITY_LIMITED';
+        expect(await service.eligible(audience, db as never, true)).toBe(false);
+    });
+    it('suppresses obsolete capacity emails after renewal while keeping inbox history', async () => {
+        const { service, db } = fixture();
+        const audience = {
+            accessScope: 'ORGANIZATION' as const,
+            userId: 'user',
+            organizationId: 'org',
+            monitorCapacityCycleId: 'cycle',
+            monitorCapacityStage: 'MONITOR_CAPACITY_GRACE_ENDING',
+        };
+        expect(await service.eligible(audience, db as never, true)).toBe(false);
+        expect(await service.eligible(audience, db as never, false)).toBe(true);
+        db.monitorCapacityCycle.findFirst.mockResolvedValue({
+            id: 'cycle',
+        });
+        expect(await service.eligible(audience, db as never, true)).toBe(true);
+        db.membership.findFirst.mockResolvedValue(null);
+        expect(await service.eligible(audience, db as never, true)).toBe(false);
+    });
     it('uses the same project scope for list/detail/count predicates without UNKNOWN fallback', async () => {
         const { db, service } = fixture();
         const where = await service.visibleWhere('user');

@@ -138,6 +138,7 @@ export class SystemProbeScheduler implements OnModuleInit {
             if (monitor.tenantProbesOnly) continue;
 
             const policy = await policyFor(monitor.organizationId);
+            if (policy.capacityRestrictedIds?.includes(monitor.id)) continue;
             const count = Math.max(0, policy.maxProbesPerMonitor ?? 0);
             if (count > 0) desired.push({ id: monitor.id, probes: count });
         }

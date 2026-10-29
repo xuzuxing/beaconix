@@ -10,6 +10,7 @@ import { QueryAdminOrdersDto } from './dto';
 import { AdminOrderEntity } from './entities';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { settlePaidOrder } from '../../billing/payment/payment-settlement';
+import { EffectivePlanService } from '../../../shared/subscription/effective-plan.service';
 
 /** Relations flattened into every admin order row. */
 const orderInclude = {
@@ -25,6 +26,7 @@ export class AdminOrdersService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly notifications: NotificationsService,
+        private readonly plans: EffectivePlanService,
     ) {}
 
     /**
@@ -136,6 +138,10 @@ export class AdminOrdersService {
                 paymentId: `manual:${order.id}`,
                 notifications: this.notifications,
             });
+            await this.plans.getEffectivePlanInTransaction(
+                order.organizationId,
+                tx,
+            );
         });
 
         return this.findOne(id);

@@ -127,6 +127,10 @@ enum NotificationType {
   SUBSCRIPTION_RENEWED
   SUBSCRIPTION_EXPIRING
   SUBSCRIPTION_EXPIRED
+  MONITOR_CAPACITY_GRACE_STARTED
+  MONITOR_CAPACITY_GRACE_ENDING
+  MONITOR_CAPACITY_LIMITED
+  MONITOR_CAPACITY_RESTORED
   MONITOR_ALERT
   MONITOR_RECOVERED
   API_KEY_CREATED
@@ -379,6 +383,11 @@ model Organization {
   // Settings stored as JSON for flexibility
   settings Json? @default("{}")
 
+  // Cursor for effective monitor-capacity transitions (not subscription rows).
+  monitorCapacityPlanId     String?
+  monitorCapacityLimit      Int?
+  monitorCapacityObservedAt DateTime?
+
   // Relations
   owner       User         @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Restrict)
   memberships Membership[]
@@ -396,6 +405,7 @@ model Organization {
   subscriptions Subscription[]
   orders        Order[]
   apiKeys       ApiKey[]
+  monitorCapacityCycles MonitorCapacityCycle[]
 
   // 规则引擎
   ruleGroups RuleGroup[]
@@ -1029,6 +1039,9 @@ model Monitor {
   checkSsl           Boolean     @default(false)
   sslExpiryThreshold Int         @default(30)
   enabled            Boolean     @default(true)
+  /// Excluded from the retained quota slots. Execution stops at this instant;
+  /// null means retained. Independent of the user's enabled flag.
+  quotaGraceEndsAt   DateTime?
   configRevision     Int         @default(1)
   historyRevision    Int         @default(0)
 
@@ -1054,6 +1067,7 @@ model Monitor {
   ruleBindings MonitorRuleBinding[]
 
   @@index([organizationId])
+  @@index([organizationId, quotaGraceEndsAt])
   @@index([projectId])
   @@index([enabled])
   @@index([projectId, enabled])
@@ -1388,6 +1402,7 @@ model MonitoringCoverage {
   probeStartedAt DateTime @default(now())
   alertsStartedAt DateTime @default(now())
   version Int @default(1)
+
   @@map("monitoring_coverage")
 }
 
@@ -1402,6 +1417,7 @@ model MonitorHistory {
   effectiveAt DateTime @default(now())
   revision Int
   cause String
+
   @@unique([monitorId, revision])
   @@index([projectId, effectiveAt])
   @@index([monitorId, effectiveAt, revision])
@@ -1433,6 +1449,7 @@ model AlertEvent {
   firstNotifiedAt DateTime?
   updatedAt DateTime @updatedAt
   deliveries AlertDelivery[]
+
   @@index([projectId, updatedAt, id])
   @@index([projectId, status])
   @@map("alert_events")
@@ -1454,6 +1471,7 @@ model AlertDelivery {
   lastError String?
   createdAt DateTime @default(now())
   event AlertEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
   @@unique([eventId, eventRevision, phase, channelId])
   @@index([status, nextAttemptAt])
   @@map("alert_deliveries")
@@ -1634,6 +1652,37 @@ model Subscription {
   @@index([organizationId, status])
   @@index([expiresAt])
   @@map("subscriptions")
+}
+
+// 套餐降级监控数量宽限周期
+model MonitorCapacityCycle {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  sourceKey            String    @unique
+  sourceSubscriptionId String?
+  purchaserId          String?
+  fromPlanId           String
+  fromLimit            Int
+  toPlanId             String
+  limit                Int
+  startsAt             DateTime
+  graceEndsAt          DateTime
+  /// GRACE / LIMITED / RESOLVED. Closed rows are retained as tombstones.
+  status               String    @default("GRACE")
+  selectedMonitorIds   String[]  @default([])
+  retainedMonitorIds   String[]  @default([])
+  restrictedMonitorIds String[]  @default([])
+  announcedAt          DateTime?
+  warnedAt             DateTime?
+  resolvedAt           DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([status, graceEndsAt])
+  @@map("monitor_capacity_cycles")
 }
 
 // 订单

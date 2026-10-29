@@ -1,8 +1,10 @@
 import { lookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
+import type { LookupAddress } from 'node:dns';
+import type { LookupFunction } from 'node:net';
 
 /**
- * Address admission shared by the monitoring checkers and the infra layer.
+ * Address admission for platform-side monitoring checkers.
  *
  * For **platform-side local checks** private targets are refused: the local
  * executor runs on our servers, so reaching `10/8` or `169.254.169.254` would
@@ -70,35 +72,53 @@ export function privateTargetsAllowed(): boolean {
 }
 
 export type AddressVerdict = { ok: true } | { ok: false; reason: string };
+export interface PinnedAddress {
+    address: string;
+    family: number;
+}
+export type ResolvedAddressVerdict =
+    ({ ok: true } & PinnedAddress) | { ok: false; reason: string };
 
 /**
- * Vets a host before the platform connects to it: literal addresses are checked
- * directly, domains are resolved and **every** returned address must be public.
- *
- * A resolution failure is not a rejection here — the transport layer reports the
- * real DNS error with its own classification. The remaining (narrow) window is a
- * DNS answer that changes between this check and the socket connect.
+ * Resolves once and returns the checked address for the socket to use. Every
+ * DNS answer must be public. DNS errors propagate; callers must never fall back
+ * to another, unchecked lookup. Private deployments still resolve and pin.
  */
-export async function assertPublicHost(host: string): Promise<AddressVerdict> {
-    if (privateTargetsAllowed()) return { ok: true };
-
-    if (isIP(host)) {
-        return isPublicAddress(host)
-            ? { ok: true }
+export async function resolvePublicHost(
+    hostname: string,
+    signal?: AbortSignal,
+): Promise<ResolvedAddressVerdict> {
+    signal?.throwIfAborted();
+    const host = hostname.replace(/^\[|\]$/g, '');
+    const allowPrivate = privateTargetsAllowed();
+    const family = isIP(host);
+    if (family) {
+        return allowPrivate || isPublicAddress(host)
+            ? { ok: true, address: host, family }
             : { ok: false, reason: 'private or reserved address' };
     }
 
-    let addresses: { address: string }[];
+    const addresses = await new Promise<LookupAddress[]>((resolve, reject) => {
+        const abort = () => {
+            signal?.removeEventListener('abort', abort);
+            const reason: unknown = signal?.reason;
+            reject(
+                reason instanceof Error
+                    ? reason
+                    : new Error('DNS resolution aborted'),
+            );
+        };
+        signal?.addEventListener('abort', abort, { once: true });
+        void lookup(host, { all: true, verbatim: true })
+            .then(resolve, reject)
+            .finally(() => signal?.removeEventListener('abort', abort));
+    });
+    signal?.throwIfAborted();
+    if (!addresses.length) throw new Error('Hostname resolved to no addresses');
 
-    try {
-        addresses = await lookup(host, { all: true, verbatim: true });
-    } catch {
-        return { ok: true };
-    }
-
-    if (!addresses.length) return { ok: true };
-
-    const offender = addresses.find(({ address }) => !isPublicAddress(address));
+    const offender = !allowPrivate
+        ? addresses.find(({ address }) => !isPublicAddress(address))
+        : undefined;
 
     if (offender) {
         return {
@@ -107,7 +127,18 @@ export async function assertPublicHost(host: string): Promise<AddressVerdict> {
         };
     }
 
-    return { ok: true };
+    return { ok: true, ...addresses[0] };
+}
+
+/** Covers both Node lookup callback shapes without consulting DNS again. */
+export function pinnedLookup({
+    address,
+    family,
+}: PinnedAddress): LookupFunction {
+    return (_hostname, options, callback) => {
+        if (options.all) callback(null, [{ address, family }]);
+        else callback(null, address, family);
+    };
 }
 
 /** Synchronous check for literal addresses (used while saving a monitor). */

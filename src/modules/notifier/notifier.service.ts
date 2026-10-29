@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { capacityRestricted } from '../../shared/subscription/monitor-capacity.util';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { randomUUID } from 'node:crypto';
@@ -191,9 +192,9 @@ export class NotifierService {
                     enabled: true,
                     deletedAt: null,
                 },
-                select: { id: true },
+                select: { id: true, quotaGraceEndsAt: true },
             });
-            if (!monitor) return false;
+            if (!monitor || capacityRestricted(monitor)) return false;
         }
         const channel = await this.prisma.notificationChannel.findUnique({
             where: { id: channelId },
@@ -311,6 +312,7 @@ export class NotifierService {
                 !monitor ||
                 !!monitor.deletedAt ||
                 !monitor.enabled ||
+                capacityRestricted(monitor) ||
                 (planned.monitorRevision !== undefined &&
                     planned.monitorRevision !== monitor.revision) ||
                 (planned.monitorConfigRevision !== undefined &&

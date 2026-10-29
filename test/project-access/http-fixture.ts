@@ -45,6 +45,7 @@ import { MonitorSecretsService } from '../../src/modules/monitors/monitor-secret
 import type { SystemProbeScheduler } from '../../src/modules/admin/system-probes/system-probe-scheduler';
 import type { NotifierService } from '../../src/modules/notifier/notifier.service';
 import { EffectivePlanService } from '../../src/shared/subscription/effective-plan.service';
+import { MonitorCapacityService } from '../../src/shared/subscription/monitor-capacity.service';
 import { QuotaService } from '../../src/shared/quota/quota.service';
 import { businessServices } from './fixtures';
 import { explicitConnectionString, type connectPrisma } from './harness';
@@ -116,7 +117,13 @@ export async function createHttpModule(
         app: { isDevelopment: false },
         monitor: { secretKey: Buffer.alloc(32, 7).toString('base64') },
     });
-    const quota = new QuotaService(prisma, new EffectivePlanService(prisma));
+    const quota = new QuotaService(
+        prisma,
+        new EffectivePlanService(
+            prisma,
+            new MonitorCapacityService(prisma, services.notifications, config),
+        ),
+    );
     const monitors = new MonitorsService(
         prisma,
         { rebalance: async () => {} } as unknown as SystemProbeScheduler,

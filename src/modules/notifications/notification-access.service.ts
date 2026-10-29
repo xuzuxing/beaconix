@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { capacityStateKey } from '../../shared/subscription/monitor-capacity.util';
 import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../infra/database/prisma.service';
 import { ProjectAccessService } from '../../common/authorization/project-access.service';
@@ -289,6 +290,79 @@ export class NotificationAccessService {
         }
         if (!user || !audience.organizationId) return false;
         if (audience.accessScope === 'ORGANIZATION') {
+            if (
+                email &&
+                audience.monitorCapacityCycleId &&
+                audience.monitorCapacityStateKey
+            ) {
+                const current = await db.monitorCapacityCycle.findFirst({
+                    where: {
+                        id: audience.monitorCapacityCycleId,
+                        organizationId: audience.organizationId,
+                    },
+                });
+                if (
+                    !current ||
+                    capacityStateKey(current) !==
+                        audience.monitorCapacityStateKey
+                )
+                    return false;
+                const released = audience.monitorCapacityReleasedIds;
+                if (
+                    released?.length &&
+                    (await db.monitor.count({
+                        where: {
+                            organizationId: audience.organizationId,
+                            id: { in: released },
+                            deletedAt: null,
+                            OR: [
+                                { quotaGraceEndsAt: null },
+                                { quotaGraceEndsAt: { gt: new Date() } },
+                            ],
+                        },
+                    })) !== released.length
+                )
+                    return false;
+            }
+            if (
+                email &&
+                audience.monitorCapacityStage ===
+                    'MONITOR_CAPACITY_GRACE_ENDING' &&
+                audience.monitorCapacityDeadline
+            ) {
+                const deadline = new Date(audience.monitorCapacityDeadline);
+                if (
+                    !(deadline > new Date()) ||
+                    !(await db.monitor.count({
+                        where: {
+                            organizationId: audience.organizationId,
+                            deletedAt: null,
+                            enabled: true,
+                            quotaGraceEndsAt: deadline,
+                        },
+                    }))
+                )
+                    return false;
+            }
+            if (
+                email &&
+                audience.monitorCapacityCycleId &&
+                audience.monitorCapacityStage !== 'MONITOR_CAPACITY_RESTORED'
+            ) {
+                const cycle = await db.monitorCapacityCycle.findFirst({
+                    where: {
+                        id: audience.monitorCapacityCycleId,
+                        organizationId: audience.organizationId,
+                        status: { in: ['GRACE', 'LIMITED'] },
+                        ...(audience.monitorCapacityStage ===
+                        'MONITOR_CAPACITY_LIMITED'
+                            ? { restrictedMonitorIds: { isEmpty: false } }
+                            : { graceEndsAt: { gt: new Date() } }),
+                    },
+                    select: { id: true },
+                });
+                if (!cycle) return false;
+            }
             return !!(await db.membership.findFirst({
                 where: {
                     userId: user.id,

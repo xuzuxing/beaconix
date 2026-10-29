@@ -52,6 +52,9 @@ function createService() {
     const service = new AdminOrdersService(
         prisma as unknown as PrismaService,
         notifications as never,
+        {
+            getEffectivePlanInTransaction: jest.fn().mockResolvedValue(null),
+        } as never,
     );
 
     return { service, prisma, notifications };

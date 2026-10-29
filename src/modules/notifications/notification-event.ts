@@ -23,6 +23,8 @@ export interface NotificationEvent extends CreateNotificationDto {
     email?: boolean;
     accessScope?: NotificationAudience['accessScope'];
     projectId?: string;
+    actionUrl?: string;
+    actionLabel?: string;
 }
 
 export interface NotificationAudience {
@@ -34,6 +36,11 @@ export interface NotificationAudience {
     email?: string;
     minimumRole?: 'MEMBER';
     organizationRoles?: MembershipRole[];
+    monitorCapacityCycleId?: string;
+    monitorCapacityStage?: string;
+    monitorCapacityDeadline?: string;
+    monitorCapacityStateKey?: string;
+    monitorCapacityReleasedIds?: string[];
 }
 
 export type NotificationDb = Prisma.TransactionClient;
@@ -49,4 +56,8 @@ export const ADMIN_NOTIFICATION_TYPES: NotificationType[] = [
     'SUBSCRIPTION_RENEWED',
     'SUBSCRIPTION_EXPIRING',
     'SUBSCRIPTION_EXPIRED',
+    'MONITOR_CAPACITY_GRACE_STARTED',
+    'MONITOR_CAPACITY_GRACE_ENDING',
+    'MONITOR_CAPACITY_LIMITED',
+    'MONITOR_CAPACITY_RESTORED',
 ];

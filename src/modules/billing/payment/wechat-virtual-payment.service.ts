@@ -52,6 +52,7 @@ import { PaymentService } from './payment.service';
 import { RefundService } from '../refund/refund.service';
 import { generateRefundNo } from '../refund/refund-number.util';
 import { settlePaidOrder } from './payment-settlement';
+import { EffectivePlanService } from '../../../shared/subscription/effective-plan.service';
 
 /** 兜底查单只回看最近一天：更早的单应该已经在后台人工对账过。 */
 const RECONCILE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
@@ -168,6 +169,7 @@ export class WechatVirtualPaymentService implements RefundProvider {
         private readonly miniprogramClient: MiniprogramClient,
         private readonly runtimeConfig: WechatRuntimeConfigService,
         private readonly refunds: RefundService,
+        private readonly plans: EffectivePlanService,
     ) {}
 
     /**
@@ -555,6 +557,10 @@ export class WechatVirtualPaymentService implements RefundProvider {
                     paymentId: payment.id,
                     notifications: this.notifications,
                 });
+                await this.plans.getEffectivePlanInTransaction(
+                    order.organizationId,
+                    tx,
+                );
 
                 return { settled: true, duplicate: false };
             });

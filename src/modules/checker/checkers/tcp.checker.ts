@@ -4,7 +4,8 @@ import type { CheckResult } from './check-result';
 import { MonitorType } from '../../../generated/prisma/enums';
 import type { MonitorModel } from '../../../generated/prisma/models';
 import type { CheckerStrategy } from './checker.interface';
-import { assertPublicHost } from './network-guard';
+import { resolvePublicHost } from './network-guard';
+import { describeCheckError } from './check-result';
 
 export interface TcpTarget {
     host: string;
@@ -52,7 +53,25 @@ export class TcpChecker implements CheckerStrategy {
             };
         }
 
-        const verdict = await assertPublicHost(parsed.host);
+        const startedAt = Date.now();
+        let verdict: Awaited<ReturnType<typeof resolvePublicHost>>;
+        try {
+            verdict = await resolvePublicHost(
+                parsed.host,
+                AbortSignal.timeout(timeout),
+            );
+        } catch (error) {
+            return {
+                success: false,
+                latency: Date.now() - startedAt,
+                error: describeCheckError(error),
+                failureKind:
+                    (error as Error).name === 'TimeoutError'
+                        ? 'TIMEOUT'
+                        : 'TRANSPORT',
+                checkedAt: new Date(),
+            };
+        }
 
         if (!verdict.ok) {
             return {
@@ -65,13 +84,13 @@ export class TcpChecker implements CheckerStrategy {
             };
         }
 
-        const startedAt = Date.now();
+        const remaining = Math.max(1, timeout - (Date.now() - startedAt));
 
         return new Promise<CheckResult>((resolve) => {
             const socket = new Socket();
             const timer = setTimeout(
                 () => finish(false, `Connection timed out after ${timeout}ms`),
-                timeout,
+                remaining,
             );
             let settled = false;
 
@@ -101,7 +120,7 @@ export class TcpChecker implements CheckerStrategy {
                 });
             };
 
-            socket.setTimeout(timeout);
+            socket.setTimeout(remaining);
             socket.once('connect', () => finish(true, null));
             socket.once('timeout', () =>
                 finish(false, `Connection timed out after ${timeout}ms`),
@@ -110,7 +129,11 @@ export class TcpChecker implements CheckerStrategy {
                 finish(false, error.message),
             );
 
-            socket.connect(parsed.port, parsed.host);
+            socket.connect({
+                port: parsed.port,
+                host: verdict.address,
+                family: verdict.family,
+            });
         });
     }
 }

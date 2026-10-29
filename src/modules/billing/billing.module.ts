@@ -18,9 +18,13 @@ import { RefundModule } from './refund/refund.module';
 import { SubscriptionController } from './subscription/subscription.controller';
 import { SubscriptionExpiryService } from './subscription/subscription-expiry.service';
 import { SubscriptionService } from './subscription/subscription.service';
+import { MonitorCapacityController } from './subscription/monitor-capacity.controller';
+import { BillingMonitorCapacityService } from './subscription/monitor-capacity.service';
+import { AuthorizationModule } from '../../common/authorization/authorization.module';
 
 @Module({
     imports: [
+        AuthorizationModule,
         SharedSubscriptionModule,
         QuotaModule,
         WechatModule,
@@ -30,6 +34,7 @@ import { SubscriptionService } from './subscription/subscription.service';
         RefundModule,
     ],
     controllers: [
+        MonitorCapacityController,
         PlanController,
         SubscriptionController,
         OrderController,
@@ -37,6 +42,7 @@ import { SubscriptionService } from './subscription/subscription.service';
         QuotaController,
     ],
     providers: [
+        BillingMonitorCapacityService,
         PlanService,
         SubscriptionService,
         SubscriptionExpiryService,
@@ -47,6 +53,7 @@ import { SubscriptionService } from './subscription/subscription.service';
         WechatVirtualPaymentService,
     ],
     exports: [
+        SharedSubscriptionModule,
         PlanService,
         SubscriptionService,
         OrderService,
