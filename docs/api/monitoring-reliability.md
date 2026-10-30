@@ -1,5 +1,7 @@
 # C6 + C5 前端对接
 
+项目用户的事件筛选、详情、渠道投递与尝试记录见 [告警查询与投递追踪](alert-event-investigation.md)；本文的平台失败列表继续仅对 SUPER_ADMIN 开放。
+
 ## 无数据状态
 
 `GET /api/projects/:projectId/monitors/:monitorId/state` 新增 `noDataSince: string | null`（ISO 时间）。监控 insights 的 `latest` 同样新增 `noDataSince`，格式沿用该接口时区。

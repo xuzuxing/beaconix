@@ -1,4 +1,8 @@
-import { ValidationPipe, type INestApplication } from '@nestjs/common';
+import {
+    ValidationPipe,
+    type INestApplication,
+    type ValidationPipeOptions,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { JwtAuthGuard } from '../../src/common/guards/jwt-auth.guard';
@@ -62,7 +66,11 @@ export function identityTables(org: any) {
     };
 }
 
-export function configureBusinessApp(app: INestApplication, db: any) {
+export function configureBusinessApp(
+    app: INestApplication,
+    db: any,
+    validation: ValidationPipeOptions = {},
+) {
     const jwt = new JwtService({ secret: 'offline-business-regression-only' });
     app.setGlobalPrefix('api');
     app.useGlobalPipes(
@@ -70,6 +78,7 @@ export function configureBusinessApp(app: INestApplication, db: any) {
             transform: true,
             whitelist: true,
             forbidNonWhitelisted: true,
+            ...validation,
         }),
     );
     app.useGlobalGuards(new JwtAuthGuard(jwt, new Reflector(), db));

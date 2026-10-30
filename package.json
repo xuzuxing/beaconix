@@ -53,7 +53,7 @@
     "probe:publish": "node probes/agent/scripts/publish-release.js",
     "probe:fleet": "cross-env BEACON_API_URL=http://localhost:9000/api BEACON_ADMIN_EMAIL=admin@beacon.dev BEACON_ADMIN_PASSWORD=Qwer1234 PROBE_ALLOW_INSECURE=true node probes/test-fleet/index.js run --count ",
     "probe:test": "node --test \"probes/agent/test/*.test.js\"",
-    "test:business:offline": "jest --config test/jest-e2e.json --runInBand --runTestsByPath test/billing-payment.e2e-spec.ts test/monitoring-reliability.e2e-spec.ts test/monitoring-lifecycle.e2e-spec.ts test/subscription-capacity.e2e-spec.ts test/runtime-availability.e2e-spec.ts test/deployment-paths.e2e-spec.ts"
+    "test:business:offline": "jest --config test/jest-e2e.json --runInBand --runTestsByPath test/billing-payment.e2e-spec.ts test/monitoring-reliability.e2e-spec.ts test/monitoring-lifecycle.e2e-spec.ts test/subscription-capacity.e2e-spec.ts test/runtime-availability.e2e-spec.ts test/deployment-paths.e2e-spec.ts test/alert-event-queries.e2e-spec.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

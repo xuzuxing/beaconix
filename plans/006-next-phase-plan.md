@@ -115,7 +115,7 @@
 
 | 任务 | 落点 | 验收口径 |
 |---|---|---|
-| C1 告警事件查询端点 | `GET /projects/:projectId/monitoring/alert-events`（按 kind/status/severity/时间/监控过滤 + 分页），`GET .../alert-events/:id`（含投递与证据） | 复用 `docs/api/response-format.md` 的 `items` 分页契约；`ProjectAccessGuard` 新轨 |
+| C1 告警事件查询端点 | 已实现：项目事件列表/详情、关联投递及尝试日志分页，按 kind/status/level/开始时间/监控过滤；失败重试复用原端点 | ProjectAccessGuard + 事务内鉴权；安全投影、历史与权限回归，前端契约见 `docs/api/alert-event-investigation.md`、实施见 012 |
 | C2 确认与关闭 | `AlertEvent.status` 扩为 `ONGOING/ACKED/RESOLVED`，新增 `ACKED` 迁移；`POST .../alert-events/:id/ack`（记录 `ackedBy/ackedAt`）；自动恢复仍由求值写 `RESOLVED`，ACK 不影响判定 | 单测：ACK 后新异常不重复开启新事件；恢复后状态为 RESOLVED |
 | C3 静默与维护窗口 | 新模型 `MonitorSilence`（scope: monitor/项目/全部，`startsAt/endsAt/reason/createdBy`），结算与投递两处判断静默：静默期不新建事件、不投递，事件落 `suppressedReason` | 单测：静默期内异常不产生投递；静默结束后的持续异常立即开启事件 |
 | C4 通用 Webhook 渠道 | `NotificationChannelType` 增 `WEBHOOK`，支持自定义 header 与 HMAC-SHA256 签名（`X-Beacon-Signature: t=..,v1=..`）；payload 复用 `channel-message.ts` 结构 | 单测 + 本地 server 接收验证；签名可被外部独立验证 |
