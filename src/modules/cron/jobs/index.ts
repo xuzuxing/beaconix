@@ -7,3 +7,4 @@ export { AttachmentCleanupService } from './attachment-cleanup.service';
 export { WechatVirtualPayReconcileService } from './wechat-virtual-pay-reconcile.service';
 export { RefundReconcileService } from './refund-reconcile.service';
 export { PaymentReconcileService } from './payment-reconcile.service';
+export { AlertDeliveryFailureSummaryService } from './alert-delivery-failure-summary.service';

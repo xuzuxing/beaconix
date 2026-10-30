@@ -13,6 +13,7 @@ import {
     WechatVirtualPayReconcileService,
     RefundReconcileService,
     PaymentReconcileService,
+    AlertDeliveryFailureSummaryService,
 } from './jobs';
 
 @Module({
@@ -32,6 +33,7 @@ import {
         WechatVirtualPayReconcileService,
         RefundReconcileService,
         PaymentReconcileService,
+        AlertDeliveryFailureSummaryService,
     ],
 })
 export class CronModule {}

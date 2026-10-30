@@ -133,6 +133,7 @@ enum NotificationType {
   MONITOR_CAPACITY_RESTORED
   MONITOR_ALERT
   MONITOR_RECOVERED
+  ALERT_DELIVERY_FAILED_SUMMARY
   API_KEY_CREATED
   API_KEY_REVOKED
   PERSONAL_ACCESS_TOKEN_CREATED
@@ -1081,6 +1082,8 @@ model MonitorState {
   status             MonitorStatus  @default(UNKNOWN)
   failCount          Int            @default(0)
   lastCheckAt        DateTime?
+  noDataSince        DateTime?
+  lastEffectiveObservationAt DateTime?
   // 最近一次"本地检测"时间（探针回调不会推进它），调度到期判定只看这一列
   lastLocalCheckAt   DateTime?
   executionBlockedReason String?
@@ -1474,6 +1477,7 @@ model AlertDelivery {
 
   @@unique([eventId, eventRevision, phase, channelId])
   @@index([status, nextAttemptAt])
+  @@index([status, createdAt, id])
   @@map("alert_deliveries")
 }
 

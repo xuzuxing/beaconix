@@ -37,7 +37,7 @@ async function bootstrap() {
     app.useBodyParser('text', { type: ['text/xml', 'application/xml'] });
 
     // Global prefix
-    app.setGlobalPrefix('api');
+    app.setGlobalPrefix(appConfig.globalPrefix);
 
     app.enableCors({
         origin:

@@ -46,6 +46,7 @@ export interface NotificationAudience {
 export type NotificationDb = Prisma.TransactionClient;
 export const ADMIN_ROLES: MembershipRole[] = ['OWNER', 'ADMIN'];
 export const ADMIN_NOTIFICATION_TYPES: NotificationType[] = [
+    'ALERT_DELIVERY_FAILED_SUMMARY',
     'API_KEY_CREATED',
     'API_KEY_REVOKED',
     'PROBE_ENROLLED',

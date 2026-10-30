@@ -31,6 +31,12 @@ export class MonitorStateEntity {
     @ApiPropertyOptional({ example: '2026-03-05T12:00:00.000Z' })
     lastCheckAt: Date | null;
 
+    @ApiPropertyOptional({
+        description:
+            'No-data incident detection time; null after a fresh effective observation',
+    })
+    noDataSince: Date | null;
+
     @ApiPropertyOptional({ example: 128, description: 'Last latency in ms' })
     lastLatency: number | null;
 

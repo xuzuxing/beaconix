@@ -19,6 +19,25 @@ const payload: NotificationPayload = {
 };
 
 describe('notification date formatting', () => {
+    it.each(['NO_DATA', 'NO_DATA_RECOVERED'] as const)(
+        'renders %s without a reachability recovery claim',
+        (event) => {
+            const input = {
+                ...payload,
+                event,
+                status: event === 'NO_DATA' ? 'UNKNOWN' : 'DOWN',
+                latency: null,
+            };
+            for (const render of [renderText, renderMarkdown]) {
+                expect(render(input)).toContain(
+                    event === 'NO_DATA'
+                        ? '[NO DATA]'
+                        : '[OBSERVATIONS RESUMED]',
+                );
+                expect(render(input)).not.toContain('[RECOVERED]');
+            }
+        },
+    );
     it.each([new Date(iso), iso, '2026-10-10T21:30:49.009+08:00'])(
         'renders dates consistently across channel formats: %s',
         (checkedAt) => {

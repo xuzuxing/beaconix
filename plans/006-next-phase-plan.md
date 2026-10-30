@@ -119,8 +119,8 @@
 | C2 确认与关闭 | `AlertEvent.status` 扩为 `ONGOING/ACKED/RESOLVED`，新增 `ACKED` 迁移；`POST .../alert-events/:id/ack`（记录 `ackedBy/ackedAt`）；自动恢复仍由求值写 `RESOLVED`，ACK 不影响判定 | 单测：ACK 后新异常不重复开启新事件；恢复后状态为 RESOLVED |
 | C3 静默与维护窗口 | 新模型 `MonitorSilence`（scope: monitor/项目/全部，`startsAt/endsAt/reason/createdBy`），结算与投递两处判断静默：静默期不新建事件、不投递，事件落 `suppressedReason` | 单测：静默期内异常不产生投递；静默结束后的持续异常立即开启事件 |
 | C4 通用 Webhook 渠道 | `NotificationChannelType` 增 `WEBHOOK`，支持自定义 header 与 HMAC-SHA256 签名（`X-Beacon-Signature: t=..,v1=..`）；payload 复用 `channel-message.ts` 结构 | 单测 + 本地 server 接收验证；签名可被外部独立验证 |
-| C5 死信可见 | `GET /api/admin/alert-deliveries?status=FAILED` + 每日汇总通知（复用 `NotificationDelivery`），保留人工 retry | 终态 FAILED 可达；后台可筛选重试 |
-| C6 stale→UNKNOWN | 每分钟 sweep：`lastAppliedObservationAt`（本地用 `lastLocalCheckAt`）超过 `max(3×interval, 10min)` → 置 `UNKNOWN` 并发一次 `NO_DATA` 事件（同 kind 去重） | 单测：模拟停摆 15 分钟后状态为 UNKNOWN，恢复观测后回 UP 并产生 RECOVERY |
+| C5 死信可见 | 已实现：`GET /api/admin/alert-deliveries?status=FAILED` + 每日组织 OWNER/ADMIN 站内及邮件汇总（复用 `NotificationDelivery`），保留项目人工 retry | 终态 FAILED 可达；后台可筛选重试；离线 HTTP 验证通过 |
+| C6 stale→UNKNOWN | 已实现：每分钟 sweep，独立有效观测时钟 `lastEffectiveObservationAt` 超过 `max(3×interval, 10min)` → UNKNOWN + 单次 NO_DATA；创建/编辑/恢复给予调度宽限 | 离线生命周期测试覆盖停摆、恢复、旧结果拦截和 SSL 独立告警；真实数据库验收按要求跳过 |
 | C7 保留策略扩展 | `monitor-data-cleanup.service.ts` 的 `RETENTION_TARGETS` 增 `alert_events`(180d)/`alert_deliveries`(90d)/`notification_logs`(90d) | 单测沿用现有分批删除 harness |
 | C8 扫描查询下推 | 到期判定改为 SQL 侧条件（`lastLocalCheckAt` + interval 表达式或冗余 `nextCheckAt` 列 + 索引），保留应用层二次校验 | 压测/EXPLAIN 记录写入 `docs/guides/monitoring-operations.md` |
 

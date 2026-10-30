@@ -20,7 +20,9 @@ publishes the complete response schema as `MonitorInsightsEntity`.
 
 - `monitorId`, `range`, `tz`, `asOf`, `from`, `to`: snapshot identity and window.
 - `latest`: normalized status, consecutive failures, latest check time/latency/error,
-  count of all ongoing events.
+  count of all ongoing events. `noDataSince` is nullable and marks an active
+  no-data incident; `executionBlockedReason: NO_DATA` accompanies UNKNOWN.
+  See [monitoring reliability](monitoring-reliability.md) for freshness and recovery semantics.
 - `metrics`: full-window total/failed/rescued checks, effective-success uptime,
   mean and exact P50/P95/P99 local duration in milliseconds.
 - `timeline`: UTC-aligned bounded buckets, timestamps formatted in `tz`.
@@ -31,6 +33,7 @@ publishes the complete response schema as `MonitorInsightsEntity`.
   ongoing events may predate the window, resolved events must have been updated
   within the reliable selected window. Includes origin, suppression, duration,
   observed message, and actual first-notification evidence; `eventsLimit: 20`.
+  Event kinds include `NO_DATA` alongside `CONNECTIVITY`, `AVAILABILITY` and `SSL`.
 - `history`: independent check/event watermarks and AVAILABLE/EMPTY/TRUNCATED
   coverage statuses, with 90-day retention.
 - `metricBasis`: LOCAL samples, EFFECTIVE_SUCCESS availability, LOCAL_DURATION

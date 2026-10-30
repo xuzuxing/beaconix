@@ -261,6 +261,9 @@ export class MonitorInsightsService {
                         ),
                     },
                     latest: {
+                        noDataSince: state?.noDataSince
+                            ? iso(state.noDataSince, tz)
+                            : null,
                         status: !monitor.enabled
                             ? 'PAUSED'
                             : capacityRestricted(monitor, asOf)

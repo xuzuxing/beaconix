@@ -33,13 +33,19 @@ type PinoTransportStream = ReturnType<typeof pino.transport> & {
             ) => {
                 const logger = configService.get<LoggerConfig>('logger')!;
                 const env = configService.get<string>('app.env');
+                const globalPrefix =
+                    configService.get<string>('app.globalPrefix');
+
+                const excludePaths = logger.excludePaths.map(
+                    (path) => `${globalPrefix}${path}`,
+                );
 
                 const params = createPinoConfig(
                     logger.dir,
                     logger.level,
                     logger.prettyPrint,
                     logger.toFile,
-                    logger.excludePaths,
+                    excludePaths,
                     logger.sensitiveFields,
                     {
                         serviceName: logger.serviceName,

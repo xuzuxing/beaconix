@@ -870,6 +870,7 @@ export class CheckerService {
                     await tx.$queryRaw`SELECT id FROM monitors WHERE id = ${monitor.id} FOR UPDATE`;
                     const current = await tx.monitor.findFirst({
                         where: { id: monitor.id, deletedAt: null },
+                        include: { state: true },
                     });
                     if (
                         !current ||
@@ -924,9 +925,11 @@ export class CheckerService {
                         update: {
                             lastCheckAt: evaluated ? startedAt : undefined,
                             lastLocalCheckAt: startedAt,
-                            executionBlockedReason: evaluated
-                                ? null
-                                : localResult.error,
+                            executionBlockedReason: current.state?.noDataSince
+                                ? 'NO_DATA'
+                                : evaluated
+                                  ? null
+                                  : localResult.error,
                         },
                     });
                 });

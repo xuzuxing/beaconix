@@ -48,6 +48,8 @@ export class MonitorInsightsEntity {
             },
             failCount: { type: 'integer' },
             lastCheckAt: { ...timestamp, nullable: true },
+            noDataSince: { ...timestamp, nullable: true },
+            executionBlockedReason: nullableString,
             lastLatency: number,
             lastError: nullableString,
             ongoingCount: { type: 'integer' },

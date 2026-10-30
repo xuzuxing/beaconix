@@ -46,6 +46,33 @@ function fixture() {
 }
 
 describe('Notification current access policy', () => {
+    it('revalidates organization admin roles before sending a failed-delivery summary', async () => {
+        const { service, db } = fixture();
+        expect(ADMIN_NOTIFICATION_TYPES).toContain(
+            'ALERT_DELIVERY_FAILED_SUMMARY',
+        );
+        db.membership.findFirst.mockResolvedValue(null);
+        expect(
+            await service.eligible(
+                {
+                    accessScope: 'ORGANIZATION',
+                    userId: 'user',
+                    organizationId: 'org',
+                    organizationRoles: ['OWNER', 'ADMIN'],
+                },
+                db as never,
+                true,
+            ),
+        ).toBe(false);
+        expect(db.membership.findFirst).toHaveBeenCalledWith(
+            expect.objectContaining({
+                where: expect.objectContaining({
+                    role: { in: ['OWNER', 'ADMIN'] },
+                    organizationId: 'org',
+                }),
+            }),
+        );
+    });
     it('suppresses restoration and limit messages superseded by another retention selection', async () => {
         const { service, db } = fixture();
         const state = {
