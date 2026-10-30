@@ -49,7 +49,7 @@ export class MonitorNoDataService implements OnModuleInit {
                   AND (m."quotaGraceEndsAt" IS NULL OR m."quotaGraceEndsAt" > ${at})
                   AND s."noDataSince" IS NULL
                   AND GREATEST(m."createdAt", m."updatedAt", s."lastEffectiveObservationAt")
-                    <= ${at} - GREATEST(3.0 * m."interval", 600.0) * INTERVAL '1 second'
+                    <= ${at}::timestamp - GREATEST(3.0 * m."interval", 600.0) * INTERVAL '1 second'
                 ORDER BY m.id LIMIT 100`;
             if (!candidates.length) break;
             for (const { id } of candidates) {

@@ -12,6 +12,7 @@ import { CLS_KEY_REQUEST_ID } from '../cls/request-id.cls';
 import { createPinoConfig } from './pino-logger.config';
 import { StructuredLoggerService } from './structured-logger.service';
 import { ConfigService } from '@nestjs/config';
+import { httpPath } from '../../config/http-path';
 
 type PinoTransportStream = ReturnType<typeof pino.transport> & {
     readonly closed: boolean;
@@ -36,8 +37,8 @@ type PinoTransportStream = ReturnType<typeof pino.transport> & {
                 const globalPrefix =
                     configService.get<string>('app.globalPrefix');
 
-                const excludePaths = logger.excludePaths.map(
-                    (path) => `${globalPrefix}${path}`,
+                const excludePaths = logger.excludePaths.map((path) =>
+                    httpPath(globalPrefix ?? '/api', path),
                 );
 
                 const params = createPinoConfig(

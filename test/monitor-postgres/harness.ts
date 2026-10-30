@@ -77,6 +77,10 @@ export async function stageMigrations(): Promise<string> {
                         ...localMigrations,
                         ...compatibilityMigrations,
                         ...probeSuccessRatioMigrations,
+                        // Depends on the ratio column deliberately introduced
+                        // later by this upgrade harness. Full-history tests
+                        // (including no-data) still deploy it in normal order.
+                        '20261026130000_align_monitor_probe_success_ratio',
                     ].some((name) => name === entry.name)) ||
                 entry.name === 'migration_lock.toml'
             ) {
@@ -109,6 +113,15 @@ export async function addProbeSuccessRatioMigration(
             recursive: true,
         });
     }
+}
+
+export async function addRatioAlignmentMigration(
+    target: string,
+): Promise<void> {
+    const name = '20261026130000_align_monitor_probe_success_ratio';
+    await cp(join(root, 'prisma/migrations', name), join(target, name), {
+        recursive: true,
+    });
 }
 
 export async function removeStagedMigrations(target: string): Promise<void> {

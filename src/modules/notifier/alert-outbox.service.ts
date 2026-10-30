@@ -43,6 +43,7 @@ export class AlertOutboxService implements OnModuleInit {
             take: 100,
         });
         for (const row of rows) {
+            const leaseUntil = new Date(now.getTime() + 120_000);
             const claim = await this.prisma.alertDelivery.updateMany({
                 where: {
                     id: row.id,
@@ -52,7 +53,7 @@ export class AlertOutboxService implements OnModuleInit {
                 data: {
                     status: 'QUEUED',
                     leaseToken: null,
-                    leaseUntil: new Date(now.getTime() + 120_000),
+                    leaseUntil,
                 },
             });
             if (!claim.count) continue;
@@ -77,7 +78,7 @@ export class AlertOutboxService implements OnModuleInit {
                 );
             } catch (error) {
                 await this.prisma.alertDelivery.updateMany({
-                    where: { id: row.id, status: 'QUEUED' },
+                    where: { id: row.id, status: 'QUEUED', leaseUntil },
                     data: {
                         status: 'PENDING',
                         leaseUntil: null,

@@ -53,10 +53,16 @@ jobs:
         run: pnpm type-check
 
       - name: Lint
-        run: pnpm lint
+        run: pnpm lint:check
 
       - name: Test
         run: pnpm exec jest --maxWorkers=2 --no-coverage
+
+      - name: Offline business regression
+        run: pnpm test:business:offline
+
+      - name: Validate deployment paths
+        run: pnpm exec tsx scripts/render-deployment.ts --prefix /api --output .tmp/deployment.yaml
 
       - name: Build
         run: pnpm build
@@ -130,19 +136,37 @@ jobs:
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install manifest renderer
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Render deployment paths
+        env:
+          DEPLOY_PREFIX: ${{ vars.GLOBAL_PREFIX || '/api' }}
+        run: pnpm exec tsx scripts/render-deployment.ts --prefix "$DEPLOY_PREFIX" --output .tmp/deployment.yaml
+
       - name: Update deployment image
         run: |
           IMAGE_TAG="sha-${GITHUB_SHA::7}"
           FULL_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
-          sed -i "s|registry.xuzuxing.cn/beaconix/beaconix-app:latest|${FULL_IMAGE}|g" deployment.yaml
-          if ! grep -q "${FULL_IMAGE}" deployment.yaml; then
+          sed -i "s|registry.xuzuxing.cn/beaconix/beaconix-app:latest|${FULL_IMAGE}|g" .tmp/deployment.yaml
+          if ! grep -q "${FULL_IMAGE}" .tmp/deployment.yaml; then
             echo "镜像替换失败，请检查 deployment.yaml 中的默认镜像地址"
             exit 1
           fi
-          kubectl apply -f deployment.yaml
+          kubectl apply --dry-run=client -f .tmp/deployment.yaml
+          kubectl apply -f .tmp/deployment.yaml
           kubectl -n beaconix rollout status deploy/beaconix-app --timeout=180s
 
-      - name: Rollback on failure
+      - name: Stop on failure
         if: failure()
         run: |
-          kubectl rollout undo deploy/beaconix-app -n beaconix
+          echo "Deployment failed. Confirm migration/schema compatibility before rollback; follow docs/guides/release-readiness.md."
+          kubectl -n beaconix get deploy/beaconix-app

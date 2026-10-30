@@ -20,6 +20,75 @@ const DEFAULT_METRIC_PREFIX = 'beaconix_';
  */
 @Injectable()
 export class MetricsService implements MetricsRecorder {
+    private readonly backlog = this.getOrCreateGauge({
+        name: DEFAULT_METRIC_PREFIX + 'work_backlog',
+        help: 'Due persistent work count or oldest age; check snapshot freshness before use',
+        labelNames: ['source', 'measurement'],
+    });
+
+    setWorkBacklog(
+        source: string,
+        count: number,
+        oldestAgeSeconds: number,
+    ): void {
+        try {
+            this.backlog.set({ source, measurement: 'count' }, count);
+            this.backlog.set(
+                { source, measurement: 'oldest_age_seconds' },
+                oldestAgeSeconds,
+            );
+            this.recordSnapshot(source, true);
+        } catch {
+            /* Best effort. */
+        }
+    }
+    private readonly scheduledRegistration = this.getOrCreateGauge({
+        name: DEFAULT_METRIC_PREFIX + 'scheduler_registered',
+        help: 'Latest scheduler upsert result on this instance; missing means unknown',
+        labelNames: ['job_name'],
+    });
+    private readonly scheduledTimestamp = this.getOrCreateGauge({
+        name: DEFAULT_METRIC_PREFIX + 'scheduler_run_timestamp_seconds',
+        help: 'Last handler boundary on this instance; success does not imply empty backlog',
+        labelNames: ['job_name', 'boundary'],
+    });
+    private readonly scheduledFailures = this.getOrCreateCounter({
+        name: DEFAULT_METRIC_PREFIX + 'scheduler_failures_total',
+        help: 'Registration or handler failures on this instance',
+        labelNames: ['job_name', 'phase'],
+    });
+
+    recordSchedulerRegistration(job: string, success: boolean): void {
+        try {
+            this.scheduledRegistration.set({ job_name: job }, success ? 1 : 0);
+            if (!success)
+                this.scheduledFailures.inc({
+                    job_name: job,
+                    phase: 'registration',
+                });
+        } catch {
+            /* Metrics must never change scheduler behavior. */
+        }
+    }
+
+    recordSchedulerBoundary(
+        job: string,
+        boundary: 'start' | 'complete' | 'success' | 'failure',
+    ): void {
+        try {
+            this.scheduledTimestamp.set(
+                { job_name: job, boundary },
+                Date.now() / 1000,
+            );
+            if (boundary === 'failure')
+                this.scheduledFailures.inc({
+                    job_name: job,
+                    phase: 'execution',
+                });
+        } catch {
+            /* Metrics must never change handler outcomes. */
+        }
+    }
     private readonly snapshotSources = new Set<string>();
     private readonly cacheErrors = this.getOrCreateCounter({
         name: DEFAULT_METRIC_PREFIX + 'cache_errors_total',

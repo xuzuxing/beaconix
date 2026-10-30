@@ -59,3 +59,14 @@
 北京时间每日 09:00，仍有 FAILED 积压的组织向 OWNER/ADMIN 发送站内通知和已验证邮箱邮件。类型 `ALERT_DELIVERY_FAILED_SUMMARY`，组织范围，`resourceType=Organization`。`meta` 为 `{day,timezone:"Asia/Shanghai",failedCount}`，不含跨组织详情。同组织同收件人每日一次，积压未解决则次日继续提醒，零积压不提醒。
 
 站内通知供组织管理员获知异常；跨租户列表仅向 SUPER_ADMIN 开放。汇总描述发送时的积压数量，邮件或站内展示时数量可能已变化。
+
+## 011 运行可用性补充（2026-10-30）
+
+`GET <GLOBAL_PREFIX>/admin/metrics/scheduler` 继续要求 SUPER_ADMIN，新增 `definedJobs: string[]`
+表示当前实例已定义任务；`schedulers` 仍来自 Redis。依赖查询失败/超过 3 秒返回 503，
+前端显示不可用，不将异常转换为零积压。执行是否完成需结合外部 Prometheus 的
+`beaconix_scheduler_run_timestamp_seconds` 与样本新鲜度；正常返回不表示每条业务均处理成功。
+
+`GET <GLOBAL_PREFIX>/health/live` 无须读取设置表或依赖数据库/Redis；
+`GET <GLOBAL_PREFIX>/health/ready` 的两个依赖检查各有 2 秒等待上限，依赖失败返回 503，
+不返回原始连接错误。全局异常过滤器读取 debug 设置最多再等待 250ms；2 秒是依赖检查上限，不是端到端 HTTP 严格时限。路径前缀、故障口径、联调案例和发布边界见 `docs/guides/release-readiness.md`。

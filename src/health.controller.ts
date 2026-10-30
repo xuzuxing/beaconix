@@ -4,7 +4,7 @@ import {
     PrismaHealthIndicator,
     RedisHealthIndicator,
 } from './infra/observability';
-import { Public } from './common/decorators';
+import { Public, SkipMaintenance } from './common/decorators';
 import {
     ApiOkResponse,
     ApiOperation,
@@ -114,6 +114,7 @@ class HealthResponseDto {
 @Controller('health')
 @SkipThrottle()
 @Public()
+@SkipMaintenance()
 export class HealthController {
     constructor(
         private readonly appService: AppService,

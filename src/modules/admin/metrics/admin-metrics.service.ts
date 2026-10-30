@@ -1,4 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import {
+    Injectable,
+    Optional,
+    ServiceUnavailableException,
+} from '@nestjs/common';
+import { ScheduledJobRegistry } from '../../../infra/scheduler/scheduled-job.registry';
+import { withTimeout } from '../../../common/utils/with-timeout';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { PrismaService } from '../../../infra/database/prisma.service';
@@ -30,6 +36,7 @@ export class AdminMetricsService {
         private readonly checkQueue: Queue,
         @InjectQueue(SCHEDULED_JOBS_QUEUE)
         private readonly scheduledQueue: Queue,
+        @Optional() private readonly registry?: ScheduledJobRegistry,
     ) {}
 
     /**
@@ -45,22 +52,30 @@ export class AdminMetricsService {
             dueMonitors,
             enabledMonitors,
             probeStatuses,
-        ] = await Promise.all([
-            this.countJobs(this.scanQueue),
-            this.countJobs(this.checkQueue),
-            this.countJobs(this.scheduledQueue),
-            this.getSchedulers(),
-            this.countDueMonitors(),
-            this.prisma.monitor.count({
-                where: { enabled: true, deletedAt: null },
-            }),
-            this.prisma.probe.groupBy({ by: ['status'], _count: true }),
-        ]);
+        ] = await withTimeout(
+            Promise.all([
+                this.countJobs(this.scanQueue),
+                this.countJobs(this.checkQueue),
+                this.countJobs(this.scheduledQueue),
+                this.getSchedulers(),
+                this.countDueMonitors(),
+                this.prisma.monitor.count({
+                    where: { enabled: true, deletedAt: null },
+                }),
+                this.prisma.probe.groupBy({ by: ['status'], _count: true }),
+            ]),
+            3000,
+        ).catch(() => {
+            throw new ServiceUnavailableException(
+                'Scheduler health unavailable',
+            );
+        });
 
         const probeCount = (status: ProbeStatus) =>
             probeStatuses.find((row) => row.status === status)?._count ?? 0;
 
         return new AdminSchedulerHealthEntity({
+            definedJobs: this.registry?.list().map((job) => job.name) ?? [],
             scanQueue: scanCounts,
             checkQueue: checkCounts,
             scheduledQueue: scheduledCounts,
@@ -334,9 +349,12 @@ export class AdminMetricsService {
         const rows = await this.prisma.$queryRaw<Array<{ count: number }>>`
             SELECT COUNT(*)::int AS count
             FROM "monitors" m
-            JOIN "monitor_states" s ON s."monitorId" = m."id"
+            LEFT JOIN "monitor_states" s ON s."monitorId" = m."id"
+            JOIN projects p ON p.id = m."projectId" AND p."deletedAt" IS NULL
+            JOIN organizations o ON o.id = m."organizationId" AND o."deletedAt" IS NULL
             WHERE m."enabled" = true
               AND m."deletedAt" IS NULL
+              AND (m."quotaGraceEndsAt" IS NULL OR m."quotaGraceEndsAt" > now())
               AND (
                     s."lastLocalCheckAt" IS NULL
                     OR s."lastLocalCheckAt" < now() - make_interval(secs => m."interval")

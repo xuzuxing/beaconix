@@ -1,5 +1,6 @@
 import { registerAs } from '@nestjs/config';
 import { optionalEnv } from './env';
+import { normalizeGlobalPrefix } from './http-path';
 
 export interface AppConfig {
     name: string;
@@ -29,7 +30,9 @@ export const appConfig = registerAs('app', (): AppConfig => {
         corsOrigins: rawOrigins
             ? rawOrigins.split(',').map((o) => o.trim())
             : [],
-        globalPrefix: optionalEnv('GLOBAL_PREFIX', '/api'),
+        globalPrefix: normalizeGlobalPrefix(
+            optionalEnv('GLOBAL_PREFIX', '/api'),
+        ),
         webUrl: optionalEnv('APP_WEB_URL', 'http://localhost:3000'),
     };
 });

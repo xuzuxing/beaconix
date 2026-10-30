@@ -19,6 +19,7 @@ import { systemPrincipal } from '../../src/common/authorization/access.types';
 import {
     addLocalMigrations,
     addProbeSuccessRatioMigration,
+    addRatioAlignmentMigration,
     assertEmptyDatabase,
     deployMigrations,
     localMigrations,
@@ -244,6 +245,8 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
         );
         await prisma.$connect();
         const db = prisma;
+        await addRatioAlignmentMigration(migrations);
+        await deployMigrations(url, migrations);
         const access = new ProjectAccessService(db);
         const notifications = new NotificationsService(
             db,
@@ -436,10 +439,46 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
                     latency: 10,
                     checkedAt: new Date(),
                 };
-                const results = await Promise.all([
-                    state.record(monitor.id, outcome),
-                    state.record(monitor.id, outcome),
-                ]);
+                // Equal timestamps are deliberately folded once. Queue two
+                // distinct observations behind a real row lock in time order.
+                await sql.query('BEGIN');
+                let earlier;
+                let later;
+                let results;
+                try {
+                    await sql.query(
+                        'SELECT id FROM monitors WHERE id = $1 FOR UPDATE',
+                        [monitor.id],
+                    );
+                    earlier = state.record(monitor.id, outcome);
+                    const deadline = Date.now() + 3000;
+                    let waiting = false;
+                    while (Date.now() < deadline) {
+                        await sql.query('SELECT pg_stat_clear_snapshot()');
+                        const locks =
+                            await sql.query(`SELECT 1 FROM pg_stat_activity
+                            WHERE datname = current_database() AND pid <> pg_backend_pid()
+                            AND wait_event_type = 'Lock' AND query LIKE '%FROM monitors%FOR UPDATE%'`);
+                        if (locks.rowCount) {
+                            waiting = true;
+                            break;
+                        }
+                        await delay(20);
+                    }
+                    assert.ok(
+                        waiting,
+                        'first observation must hold its place at the row lock',
+                    );
+                    later = state.record(monitor.id, {
+                        ...outcome,
+                        checkedAt: new Date(+outcome.checkedAt + 1),
+                    });
+                    await sql.query('COMMIT');
+                    results = await Promise.all([earlier, later]);
+                } finally {
+                    await sql.query('ROLLBACK');
+                    await Promise.allSettled([earlier, later]);
+                }
                 assert.ok(results.every(Boolean));
                 const current = await db.monitorState.findUniqueOrThrow({
                     where: { monitorId: monitor.id },
@@ -459,7 +498,7 @@ void test('local monitor migrations and real PostgreSQL state transactions', asy
             'bounds the probe success ratio and versions real edits',
             async () => {
                 const monitor = await createMonitor();
-                assert.equal(monitor.probeSuccessRatio, 1);
+                assert.equal(monitor.probeSuccessRatio, 100);
 
                 const updated = await db.monitor.update({
                     where: { id: monitor.id },

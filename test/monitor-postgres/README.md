@@ -56,6 +56,12 @@ pnpm prisma:generate
 pnpm test:monitor:postgres
 ```
 
+无数据扫描的 SQL 类型与超时边界回归可单独运行（同样需要一个新的空测试库，按完整迁移历史建库）：
+
+```powershell
+pnpm exec tsx --test test/monitor-postgres/no-data.integration-spec.ts
+```
+
 以上账号只用于新建的一次性本地实例。测试无论成功或失败都可能已写入测试数据，不会自动删除或重置数据库。
 完成后 `docker stop beaconix-monitor-acceptance` 将移除这个无持久卷的专用容器。不要对项目数据库执行清理。
 
@@ -78,9 +84,24 @@ MONITOR_TEST_DATABASE_URL='postgresql://monitor_test:monitor_test@127.0.0.1:5543
 2026-10-10 本机没有 PostgreSQL/Docker 可执行文件，也没有可用 WSL 发行版。已验证安全测试和缺少专用 URL 时提前拒绝；
 真实 PostgreSQL 回放与 Linux runner 验收已提供可执行入口，但尚未在本机或远程 CI 实跑，不能记为通过。
 
-2026-10-18 使用本机 PostgreSQL 的一次性库 `beacon_monitor_test_ratio`（验收后已删除）实跑：
+2026-10-30 补充验收（以下结果更新前述历史状态）：本机 PostgreSQL 18 的新隔离测试库中，
+分阶段迁移/状态事务套件 16 条全部通过，NO_DATA 完整迁移与 SQL 边界 1 条通过。
+旧并发用例已改为真实行锁控制的不同时间观测；同一时间戳应保持水位幂等，不能期待计数累加。
+probe ratio 的后续对齐迁移在引入字段后再部署，不修改历史迁移 SQL。
+
+收尾真实事务套件使用另一个新的空库：
+
+```powershell
+pnpm exec tsx --test test/monitor-postgres/release-readiness.integration-spec.ts
+```
+
+本轮该套件 5 条通过（含父用例）：72 小时宽限与持久邮件意图幂等、
+通知失败时业务/outbox 原子回滚、并发恢复冻结订阅一次、旧 revision 拦截、积压 SQL。
+所有测试数据保留在新建的 `beacon_monitor_test_<suffix>` 库，不迁移/reset/drop 应用库。
+
+历史记录（以下失败已在 2026-10-30 复核修正并通过）：2026-10-18 使用本机 PostgreSQL 的一次性库 `beacon_monitor_test_ratio`（验收后已删除）实跑：
 探针成功率迁移阶段、CHECK、唯一索引、触发器推进 `configRevision`、批次二次结算拒绝、
 真实 Checker/StateService 的样本归属与分母集合用例全部通过。
 `concurrent folds do not lose failure increments` 与
 `definition edit commits before a blocked old result is folded` 两条既有用例失败，
-且在本次改动前的 `71aa056` 上用独立 worktree 同样失败，属既有基线问题，不在本方案处理范围。
+且在当时改动前的 `71aa056` 上用独立 worktree 同样失败，属于当时的既有基线问题；最新结果以前述 2026-10-30 验收为准。

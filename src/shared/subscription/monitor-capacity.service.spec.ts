@@ -1,111 +1,11 @@
-import { ConfigService } from '@nestjs/config';
-import { MonitorCapacityService } from './monitor-capacity.service';
+import {
+    fixture,
+    START,
+    HOUR,
+    free,
+    pro,
+} from '../../../test/fixtures/subscription-capacity.fixture';
 import { CAPACITY_GRACE_MS, capacityRestricted } from './monitor-capacity.util';
-
-const START = new Date('2026-10-20T00:00:00Z');
-const HOUR = 3600000;
-const free = { id: 'free', name: 'Free', maxMonitors: 1, sortOrder: 0 };
-const pro = { id: 'pro', name: 'Pro', maxMonitors: 10, sortOrder: 2 };
-
-function fixture() {
-    const org = {
-        id: 'org',
-        monitorCapacityPlanId: 'pro',
-        monitorCapacityLimit: 10,
-        monitorCapacityObservedAt: new Date(START.getTime() - HOUR),
-    };
-    const monitors = ['a', 'b', 'c'].map((id) => ({
-        id,
-        enabled: id !== 'c',
-        quotaGraceEndsAt: null as Date | null,
-        revision: 1,
-        configRevision: 1,
-    }));
-    const cycles: any[] = [];
-    const tx: any = {
-        organization: {
-            findFirst: jest.fn(() => org),
-            update: jest.fn(({ data }) => Object.assign(org, data)),
-        },
-        monitor: {
-            findMany: jest.fn(() => monitors),
-            count: jest.fn(
-                ({ where }) =>
-                    where.id.in.filter((id) =>
-                        monitors.some((m) => m.id === id),
-                    ).length,
-            ),
-            updateMany: jest.fn(({ where, data }) => {
-                for (const m of monitors.filter((m) =>
-                    where.id.in.includes(m.id),
-                )) {
-                    if ('quotaGraceEndsAt' in data)
-                        m.quotaGraceEndsAt = data.quotaGraceEndsAt;
-                    if (data.revision) m.revision += data.revision.increment;
-                    if (data.configRevision)
-                        m.configRevision += data.configRevision.increment;
-                }
-                return { count: where.id.in.length };
-            }),
-        },
-        plan: { findUnique: jest.fn(() => free) },
-        subscription: {
-            findMany: jest.fn(() => []),
-            findFirst: jest.fn(() => ({
-                id: 'subscription',
-                planId: 'pro',
-                plan: pro,
-                expiresAt: START,
-                order: { userId: 'payer' },
-            })),
-        },
-        monitorState: { updateMany: jest.fn(() => ({ count: 1 })) },
-        monitorCapacityCycle: {
-            findFirst: jest.fn(
-                ({ where }) =>
-                    cycles.find(
-                        (c) =>
-                            c.organizationId === where.organizationId &&
-                            (!where.id || c.id === where.id) &&
-                            where.status.in.includes(c.status),
-                    ) ?? null,
-            ),
-            upsert: jest.fn(({ where, create }) => {
-                let c = cycles.find((c) => c.sourceKey === where.sourceKey);
-                if (!c) {
-                    c = {
-                        id: `cycle-${cycles.length}`,
-                        status: 'GRACE',
-                        selectedMonitorIds: [],
-                        retainedMonitorIds: [],
-                        restrictedMonitorIds: [],
-                        announcedAt: null,
-                        warnedAt: null,
-                        ...create,
-                    };
-                    cycles.push(c);
-                }
-                return c;
-            }),
-            update: jest.fn(({ where, data }) =>
-                Object.assign(
-                    cycles.find((c) => c.id === where.id),
-                    data,
-                ),
-            ),
-        },
-    };
-    const notices = {
-        organizationRecipients: jest.fn(() => ['owner', 'admin']),
-        publish: jest.fn(() => undefined),
-    };
-    const service = new MonitorCapacityService(
-        tx,
-        notices as never,
-        new ConfigService({ app: { webUrl: 'https://beacon.example' } }),
-    );
-    return { service, tx, org, monitors, cycles, notices };
-}
 
 describe('monitor capacity lifecycle', () => {
     it('anchors a lazy scan to expiry and enforces the exact 72-hour boundary', async () => {

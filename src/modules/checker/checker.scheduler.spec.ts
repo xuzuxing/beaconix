@@ -7,6 +7,7 @@ import {
 
 function createScheduler() {
     const queue = {
+        getJobScheduler: jest.fn().mockResolvedValue(undefined),
         upsertJobScheduler: jest.fn().mockResolvedValue(undefined),
     };
 

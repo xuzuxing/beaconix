@@ -85,7 +85,7 @@ ENV PORT=3000
 EXPOSE $PORT
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD wget -qO- http://localhost:${PORT}/api/health/live || exit 1
+    CMD node -e "const p=(process.env.GLOBAL_PREFIX??'/api').trim().replace(/^\/+|\/+$/g,'');fetch('http://localhost:'+process.env.PORT+(p?'/'+p:'')+'/health/live',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Run migrations first, then start the server
 # DATABASE_URL is injected by Render at container startup — not available at build time

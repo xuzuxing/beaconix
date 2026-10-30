@@ -1,6 +1,6 @@
 # 006：下一阶段开发计划（基于闭环审计）
 
-> 状态：待评审。日期：2026-10-28。
+> 状态：历史路线图。2026-10-30：007正确性、008降级宽限与邮件、009支付补偿、010 C5/C6已有实现；011进入可用性收尾，本轮已补本地数据库与业务回归。当前状态与边界见 `plans/README.md`、`plans/011-release-readiness.md`，下文保留原审计事实，不再按旧缺口重复排期。
 > 输入：对 `master`（`c7980a4`）当前工作树的只读审计，覆盖 `src/modules/**` 30 个业务模块、`prisma/schema.prisma`、`docs/**`、`plans/001-005`、`test/**` 与 `probes/agent`。
 > 基线：`pnpm type-check` 通过；工作树已有未提交改动（`Dockerfile`、`.dockerignore`、`package.json` 依赖分层、`pnpm-lock.yaml`、未跟踪 `scripts/notify.json`）与本计划无关，本计划不动它们。
 > 本文件只描述**下一阶段要做什么**，不复述已有设计；设计与验收契约仍以 `plans/001-005`、`docs/design/*` 为准。

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { HealthIndicatorService } from '@nestjs/terminus';
 import { PrismaService } from '../../database/prisma.service';
+import { withTimeout } from '../../../common/utils/with-timeout';
 
 /**
  * Prisma/PostgreSQL 健康检查指示器
@@ -29,15 +30,15 @@ export class PrismaHealthIndicator {
 
         try {
             // 执行简单查询测试连接
-            await this.prisma.$queryRaw`SELECT 1`;
+            await withTimeout(this.prisma.$queryRaw`SELECT 1`);
 
             return indicator.up({
                 message: 'PostgreSQL is healthy',
                 responseTime: `${Date.now() - startTime}ms`,
             });
-        } catch (error) {
+        } catch {
             return indicator.down({
-                message: error instanceof Error ? error.message : String(error),
+                message: 'PostgreSQL unavailable',
                 responseTime: `${Date.now() - startTime}ms`,
             });
         }
