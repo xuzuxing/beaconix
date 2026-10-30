@@ -37,6 +37,8 @@ function createService(overrides: Partial<AlipayConfig> = {}) {
         verifyNotify: jest.fn().mockResolvedValue(true),
         refund: jest.fn(),
         queryRefund: jest.fn(),
+        queryTransaction: jest.fn(),
+        closeTransaction: jest.fn(),
     };
     const runtimeConfig = {
         config: jest.fn().mockResolvedValue(resolved),
@@ -65,6 +67,86 @@ function notifyBody(overrides: Record<string, string> = {}): string {
 }
 
 describe('AlipayPaymentService', () => {
+    it.each([
+        'TRADE_SUCCESS',
+        'TRADE_FINISHED',
+        'TRADE_CLOSED',
+        'WAIT_BUYER_PAY',
+    ])('normalizes query status %s', async (tradeStatus) => {
+        const { service, client } = createService({ mock: false });
+        client.queryTransaction.mockResolvedValue({
+            code: '10000',
+            outTradeNo: 'P1',
+            tradeNo: 'TX1',
+            tradeStatus,
+            totalAmount: '29.00',
+        });
+        expect(await service.queryPayment('P1')).toMatchObject({
+            out_trade_no: 'P1',
+            total_amount: '29.00',
+            trade_state:
+                tradeStatus === 'TRADE_CLOSED'
+                    ? 'CLOSED'
+                    : tradeStatus === 'WAIT_BUYER_PAY'
+                      ? tradeStatus
+                      : 'SUCCESS',
+        });
+    });
+
+    it('keeps unopened cashier URLs pending and surfaces other query failures', async () => {
+        const { service, client } = createService({ mock: false });
+        client.queryTransaction
+            .mockResolvedValueOnce({
+                code: '40004',
+                subCode: 'ACQ.TRADE_NOT_EXIST',
+            })
+            .mockResolvedValueOnce({ code: '20000', msg: 'unavailable' });
+        expect((await service.queryPayment('P1')).trade_state).toBe('NOTPAY');
+        await expect(service.queryPayment('P1')).rejects.toThrow(
+            'Alipay query failed',
+        );
+    });
+
+    it('delegates close and propagates close failures', async () => {
+        const { service, client } = createService({ mock: false });
+        client.closeTransaction.mockRejectedValue(new Error('cannot close'));
+        await expect(service.closePayment('P1')).rejects.toThrow(
+            'cannot close',
+        );
+        expect(client.closeTransaction).toHaveBeenCalledWith('P1');
+    });
+
+    it('does not call the channel or invent payment when querying in mock mode', async () => {
+        const { service, client } = createService();
+        expect((await service.queryPayment('P1')).trade_state).toBe('NOTPAY');
+        await service.closePayment('P1');
+        expect(client.queryTransaction).not.toHaveBeenCalled();
+        expect(client.closeTransaction).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        AlipayPayMethod.PAGE,
+        AlipayPayMethod.WAP,
+        AlipayPayMethod.PRECREATE,
+    ])('includes a CST expiry for %s', async (payMethod) => {
+        const { service, client } = createService({ mock: false });
+        await service.createPayment({
+            outTradeNo: 'P1',
+            totalFee: 2900,
+            body: 'order',
+            payMethod,
+            expiresAt: new Date('2026-10-30T00:00:00Z'),
+        });
+        const method =
+            payMethod === AlipayPayMethod.PAGE
+                ? client.buildCashierUrl
+                : payMethod === AlipayPayMethod.WAP
+                  ? client.buildWapCashierUrl
+                  : client.precreate;
+        expect(method).toHaveBeenCalledWith(
+            expect.objectContaining({ timeExpire: '2026-10-30 08:00:00' }),
+        );
+    });
     it('declares the ALIPAY channel', () => {
         const { service } = createService();
 

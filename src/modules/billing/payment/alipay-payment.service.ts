@@ -72,6 +72,9 @@ export class AlipayPaymentService implements PaymentProvider {
                 subject,
                 notifyUrl: config.notifyUrl,
                 returnUrl: config.returnUrl,
+                ...(input.expiresAt
+                    ? { timeExpire: alipayExpiry(input.expiresAt) }
+                    : {}),
             });
 
             return {
@@ -90,6 +93,9 @@ export class AlipayPaymentService implements PaymentProvider {
             subject,
             notifyUrl: config.notifyUrl,
             returnUrl: config.returnUrl,
+            ...(input.expiresAt
+                ? { timeExpire: alipayExpiry(input.expiresAt) }
+                : {}),
         };
         const payUrl =
             payMethod === AlipayPayMethod.WAP
@@ -97,6 +103,50 @@ export class AlipayPaymentService implements PaymentProvider {
                 : await this.client.buildCashierUrl(request);
 
         return { payMethod, outTradeNo, totalAmount, payUrl };
+    }
+
+    async queryPayment(
+        outTradeNo: string,
+    ): Promise<PaymentProviderCallbackResult> {
+        if ((await this.runtimeConfig.config()).mock) {
+            return {
+                out_trade_no: outTradeNo,
+                transaction_id: '',
+                trade_state: 'NOTPAY',
+            };
+        }
+        const result = await this.client.queryTransaction(outTradeNo);
+        if (result.code !== '10000') {
+            if (result.subCode === 'ACQ.TRADE_NOT_EXIST') {
+                return {
+                    out_trade_no: outTradeNo,
+                    transaction_id: '',
+                    trade_state: 'NOTPAY',
+                };
+            }
+            throw new AlipayApiError(
+                `Alipay query failed: ${result.subMsg ?? result.msg ?? 'unknown error'}`,
+                result.code,
+                result.subCode,
+            );
+        }
+        return {
+            out_trade_no: result.outTradeNo ?? outTradeNo,
+            transaction_id: result.tradeNo ?? '',
+            trade_state: ALIPAY_SUCCESS_TRADE_STATUSES.includes(
+                result.tradeStatus ?? '',
+            )
+                ? 'SUCCESS'
+                : result.tradeStatus === 'TRADE_CLOSED'
+                  ? 'CLOSED'
+                  : (result.tradeStatus ?? 'NOTPAY'),
+            total_amount: result.totalAmount,
+        };
+    }
+
+    async closePayment(outTradeNo: string): Promise<void> {
+        if (!(await this.runtimeConfig.config()).mock)
+            await this.client.closeTransaction(outTradeNo);
     }
 
     /**
@@ -250,6 +300,14 @@ export function yuanFromFen(fen: number): string {
     const cents = fen % 100;
 
     return `${yuan}.${String(cents).padStart(2, '0')}`;
+}
+
+/** Alipay expects its expiry timestamp in China Standard Time. */
+function alipayExpiry(expiresAt: Date): string {
+    return new Date(expiresAt.getTime() + 8 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 19)
+        .replace('T', ' ');
 }
 
 /**

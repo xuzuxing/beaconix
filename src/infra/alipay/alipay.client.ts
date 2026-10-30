@@ -18,6 +18,7 @@ import {
     type AlipayPrecreateResult,
     type AlipayRefundApiResult,
     type AlipayRefundRequest,
+    type AlipayTradeResult,
 } from './alipay.types';
 
 /**
@@ -158,6 +159,25 @@ export class AlipayClient {
 
     // -- 内部 ------------------------------------------------------------
 
+    async queryTransaction(outTradeNo: string): Promise<AlipayTradeResult> {
+        const { sdk } = await this.sdk();
+        return sdk.exec('alipay.trade.query', { bizContent: { outTradeNo } });
+    }
+
+    async closeTransaction(outTradeNo: string): Promise<void> {
+        const { sdk } = await this.sdk();
+        const result = await sdk.exec('alipay.trade.close', {
+            bizContent: { outTradeNo },
+        });
+        if (result?.code !== '10000') {
+            throw new AlipayApiError(
+                `Alipay close failed: ${result?.subMsg ?? result?.msg ?? 'unknown error'}`,
+                result?.code,
+                result?.subCode,
+            );
+        }
+    }
+
     private bizContent(
         method: AlipayPayMethod,
         request: AlipayCashierRequest,
@@ -167,6 +187,7 @@ export class AlipayClient {
             totalAmount: request.totalAmount,
             subject: request.subject,
             productCode: ALIPAY_PRODUCT_CODE[method],
+            ...(request.timeExpire ? { timeExpire: request.timeExpire } : {}),
         };
     }
 

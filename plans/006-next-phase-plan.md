@@ -99,6 +99,8 @@
 
 ### 迭代 B：支付链路补全（约 5~7 人日，依赖 A2-A5）
 
+> 2026-10-29：B1–B5 代码与自动化验证已完成，见 [009 实施记录](009-payment-chain-completion.md)。全量单测 176 suites / 2400 tests、离线 HTTP 全链 3 cases 通过；真实 PostgreSQL 迁移 / 并发验收与真实渠道联调未执行（数据库验收按用户要求跳过）。前端契约见 `docs/api/payment-reconciliation.md`。
+
 | 任务 | 落点 | 验收口径 |
 |---|---|---|
 | B1 微信 V3 查单补偿 | 调用 `wechat-pay.client.ts:130 queryTransaction`，新增 `*/5` cron（与 `refund-reconcile.service.ts` 同构，带 lease 防重） | 手工丢回调的订单在 ≤5 分钟内自动结算；重复扫描幂等 |

@@ -50,6 +50,9 @@ export class WechatPaymentService implements PaymentProvider {
             outTradeNo: input.outTradeNo,
             totalFee: input.totalFee,
             openid: input.payerId,
+            ...(input.expiresAt
+                ? { timeExpire: input.expiresAt.toISOString() }
+                : {}),
         });
 
         return this.payClient.buildJsapiPayParams(prepayId);
@@ -71,6 +74,24 @@ export class WechatPaymentService implements PaymentProvider {
         }
 
         return this.payClient.parseNotification(rawBody, notificationHeaders);
+    }
+
+    async queryPayment(
+        outTradeNo: string,
+    ): Promise<PaymentProviderCallbackResult> {
+        if (await this.mockEnabled()) {
+            return {
+                out_trade_no: outTradeNo,
+                transaction_id: '',
+                trade_state: 'NOTPAY',
+            };
+        }
+        return this.payClient.queryTransaction(outTradeNo);
+    }
+
+    async closePayment(outTradeNo: string): Promise<void> {
+        if (!(await this.mockEnabled()))
+            await this.payClient.closeTransaction(outTradeNo);
     }
 
     /**
@@ -131,6 +152,9 @@ export class WechatPaymentService implements PaymentProvider {
                 refund_id?: string;
                 refund_status?: string;
                 status?: string;
+                amount?: { refund?: number; total?: number; currency?: string };
+                out_trade_no?: string;
+                transaction_id?: string;
             };
 
             return {
@@ -140,6 +164,11 @@ export class WechatPaymentService implements PaymentProvider {
                     parsed.refund_status ?? parsed.status,
                 ),
                 raw: parsed,
+                refundFee: parsed.amount?.refund,
+                totalFee: parsed.amount?.total,
+                currency: parsed.amount?.currency,
+                outTradeNo: parsed.out_trade_no,
+                transactionId: parsed.transaction_id,
             };
         }
 
@@ -161,6 +190,11 @@ export class WechatPaymentService implements PaymentProvider {
                 refund.refund_status ?? refund.status,
             ),
             raw: refund,
+            refundFee: refund.amount?.refund,
+            totalFee: refund.amount?.total,
+            currency: refund.amount?.currency,
+            outTradeNo: refund.out_trade_no,
+            transactionId: refund.transaction_id,
         };
     }
 
@@ -215,5 +249,7 @@ function mapWechatRefund(refund: WechatPayRefund): PaymentProviderRefundResult {
                 ? `WeChat refund status: ${refund.status ?? 'unknown'}`
                 : undefined,
         raw: refund,
+        refundFee: refund.amount?.refund,
+        totalFee: refund.amount?.total,
     };
 }

@@ -4,15 +4,20 @@ import {
     Logger,
     NotFoundException,
 } from '@nestjs/common';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import type { Prisma } from '../../../generated/prisma/client';
 import {
     OrderStatus,
+    PaymentAttemptStatus,
     PaymentChannel,
     PaymentStatus,
 } from '../../../generated/prisma/enums';
 import { NotificationsService } from '../../notifications/notifications.service';
-import type { OrderModel } from '../../../generated/prisma/models';
+import type {
+    OrderModel,
+    PaymentAttemptModel,
+} from '../../../generated/prisma/models';
 import { CreatePaymentDto } from './dto';
 import { PaymentProviderFactory } from './payment-provider.factory';
 import type {
@@ -23,6 +28,7 @@ import type {
 import { settlePaidOrder } from './payment-settlement';
 import { resolvePaidAmountFen } from './callback-amount';
 import { EffectivePlanService } from '../../../shared/subscription/effective-plan.service';
+import { ADMIN_ROLES } from '../../notifications/notification-event';
 
 type OrderForPayment = OrderModel;
 
@@ -46,54 +52,149 @@ export class PaymentService {
         orderId: string,
         userId: string,
         dto: CreatePaymentDto,
-    ) {
+    ): Promise<PaymentProviderPayParams & { outTradeNo: string }> {
         const order = await this.ensureOrderPayable(orderId, userId);
         const channel = dto.channel ?? PaymentChannel.WECHAT;
-        await this.assertChannelSwitchable(order.id, channel);
-
         if (channel === PaymentChannel.WECHAT_VIRTUAL) {
-            // 虚拟支付的签名与回调形态完全不同，由 `WechatVirtualPaymentService`
-            // 处理；这里拦住是为了避免调用方以为「传个 channel 就行」。
             throw new BadRequestException(
                 'The WECHAT_VIRTUAL channel is served by the mini-program virtual payment flow',
             );
         }
-
         const openid = dto.openid?.trim();
-
-        // `openid` 只在 JSAPI 渠道必需：支付宝的收银台/扫码下单没有付款人身份。
         if (channel === PaymentChannel.WECHAT && !openid) {
             throw new BadRequestException(
                 'openid is required for the WECHAT (JSAPI) channel',
             );
         }
-
+        await this.assertChannelSwitchable(order.id, channel);
         const provider = this.paymentProviderFactory.get(channel);
-
-        const params = await provider.createPayment({
-            outTradeNo: order.orderNo,
-            totalFee: order.amount,
-            payerId: openid,
-            payMethod: dto.payMethod,
-            body: `Beaconix plan order ${order.orderNo}`,
+        const outTradeNo = `P${randomBytes(15).toString('hex')}`;
+        const attempt = await this.prisma.$transaction(async (tx) => {
+            const current = await this.lockOrder(tx, order);
+            if (
+                current.status !== OrderStatus.PENDING ||
+                current.expiresAt <= new Date()
+            ) {
+                throw new BadRequestException('Order is no longer payable');
+            }
+            const existing = await tx.payment.findUnique({
+                where: { orderId },
+            });
+            if (
+                existing?.status === PaymentStatus.SUCCESS ||
+                existing?.status === PaymentStatus.REFUNDED
+            ) {
+                throw new BadRequestException('Order is already paid');
+            }
+            if (
+                existing &&
+                !existing.outTradeNo &&
+                existing.channel !== PaymentChannel.WECHAT_VIRTUAL
+            ) {
+                await tx.paymentAttempt.upsert({
+                    where: { outTradeNo: order.orderNo },
+                    update: {},
+                    create: {
+                        orderId,
+                        channel: existing.channel,
+                        outTradeNo: order.orderNo,
+                        openid: '',
+                        amount: existing.amount,
+                    },
+                });
+            }
+            const created = await tx.paymentAttempt.create({
+                data: {
+                    orderId,
+                    channel,
+                    outTradeNo,
+                    openid: openid ?? '',
+                    amount: current.amount,
+                },
+            });
+            await tx.payment.upsert({
+                where: { orderId },
+                create: {
+                    orderId,
+                    channel,
+                    outTradeNo,
+                    amount: current.amount,
+                    status: PaymentStatus.PENDING,
+                },
+                update: {
+                    channel,
+                    outTradeNo,
+                    prepayId: null,
+                    status: PaymentStatus.PENDING,
+                },
+            });
+            return created;
         });
-
-        await this.prisma.payment.upsert({
-            where: { orderId: order.id },
-            create: {
-                orderId: order.id,
-                channel,
-                prepayId: this.extractPrepayId(params),
-                amount: order.amount,
-                status: PaymentStatus.PENDING,
-            },
-            update: {
-                channel,
-                prepayId: this.extractPrepayId(params),
-            },
-        });
-
-        return params;
+        try {
+            const params = await provider.createPayment({
+                outTradeNo,
+                totalFee: attempt.amount,
+                payerId: openid,
+                payMethod: dto.payMethod,
+                body: `Beaconix plan order ${order.orderNo}`,
+                expiresAt: order.expiresAt,
+            });
+            const payable = await this.prisma.$transaction(async (tx) => {
+                const current = await this.lockOrder(tx, order);
+                await tx.paymentAttempt.updateMany({
+                    where: { id: attempt.id },
+                    data: { prepayId: this.extractPrepayId(params) },
+                });
+                const completed = await tx.paymentAttempt.findUnique({
+                    where: { id: attempt.id },
+                });
+                if (
+                    current.status === OrderStatus.PAID &&
+                    completed?.status === PaymentAttemptStatus.PAID
+                )
+                    return true;
+                if (
+                    current.status !== OrderStatus.PENDING ||
+                    current.expiresAt <= new Date()
+                ) {
+                    await tx.paymentAttempt.updateMany({
+                        where: {
+                            id: attempt.id,
+                            status: { not: PaymentAttemptStatus.PAID },
+                        },
+                        data: { closePending: true },
+                    });
+                    return false;
+                }
+                await tx.payment.updateMany({
+                    where: {
+                        orderId,
+                        outTradeNo,
+                        status: PaymentStatus.PENDING,
+                    },
+                    data: { prepayId: this.extractPrepayId(params) },
+                });
+                return true;
+            });
+            if (!payable) {
+                await this.syncAttempt(attempt, true);
+                throw new BadRequestException('Order is no longer payable');
+            }
+            return { ...params, outTradeNo };
+        } catch (error) {
+            await this.prisma.paymentAttempt.updateMany({
+                where: { id: attempt.id, status: PaymentAttemptStatus.PENDING },
+                data: {
+                    status: PaymentAttemptStatus.FAILED,
+                    lastError: this.errorText(error),
+                },
+            });
+            await this.prisma.payment.updateMany({
+                where: { orderId, outTradeNo, status: PaymentStatus.PENDING },
+                data: { status: PaymentStatus.FAILED },
+            });
+            throw error;
+        }
     }
 
     /** Idempotent WeChat callback: a repeated SUCCESS callback is a no-op. */
@@ -127,140 +228,550 @@ export class PaymentService {
         signature: string,
         headers?: PaymentCallbackHeaders,
     ): Promise<PaymentCallbackResponse> {
-        const provider = this.paymentProviderFactory.get(channel);
-        const callback = await provider.verifyCallback(
-            rawBody,
-            signature,
-            headers,
-        );
-        this.logger.debug('callback', callback);
+        const callback = await this.paymentProviderFactory
+            .get(channel)
+            .verifyCallback(rawBody, signature, headers);
+        return (await this.applyChannelResult(channel, callback)).response;
+    }
 
-        const payment = await this.prisma.payment.findFirst({
-            where: {
-                channel,
-                order: { orderNo: callback.out_trade_no },
-            },
+    /** Both authenticated channel queries and signature-verified callbacks enter here. */
+    private async applyChannelResult(
+        channel: PaymentChannel,
+        callback: PaymentProviderCallbackResult,
+        leaseToken?: string,
+    ): Promise<{ response: PaymentCallbackResponse; settled: boolean }> {
+        const attempt = await this.prisma.paymentAttempt.findUnique({
+            where: { outTradeNo: callback.out_trade_no },
             include: { order: true },
         });
-
-        if (!payment) {
-            return { code: 'FAIL', message: 'Payment not found' };
+        const legacy = !attempt
+            ? await this.prisma.payment.findFirst({
+                  where: { channel, order: { orderNo: callback.out_trade_no } },
+                  include: { order: true },
+              })
+            : null;
+        if ((!attempt && !legacy) || (attempt && attempt.channel !== channel)) {
+            return {
+                response: { code: 'FAIL', message: 'Payment not found' },
+                settled: false,
+            };
         }
-
-        if (payment.status === PaymentStatus.SUCCESS) {
-            return { code: 'SUCCESS', message: '成功' };
-        }
-
-        if (callback.trade_state !== 'SUCCESS') {
-            // `PAYERROR` is terminal; `NOTPAY` / `USERPAYING` are intermediate
-            // states, so the payment must stay pending for a later callback.
-            if (callback.trade_state === 'PAYERROR') {
-                return this.rejectPayment(
-                    payment.id,
-                    callback,
-                    'Payment failed at the channel',
+        const order = (attempt ?? legacy)!.order;
+        return this.prisma.$transaction(async (tx) => {
+            const currentOrder = await this.lockOrder(tx, order);
+            // Pin the claimed attempt for this short transaction. A replacement
+            // worker cannot claim it between lease admission and settlement.
+            if (attempt)
+                await tx.$queryRaw`SELECT id FROM payment_attempts WHERE id = ${attempt.id} FOR UPDATE`;
+            const currentAttempt = attempt
+                ? await tx.paymentAttempt.findUniqueOrThrow({
+                      where: { id: attempt.id },
+                  })
+                : null;
+            if (
+                leaseToken &&
+                (currentAttempt?.reconcileLeaseToken !== leaseToken ||
+                    !currentAttempt.reconcileLeaseUntil ||
+                    currentAttempt.reconcileLeaseUntil <= new Date())
+            ) {
+                return {
+                    response: {
+                        code: 'FAIL',
+                        message: 'Reconciliation lease expired',
+                    },
+                    settled: false,
+                };
+            }
+            const payment = await tx.payment.findUnique({
+                where: { orderId: order.id },
+            });
+            const fail = async (reason: string, terminal = true) => {
+                if (terminal)
+                    this.logger.error(
+                        `Payment rejected: ${reason} (${callback.out_trade_no})`,
+                    );
+                if (terminal) {
+                    if (currentAttempt && callback.trade_state !== 'CLOSED')
+                        await tx.paymentAttempt.updateMany({
+                            where: {
+                                id: currentAttempt.id,
+                                status: { not: PaymentAttemptStatus.PAID },
+                            },
+                            data: {
+                                status: PaymentAttemptStatus.FAILED,
+                                lastError: reason,
+                                rawNotify: callback as Prisma.InputJsonValue,
+                            },
+                        });
+                    if (payment)
+                        await tx.payment.updateMany({
+                            where: {
+                                id: payment.id,
+                                status: {
+                                    notIn: [
+                                        PaymentStatus.SUCCESS,
+                                        PaymentStatus.REFUNDED,
+                                    ],
+                                },
+                                ...(attempt
+                                    ? { outTradeNo: attempt.outTradeNo }
+                                    : {}),
+                            },
+                            data: {
+                                status: PaymentStatus.FAILED,
+                                rawCallback: callback as Prisma.InputJsonValue,
+                            },
+                        });
+                }
+                return {
+                    response: { code: 'FAIL' as const, message: reason },
+                    settled: false,
+                };
+            };
+            if (callback.trade_state !== 'SUCCESS') {
+                if (callback.trade_state === 'CLOSED' && currentAttempt) {
+                    await tx.paymentAttempt.updateMany({
+                        where: {
+                            id: currentAttempt.id,
+                            status: { not: PaymentAttemptStatus.PAID },
+                        },
+                        data: {
+                            status: PaymentAttemptStatus.CLOSED,
+                            closePending: false,
+                            rawNotify: callback as Prisma.InputJsonValue,
+                        },
+                    });
+                }
+                return fail(
+                    'trade_state is not SUCCESS',
+                    callback.trade_state === 'PAYERROR' ||
+                        callback.trade_state === 'CLOSED',
                 );
             }
-
-            return { code: 'FAIL', message: 'trade_state is not SUCCESS' };
-        }
-
-        // A cancelled (timed-out) or refunded order must not be revived by a
-        // late callback: the order sweep already released it, and activating a
-        // subscription now would hand out service for an order the platform
-        // considers dead.
-        if (
-            payment.order.status !== OrderStatus.PENDING &&
-            payment.order.status !== OrderStatus.PAID
-        ) {
-            return this.rejectPayment(
-                payment.id,
-                callback,
-                `Order is ${payment.order.status}`,
-            );
-        }
-
-        // The money has to match what the order asked for. A signature-verified
-        // callback always carries the paid amount, so a missing amount is a
-        // malformed payload rather than a reason to trust the callback.
-        const paidFen = resolvePaidAmountFen(channel, callback);
-
-        if (paidFen === null || paidFen !== payment.amount) {
-            return this.rejectPayment(
-                payment.id,
-                callback,
-                `Amount mismatch (paid ${paidFen ?? 'unknown'}, expected ${payment.amount})`,
-            );
-        }
-
-        await this.prisma.$transaction(async (tx) => {
-            // Normalise an empty `transaction_id` to NULL: the column is
-            // `@unique`, and an empty string is still unique-indexed, so a
-            // second empty callback would collide (P2002) and 500 the request.
-            const transactionId = callback.transaction_id?.trim() || null;
-
-            // Re-check and update conditionally inside the transaction: WeChat
-            // may deliver the same callback concurrently, and the unique
-            // `transactionId` would otherwise throw P2002 on the second update.
-            const updated = await tx.payment.updateMany({
-                where: {
-                    id: payment.id,
-                    status: { not: PaymentStatus.SUCCESS },
-                },
-                data: {
-                    status: PaymentStatus.SUCCESS,
-                    transactionId,
-                    paidAt: new Date(),
-                    rawCallback: callback as Prisma.InputJsonValue,
-                },
-            });
-
-            // A concurrent callback already settled this payment — nothing to do.
-            if (updated.count === 0) {
-                return;
+            const expected = currentAttempt?.amount ?? legacy!.amount;
+            const paid = resolvePaidAmountFen(channel, callback);
+            if (
+                paid === null ||
+                paid !== expected ||
+                expected !== currentOrder.amount
+            ) {
+                return fail(
+                    `Amount mismatch (paid ${paid ?? 'unknown'}, expected ${expected})`,
+                );
             }
-
+            const transactionId = callback.transaction_id?.trim() || null;
+            if (
+                currentAttempt?.status === PaymentAttemptStatus.PAID ||
+                (!attempt && payment?.status === PaymentStatus.SUCCESS)
+            ) {
+                return {
+                    response: { code: 'SUCCESS', message: '成功' },
+                    settled: false,
+                };
+            }
+            if (
+                currentOrder.status !== OrderStatus.PENDING &&
+                currentOrder.status !== OrderStatus.PAID
+            ) {
+                const rejected = await fail(`Order is ${currentOrder.status}`);
+                if (currentAttempt) {
+                    await tx.paymentAttempt.updateMany({
+                        where: { id: currentAttempt.id },
+                        data: {
+                            status: PaymentAttemptStatus.PAID,
+                            wxOrderId: transactionId,
+                            paidAt: new Date(),
+                            closePending: false,
+                            lastError: `Order is ${currentOrder.status}; manual refund required`,
+                            rawNotify: callback as Prisma.InputJsonValue,
+                        },
+                    });
+                    await this.notifyDuplicate(
+                        tx,
+                        order,
+                        callback.out_trade_no,
+                    );
+                }
+                return rejected;
+            }
+            if (
+                payment?.status === PaymentStatus.SUCCESS ||
+                currentOrder.status === OrderStatus.PAID
+            ) {
+                if (currentAttempt)
+                    await tx.paymentAttempt.updateMany({
+                        where: { id: currentAttempt.id },
+                        data: {
+                            status: PaymentAttemptStatus.PAID,
+                            wxOrderId: transactionId,
+                            paidAt: new Date(),
+                            closePending: false,
+                            rawNotify: callback as Prisma.InputJsonValue,
+                            lastError:
+                                'Duplicate payment; manual refund required',
+                        },
+                    });
+                this.logger.error(
+                    `Duplicate payment for order ${order.id}, trade ${callback.out_trade_no}; manual refund required`,
+                );
+                await this.notifyDuplicate(tx, order, callback.out_trade_no);
+                return {
+                    response: {
+                        code: 'SUCCESS',
+                        message: 'Already settled; duplicate recorded',
+                    },
+                    settled: false,
+                };
+            }
+            let paymentId: string;
+            if (!attempt && payment) {
+                const updated = await tx.payment.updateMany({
+                    where: {
+                        id: payment.id,
+                        status: { not: PaymentStatus.SUCCESS },
+                    },
+                    data: {
+                        status: PaymentStatus.SUCCESS,
+                        transactionId,
+                        outTradeNo: callback.out_trade_no,
+                        paidAt: new Date(),
+                        rawCallback: callback as Prisma.InputJsonValue,
+                    },
+                });
+                if (!updated.count)
+                    return {
+                        response: { code: 'SUCCESS', message: '成功' },
+                        settled: false,
+                    };
+                paymentId = payment.id;
+            } else {
+                const saved = await tx.payment.upsert({
+                    where: { orderId: order.id },
+                    create: {
+                        orderId: order.id,
+                        channel,
+                        amount: expected,
+                        status: PaymentStatus.SUCCESS,
+                        transactionId,
+                        outTradeNo: callback.out_trade_no,
+                        paidAt: new Date(),
+                        rawCallback: callback as Prisma.InputJsonValue,
+                    },
+                    update: {
+                        channel,
+                        amount: expected,
+                        status: PaymentStatus.SUCCESS,
+                        transactionId,
+                        outTradeNo: callback.out_trade_no,
+                        paidAt: new Date(),
+                        rawCallback: callback as Prisma.InputJsonValue,
+                    },
+                });
+                paymentId = saved.id;
+            }
+            if (currentAttempt)
+                await tx.paymentAttempt.updateMany({
+                    where: { id: currentAttempt.id },
+                    data: {
+                        status: PaymentAttemptStatus.PAID,
+                        wxOrderId: transactionId,
+                        paidAt: new Date(),
+                        closePending: false,
+                        lastError: null,
+                        rawNotify: callback as Prisma.InputJsonValue,
+                    },
+                });
             await settlePaidOrder(tx, {
-                order: payment.order,
-                paymentId: payment.id,
+                order: currentOrder,
+                paymentId,
                 notifications: this.notifications,
             });
             await this.plans.getEffectivePlanInTransaction(
-                payment.order.organizationId,
+                order.organizationId,
                 tx,
             );
+            // Stop outstanding checkouts after the first successful settlement.
+            await tx.paymentAttempt.updateMany({
+                where: {
+                    orderId: order.id,
+                    channel: {
+                        in: [PaymentChannel.WECHAT, PaymentChannel.ALIPAY],
+                    },
+                    status: {
+                        in: [
+                            PaymentAttemptStatus.PENDING,
+                            PaymentAttemptStatus.FAILED,
+                        ],
+                    },
+                },
+                data: { closePending: true },
+            });
+            return {
+                response: { code: 'SUCCESS', message: '成功' },
+                settled: true,
+            };
         });
-
-        return { code: 'SUCCESS', message: '成功' };
     }
 
-    // -- Helpers ---------------------------------------------------------
+    private async lockOrder(
+        tx: Prisma.TransactionClient,
+        order: Pick<OrderModel, 'id' | 'organizationId'>,
+    ): Promise<OrderModel> {
+        await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${order.organizationId} FOR UPDATE`;
+        await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`;
+        return tx.order.findUniqueOrThrow({ where: { id: order.id } });
+    }
 
-    /**
-     * Records a callback we refuse to honour and answers the channel with FAIL.
-     *
-     * Every rejection path lands here so a bad callback leaves evidence: the
-     * payment moves to `FAILED` (never overwriting an already successful one)
-     * and the raw payload is kept for reconciliation.
-     */
-    private async rejectPayment(
-        paymentId: string,
-        callback: PaymentProviderCallbackResult,
-        reason: string,
-    ): Promise<PaymentCallbackResponse> {
-        this.logger.error(
-            `Payment callback rejected: ${reason} (payment ${paymentId})`,
-        );
-
-        await this.prisma.payment.updateMany({
-            where: { id: paymentId, status: { not: PaymentStatus.SUCCESS } },
+    /** Channel I/O stays outside the database transaction and uses a per-attempt lease. */
+    private async syncAttempt(
+        attempt: PaymentAttemptModel,
+        close = false,
+    ): Promise<boolean> {
+        const token = randomUUID();
+        const claimed = await this.prisma.paymentAttempt.updateMany({
+            where: {
+                id: attempt.id,
+                OR: [
+                    { reconcileLeaseUntil: null },
+                    { reconcileLeaseUntil: { lte: new Date() } },
+                ],
+            },
             data: {
-                status: PaymentStatus.FAILED,
-                rawCallback: callback as Prisma.InputJsonValue,
+                reconcileLeaseToken: token,
+                reconcileLeaseUntil: new Date(Date.now() + 120_000),
             },
         });
+        if (!claimed.count) return false;
+        let errorText: string | null = null;
+        try {
+            const provider = this.paymentProviderFactory.get(attempt.channel);
+            if (!provider.queryPayment)
+                throw new Error('Channel does not support payment queries');
+            const remote = await provider.queryPayment(attempt.outTradeNo);
+            if (remote.out_trade_no !== attempt.outTradeNo)
+                throw new Error(
+                    'Channel query returned a different merchant number',
+                );
+            const outcome = await this.applyChannelResult(
+                attempt.channel,
+                remote,
+                token,
+            );
+            if (remote.trade_state === 'SUCCESS') return outcome.settled;
+            const fresh = await this.prisma.paymentAttempt.findUniqueOrThrow({
+                where: { id: attempt.id },
+                include: { order: true },
+            });
+            if (
+                fresh.reconcileLeaseToken !== token ||
+                !fresh.reconcileLeaseUntil ||
+                fresh.reconcileLeaseUntil <= new Date()
+            )
+                return false;
+            if (
+                (close ||
+                    fresh.closePending ||
+                    fresh.order.status !== OrderStatus.PENDING) &&
+                fresh.status !== PaymentAttemptStatus.PAID &&
+                remote.trade_state !== 'CLOSED'
+            ) {
+                if (!provider.closePayment)
+                    throw new Error(
+                        'Channel does not support closing payments',
+                    );
+                try {
+                    await provider.closePayment(attempt.outTradeNo);
+                } catch (error) {
+                    // A user can finish paying between the pre-close query and close.
+                    const latest = await provider.queryPayment(
+                        attempt.outTradeNo,
+                    );
+                    if (
+                        latest.out_trade_no === attempt.outTradeNo &&
+                        latest.trade_state === 'SUCCESS'
+                    ) {
+                        return (
+                            await this.applyChannelResult(
+                                attempt.channel,
+                                latest,
+                                token,
+                            )
+                        ).settled;
+                    }
+                    throw error;
+                }
+                await this.prisma.paymentAttempt.updateMany({
+                    where: {
+                        id: attempt.id,
+                        reconcileLeaseToken: token,
+                        reconcileLeaseUntil: { gt: new Date() },
+                        status: { not: PaymentAttemptStatus.PAID },
+                    },
+                    data: {
+                        status: PaymentAttemptStatus.CLOSED,
+                        closePending: false,
+                    },
+                });
+            }
+            return false;
+        } catch (error) {
+            errorText = this.errorText(error);
+            this.logger.warn(
+                `Payment reconciliation failed for ${attempt.outTradeNo}: ${errorText}`,
+            );
+            return false;
+        } finally {
+            await this.prisma.paymentAttempt.updateMany({
+                where: {
+                    id: attempt.id,
+                    reconcileLeaseToken: token,
+                    reconcileLeaseUntil: { gt: new Date() },
+                },
+                data: {
+                    reconcileLeaseToken: null,
+                    reconcileLeaseUntil: null,
+                    lastCheckedAt: new Date(),
+                    ...(errorText ? { lastError: errorText } : {}),
+                },
+            });
+        }
+    }
 
-        return { code: 'FAIL', message: reason };
+    async reconcilePendingAttempts(): Promise<{
+        checked: number;
+        settled: number;
+    }> {
+        const attempts = await this.prisma.paymentAttempt.findMany({
+            where: {
+                channel: { in: [PaymentChannel.WECHAT, PaymentChannel.ALIPAY] },
+                AND: [
+                    {
+                        OR: [
+                            {
+                                status: {
+                                    in: [
+                                        PaymentAttemptStatus.PENDING,
+                                        PaymentAttemptStatus.FAILED,
+                                    ],
+                                },
+                            },
+                            { closePending: true },
+                        ],
+                    },
+                    {
+                        OR: [
+                            { reconcileLeaseUntil: null },
+                            { reconcileLeaseUntil: { lte: new Date() } },
+                        ],
+                    },
+                ],
+            },
+            orderBy: [
+                { lastCheckedAt: { sort: 'asc', nulls: 'first' } },
+                { createdAt: 'asc' },
+                { id: 'asc' },
+            ],
+            take: 100,
+        });
+        let settled = 0;
+        for (const attempt of attempts)
+            if (await this.syncAttempt(attempt)) settled += 1;
+        return { checked: attempts.length, settled };
+    }
+
+    /** Check for lost successful callbacks before cancelling; failed closes stay retryable. */
+    async cancelOrder(orderId: string, expiredOnly = false): Promise<boolean> {
+        const order = await this.prisma.order.findUnique({
+            where: { id: orderId },
+        });
+        if (!order) throw new NotFoundException('Order not found');
+        if (
+            order.status !== OrderStatus.PENDING ||
+            (expiredOnly && order.expiresAt > new Date())
+        )
+            return false;
+        const attempts = await this.prisma.paymentAttempt.findMany({
+            where: {
+                orderId,
+                channel: { in: [PaymentChannel.WECHAT, PaymentChannel.ALIPAY] },
+                status: {
+                    in: [
+                        PaymentAttemptStatus.PENDING,
+                        PaymentAttemptStatus.FAILED,
+                    ],
+                },
+            },
+        });
+        for (const attempt of attempts) await this.syncAttempt(attempt, true);
+        return this.prisma.$transaction(async (tx) => {
+            const current = await this.lockOrder(tx, order);
+            if (
+                current.status !== OrderStatus.PENDING ||
+                (expiredOnly && current.expiresAt > new Date())
+            )
+                return false;
+            const changed = await tx.order.updateMany({
+                where: { id: orderId, status: OrderStatus.PENDING },
+                data: {
+                    status: OrderStatus.CANCELLED,
+                    cancelledAt: new Date(),
+                },
+            });
+            if (changed.count)
+                await tx.paymentAttempt.updateMany({
+                    where: {
+                        orderId,
+                        channel: {
+                            in: [PaymentChannel.WECHAT, PaymentChannel.ALIPAY],
+                        },
+                        status: {
+                            in: [
+                                PaymentAttemptStatus.PENDING,
+                                PaymentAttemptStatus.FAILED,
+                            ],
+                        },
+                    },
+                    data: { closePending: true },
+                });
+            return changed.count > 0;
+        });
+    }
+
+    private errorText(error: unknown): string {
+        return (error instanceof Error ? error.message : String(error)).slice(
+            0,
+            500,
+        );
+    }
+
+    private async notifyDuplicate(
+        tx: Prisma.TransactionClient,
+        order: OrderModel,
+        outTradeNo: string,
+    ): Promise<void> {
+        await this.notifications.publish(
+            {
+                eventKey: `payment-duplicate:${order.id}:${outTradeNo}`,
+                type: 'PAYMENT_SUCCEEDED',
+                accessScope: 'ORGANIZATION',
+                title: 'Payment requires a manual refund',
+                body: `Order ${order.orderNo}, payment ${outTradeNo} could not be applied. Check this payment and arrange a manual refund.`,
+                organizationId: order.organizationId,
+                recipients: [
+                    order.userId,
+                    ...(await this.notifications.organizationRecipients(
+                        order.organizationId,
+                        tx,
+                        ADMIN_ROLES,
+                    )),
+                ],
+                includeActor: true,
+                email: true,
+                resourceType: 'Order',
+                resourceId: order.id,
+            },
+            tx,
+        );
     }
 
     private extractPrepayId(params: PaymentProviderPayParams): string {

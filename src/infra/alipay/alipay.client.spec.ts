@@ -55,6 +55,36 @@ const order = {
 };
 
 describe('AlipayClient', () => {
+    it('uses trade.query and trade.close with the attempt merchant number', async () => {
+        const { client, config } = createClient();
+        const sdk = { exec: jest.fn().mockResolvedValue({ code: '10000' }) };
+        stubSdk(client, sdk, config);
+        await client.queryTransaction('P1');
+        await client.closeTransaction('P1');
+        expect(sdk.exec).toHaveBeenCalledWith('alipay.trade.query', {
+            bizContent: { outTradeNo: 'P1' },
+        });
+        expect(sdk.exec).toHaveBeenCalledWith('alipay.trade.close', {
+            bizContent: { outTradeNo: 'P1' },
+        });
+    });
+
+    it('does not report an unopened cashier URL as safely closed', async () => {
+        const { client, config } = createClient();
+        stubSdk(
+            client,
+            {
+                exec: jest.fn().mockResolvedValue({
+                    code: '40004',
+                    subCode: 'ACQ.TRADE_NOT_EXIST',
+                }),
+            },
+            config,
+        );
+        await expect(client.closeTransaction('P1')).rejects.toMatchObject({
+            subCode: 'ACQ.TRADE_NOT_EXIST',
+        });
+    });
     describe('buildCashierUrl', () => {
         it('signs a GET cashier URL for page.pay', async () => {
             const { client } = createClient();

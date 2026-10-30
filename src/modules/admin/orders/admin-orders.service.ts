@@ -11,6 +11,7 @@ import { AdminOrderEntity } from './entities';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { settlePaidOrder } from '../../billing/payment/payment-settlement';
 import { EffectivePlanService } from '../../../shared/subscription/effective-plan.service';
+import { PaymentService } from '../../billing/payment/payment.service';
 
 /** Relations flattened into every admin order row. */
 const orderInclude = {
@@ -27,6 +28,7 @@ export class AdminOrdersService {
         private readonly prisma: PrismaService,
         private readonly notifications: NotificationsService,
         private readonly plans: EffectivePlanService,
+        private readonly payments: PaymentService,
     ) {}
 
     /**
@@ -94,14 +96,10 @@ export class AdminOrdersService {
     }
 
     /** PENDING -> CANCELLED. */
-    cancel(id: string): Promise<AdminOrderEntity> {
-        return this.transition(
-            id,
-            OrderStatus.PENDING,
-            OrderStatus.CANCELLED,
-            { cancelledAt: new Date() },
-            'cancel',
-        );
+    async cancel(id: string): Promise<AdminOrderEntity> {
+        if (!(await this.payments.cancelOrder(id)))
+            throw new BadRequestException('Order is no longer pending');
+        return this.findOne(id);
     }
 
     /**
@@ -121,6 +119,8 @@ export class AdminOrdersService {
             const order = await tx.order.findUnique({ where: { id } });
 
             if (!order) throw new NotFoundException('Order not found');
+
+            await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${order.organizationId} FOR UPDATE`;
 
             const changed = await tx.order.updateMany({
                 where: { id, status: OrderStatus.PENDING },

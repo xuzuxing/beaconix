@@ -8,12 +8,16 @@ import { PrismaService } from '../../../infra/database/prisma.service';
 import { OrderStatus, PlanCycle } from '../../../generated/prisma/enums';
 import { CreateOrderDto } from './dto';
 import { OrderEntity } from './entities';
+import { PaymentService } from '../payment/payment.service';
 
 const ORDER_EXPIRY_MS = 30 * 60 * 1000;
 
 @Injectable()
 export class OrderService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly payments: PaymentService,
+    ) {}
 
     async create(
         organizationId: string,
@@ -93,16 +97,10 @@ export class OrderService {
             );
         }
 
-        const updated = await this.prisma.order.update({
-            where: { id: orderId },
-            data: {
-                status: OrderStatus.CANCELLED,
-                cancelledAt: new Date(),
-            },
-            include: { plan: true },
-        });
-
-        return new OrderEntity(updated);
+        if (!(await this.payments.cancelOrder(orderId))) {
+            throw new BadRequestException('Order is no longer pending');
+        }
+        return this.findOne(orderId, userId);
     }
 
     // -- Helpers ---------------------------------------------------------

@@ -6,3 +6,4 @@ export { MonitorDataCleanupService } from './monitor-data-cleanup.service';
 export { AttachmentCleanupService } from './attachment-cleanup.service';
 export { WechatVirtualPayReconcileService } from './wechat-virtual-pay-reconcile.service';
 export { RefundReconcileService } from './refund-reconcile.service';
+export { PaymentReconcileService } from './payment-reconcile.service';

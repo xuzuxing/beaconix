@@ -68,13 +68,13 @@ export class PaymentController {
     @ApiOperation({
         summary: 'Create a payment for an order',
         description:
-            '`WECHAT` returns JSAPI params for `wx.requestPayment` (web/H5). `WECHAT_VIRTUAL` returns `signData` + `paySig` + `signature` for `wx.requestVirtualPayment` inside the mini program, and requires a fresh `wx.login()` code.',
+            '`WECHAT` returns JSAPI params; `ALIPAY` returns cashier/QR params; `WECHAT_VIRTUAL` returns virtual-payment payData and requires a fresh wx.login() code. Each request returns a new outTradeNo for that payment attempt. Confirm payment by polling GET /orders/:id; client payment completion alone does not activate the order.',
     })
     @ApiParam({ name: 'id', description: 'Order CUID' })
     @ApiBody({ type: CreatePaymentDto })
     @ApiOkResponse({
         description:
-            'Payment params: JSAPI fields for WECHAT, virtual-payment payData for WECHAT_VIRTUAL',
+            'Payment params plus a unique outTradeNo: JSAPI fields for WECHAT, cashier/QR fields for ALIPAY, virtual-payment payData for WECHAT_VIRTUAL',
     })
     @ApiUnauthorizedResponse({ description: 'Invalid or missing JWT' })
     async pay(

@@ -57,6 +57,18 @@ export interface AlipayOrder {
     totalAmount: string;
     /** 订单标题（`subject`），用户会在收银台看到。 */
     subject: string;
+    timeExpire?: string;
+}
+
+export interface AlipayTradeResult {
+    code: string;
+    msg?: string;
+    subCode?: string;
+    subMsg?: string;
+    outTradeNo?: string;
+    tradeNo?: string;
+    tradeStatus?: string;
+    totalAmount?: string;
 }
 
 export interface AlipayCashierRequest extends AlipayOrder {

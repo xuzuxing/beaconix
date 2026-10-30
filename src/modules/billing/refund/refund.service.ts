@@ -319,6 +319,13 @@ export class RefundService {
 
         if (!refund) throw new NotFoundException('Refund not found');
         if (refund.status === SUCCESS) return refund;
+        if (
+            result.refundFee !== undefined &&
+            (!Number.isSafeInteger(result.refundFee) ||
+                result.refundFee !== refund.amount)
+        ) {
+            throw new BadRequestException('Refund amount mismatch');
+        }
 
         await this.prisma.$transaction(async (tx) => {
             // 与支付回调、订阅过期扫描共用同一把租户锁，避免订阅栈并发错乱。
@@ -415,6 +422,33 @@ export class RefundService {
             return { handled: false, message: 'Refund not found' };
         }
 
+        const order = await this.prisma.order.findUniqueOrThrow({
+            where: { id: refund.orderId },
+        });
+        const payment = await this.prisma.payment.findUnique({
+            where: { orderId: refund.orderId },
+        });
+        if (
+            refund.channel !== PaymentChannel.WECHAT ||
+            !Number.isSafeInteger(parsed.refundFee) ||
+            parsed.refundFee !== refund.amount ||
+            !Number.isSafeInteger(parsed.totalFee) ||
+            parsed.totalFee !== order.amount ||
+            (parsed.currency !== undefined && parsed.currency !== 'CNY') ||
+            (parsed.outTradeNo !== undefined &&
+                parsed.outTradeNo !== (payment?.outTradeNo ?? order.orderNo)) ||
+            (parsed.transactionId !== undefined &&
+                parsed.transactionId !== payment?.transactionId)
+        ) {
+            this.logger.error(
+                `Refund callback amount or payment mismatch for ${refund.refundNo}`,
+            );
+            return {
+                handled: false,
+                message: 'Refund amount or payment mismatch',
+            };
+        }
+
         if (parsed.status === 'SUCCESS') {
             await this.markSuccess(refund.id, parsed);
         } else if (parsed.status === 'FAILED') {
@@ -504,9 +538,12 @@ export class RefundService {
         const order = await this.prisma.order.findUniqueOrThrow({
             where: { id: refund.orderId },
         });
+        const payment = await this.prisma.payment.findUnique({
+            where: { orderId: order.id },
+        });
         const result = await provider.queryRefund({
             refundNo: refund.refundNo,
-            outTradeNo: order.orderNo,
+            outTradeNo: payment?.outTradeNo ?? order.orderNo,
             orderId: order.id,
         });
 
@@ -615,7 +652,7 @@ export class RefundService {
                 .getRefundProvider(refund.channel)
                 .refund({
                     outRefundNo: refund.refundNo,
-                    outTradeNo: order.orderNo,
+                    outTradeNo: payment.outTradeNo ?? order.orderNo,
                     // 虚拟支付要用订单 id 找支付尝试（openid + 真实单号）
                     orderId: order.id,
                     transactionId: payment.transactionId ?? undefined,

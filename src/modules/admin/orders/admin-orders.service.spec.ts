@@ -49,15 +49,17 @@ function createService() {
         organizationRecipients: jest.fn().mockResolvedValue(['owner']),
     };
 
+    const payments = { cancelOrder: jest.fn().mockResolvedValue(true) };
     const service = new AdminOrdersService(
         prisma as unknown as PrismaService,
         notifications as never,
         {
             getEffectivePlanInTransaction: jest.fn().mockResolvedValue(null),
         } as never,
+        payments as never,
     );
 
-    return { service, prisma, notifications };
+    return { service, prisma, notifications, payments };
 }
 
 describe('AdminOrdersService', () => {
@@ -136,7 +138,7 @@ describe('AdminOrdersService', () => {
     });
 
     it('cancels a pending order', async () => {
-        const { service, prisma } = createService();
+        const { service, prisma, payments } = createService();
         prisma.order.updateMany.mockResolvedValue({ count: 1 });
         prisma.order.findUnique.mockResolvedValue({
             ...orderRow,
@@ -146,10 +148,7 @@ describe('AdminOrdersService', () => {
 
         const cancelled = await service.cancel('order-1');
 
-        expect(prisma.order.updateMany).toHaveBeenCalledWith({
-            where: { id: 'order-1', status: 'PENDING' },
-            data: { status: 'CANCELLED', cancelledAt: expect.any(Date) },
-        });
+        expect(payments.cancelOrder).toHaveBeenCalledWith('order-1');
         expect(cancelled.status).toBe('CANCELLED');
     });
 
@@ -220,7 +219,8 @@ describe('AdminOrdersService', () => {
     });
 
     it('rejects a transition the order status does not allow', async () => {
-        const { service, prisma } = createService();
+        const { service, prisma, payments } = createService();
+        payments.cancelOrder.mockResolvedValue(false);
         prisma.order.updateMany.mockResolvedValue({ count: 0 });
         prisma.order.findUnique.mockResolvedValue({ status: 'PAID' });
 
