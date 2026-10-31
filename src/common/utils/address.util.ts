@@ -87,10 +87,11 @@ export type ResolvedAddressVerdict =
 export async function resolvePublicHost(
     hostname: string,
     signal?: AbortSignal,
+    options: { allowPrivate?: boolean } = {},
 ): Promise<ResolvedAddressVerdict> {
     signal?.throwIfAborted();
     const host = hostname.replace(/^\[|\]$/g, '');
-    const allowPrivate = privateTargetsAllowed();
+    const allowPrivate = options.allowPrivate ?? privateTargetsAllowed();
     const family = isIP(host);
     if (family) {
         return allowPrivate || isPublicAddress(host)

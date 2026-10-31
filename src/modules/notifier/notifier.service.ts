@@ -3,6 +3,7 @@ import { capacityRestricted } from '../../shared/subscription/monitor-capacity.u
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { randomUUID } from 'node:crypto';
+import { notificationDiagnostic } from './notification-diagnostic';
 import { PrismaService } from '../../infra/database/prisma.service';
 import {
     MonitorStatus,
@@ -613,7 +614,12 @@ export class NotifierService {
             throw new Error(`Unsupported channel type "${channel.type}"`);
         }
 
-        await sender.send(channel, payload);
+        try {
+            await sender.send(channel, payload);
+        } catch (error) {
+            // eslint-disable-next-line preserve-caught-error -- Do not persist credential-bearing remote errors or causes in BullMQ, logs, or API responses.
+            throw new Error(notificationDiagnostic(error, channel.config));
+        }
     }
 
     private async writeLog(

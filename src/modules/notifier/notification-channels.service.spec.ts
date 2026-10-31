@@ -42,6 +42,34 @@ function createService() {
 }
 
 describe('NotificationChannelsService', () => {
+    it.each([
+        'http://127.1/hook',
+        'http://169.254.169.254/latest/meta-data',
+        'http://[::ffff:127.0.0.1]/hook',
+        'https://user:secret@example.com/hook',
+        'https://example.com/hook#secret',
+    ])(
+        'rejects unsafe destinations on both create and update: %s',
+        async (webhookUrl) => {
+            const { service, prisma } = createService();
+            prisma.notificationChannel.findFirst.mockResolvedValue(channelRow);
+            await expect(
+                service.create('org-1', {
+                    type: 'FEISHU',
+                    name: 'Unsafe',
+                    config: { webhookUrl },
+                }),
+            ).rejects.toThrow(BadRequestException);
+            await expect(
+                service.update('org-1', channelRow.id, {
+                    config: { webhookUrl },
+                }),
+            ).rejects.toThrow(BadRequestException);
+            expect(prisma.notificationChannel.create).not.toHaveBeenCalled();
+            expect(prisma.notificationChannel.update).not.toHaveBeenCalled();
+        },
+    );
+
     describe('create', () => {
         it('stores a valid channel config', async () => {
             const { service, prisma } = createService();

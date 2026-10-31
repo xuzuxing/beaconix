@@ -241,6 +241,100 @@ describe('NotifierService outbox revision protection', () => {
 });
 
 describe('NotifierService', () => {
+    describe('credential-safe failures', () => {
+        const channel = {
+            ...channelRow,
+            config: {
+                webhookUrl: 'https://example.com/hook/private-bot-token',
+                secret: ' signing-secret ',
+            },
+        };
+        const payload = { monitorId: 'monitor-1' } as never;
+        const failure = () =>
+            new Error('provider echoed private-bot-token signing-secret');
+        const safeMessage = 'provider echoed [REDACTED] [REDACTED]';
+
+        it('stores and rethrows a sanitized queue error without the credential-bearing cause', async () => {
+            const { service, prisma, senders } = createService();
+            prisma.notificationChannel.findUnique.mockResolvedValue(channel);
+            senders.feishu.send.mockRejectedValue(failure());
+            const result = await service
+                .deliver(channel.id, payload)
+                .catch((error: unknown) => error);
+            expect(result).toBeInstanceOf(Error);
+            expect((result as Error).message).toBe(safeMessage);
+            expect((result as Error).cause).toBeUndefined();
+            expect(prisma.notificationLog.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    status: 'FAILED',
+                    error: safeMessage,
+                }),
+            });
+        });
+
+        it('returns a sanitized test-message failure', async () => {
+            const { service, prisma, senders } = createService();
+            prisma.notificationChannel.findFirst.mockResolvedValue(channel);
+            senders.feishu.send.mockRejectedValue(failure());
+            await expect(
+                service.sendTestMessage('org-1', channel.id),
+            ).resolves.toEqual({
+                delivered: false,
+                error: safeMessage,
+            });
+        });
+
+        it('stores safe outbox diagnostics and rethrows only the safe error', async () => {
+            const { service, prisma, senders } = createService();
+            const tx = {
+                ...prisma,
+                $queryRaw: jest.fn(),
+                alertDelivery: {
+                    findUnique: jest.fn().mockResolvedValue({
+                        id: 'delivery-1',
+                        channelId: channel.id,
+                        status: 'PENDING',
+                        phase: 'OPEN',
+                        attempts: 0,
+                        nextAttemptAt: new Date(0),
+                        payload,
+                        event: {
+                            monitorId: 'monitor-1',
+                            organizationId: 'org-1',
+                            kind: 'CONNECTIVITY',
+                            status: 'ongoing',
+                        },
+                    }),
+                    update: jest.fn(),
+                    updateMany: jest.fn(),
+                },
+            };
+            Object.assign(prisma, {
+                $transaction: jest.fn((callback: (value: unknown) => unknown) =>
+                    callback(tx),
+                ),
+            });
+            prisma.notificationChannel.findFirst.mockResolvedValue(channel);
+            prisma.monitor.findFirst.mockResolvedValue(monitorRow);
+            senders.feishu.send.mockRejectedValue(failure());
+            await expect(
+                service.deliverAlertDelivery('delivery-1'),
+            ).rejects.toThrow(safeMessage);
+            expect(prisma.notificationLog.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({
+                    status: 'FAILED',
+                    error: `Error: ${safeMessage}`,
+                }),
+            });
+            expect(tx.alertDelivery.updateMany).toHaveBeenCalledWith({
+                where: expect.anything(),
+                data: expect.objectContaining({
+                    lastError: `Error: ${safeMessage}`,
+                }),
+            });
+        });
+    });
+
     describe('notifyTransition', () => {
         it('enqueues one job per enabled channel without sending synchronously', async () => {
             const { service, prisma, queue, stateService, senders } =

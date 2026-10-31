@@ -17,6 +17,7 @@ import { EmailTemplate } from '../email/email.types';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../../generated/prisma/enums';
 import type { UserModel } from '../../generated/prisma/models';
+import type { Prisma } from '../../generated/prisma/client';
 import { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { JwtConfig } from '../../config';
 import {
@@ -126,60 +127,88 @@ export class AuthService {
 
     async refresh(dto: RefreshTokenDto) {
         const tokenHash = this.hashToken(dto.refreshToken);
-
-        const storedToken = await this.prisma.refreshToken.findUnique({
+        const metadata = await this.prisma.refreshToken.findUnique({
             where: { token: tokenHash },
-            include: { user: true },
+            select: { userId: true },
         });
-
-        if (!storedToken) {
-            throw new UnauthorizedException('Invalid refresh token');
-        }
-        if (storedToken.revokedAt) {
-            throw new UnauthorizedException('Refresh token has been revoked');
-        }
-        if (storedToken.expiresAt < new Date()) {
-            throw new UnauthorizedException('Refresh token has expired');
-        }
-        if (!storedToken.user.isActive) {
-            throw new ForbiddenException('Account is deactivated');
-        }
-
-        // Rotate: revoke old token
-        await this.prisma.refreshToken.update({
-            where: { id: storedToken.id },
-            data: { revokedAt: new Date() },
+        if (!metadata) throw new UnauthorizedException('Invalid refresh token');
+        return this.prisma.$transaction(async (tx) => {
+            // Matches password/2FA mutations' user-first lock order. No child
+            // token may escape a concurrent session revocation.
+            await tx.$queryRaw`SELECT id FROM users WHERE id = ${metadata.userId} FOR UPDATE`;
+            const stored = await tx.refreshToken.findUnique({
+                where: { token: tokenHash },
+                include: { user: true },
+            });
+            if (!stored)
+                throw new UnauthorizedException('Invalid refresh token');
+            if (stored.revokedAt)
+                throw new UnauthorizedException(
+                    'Refresh token has been revoked',
+                );
+            const now = new Date();
+            if (stored.expiresAt <= now)
+                throw new UnauthorizedException('Refresh token has expired');
+            const { user } = stored;
+            if (user.deletedAt)
+                throw new UnauthorizedException('Invalid refresh token');
+            if (!user.isActive)
+                throw new ForbiddenException('Account is deactivated');
+            const familyId = stored.familyId ?? stored.id;
+            const claimed = await tx.refreshToken.updateMany({
+                where: {
+                    id: stored.id,
+                    revokedAt: null,
+                    expiresAt: { gt: now },
+                },
+                data: { revokedAt: now, familyId },
+            });
+            if (claimed.count !== 1)
+                throw new UnauthorizedException(
+                    'Refresh token has been revoked',
+                );
+            const tokens = await this.generateTokens(
+                user.id,
+                user.email,
+                user.globalRole,
+            );
+            await this.storeRefreshToken(
+                user.id,
+                tokens.refreshToken,
+                tx,
+                familyId,
+            );
+            return { ...tokens, user: new UserEntity(user) };
         });
-
-        // Issue new tokens
-        const { user } = storedToken;
-        const tokens = await this.generateTokens(
-            user.id,
-            user.email,
-            user.globalRole,
-        );
-        await this.storeRefreshToken(user.id, tokens.refreshToken);
-
-        return {
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            user: new UserEntity(user),
-        };
     }
 
     async logout(dto: RefreshTokenDto) {
         const tokenHash = this.hashToken(dto.refreshToken);
 
-        const storedToken = await this.prisma.refreshToken.findUnique({
+        const metadata = await this.prisma.refreshToken.findUnique({
             where: { token: tokenHash },
+            select: { userId: true },
         });
-
-        if (storedToken && !storedToken.revokedAt) {
-            await this.prisma.refreshToken.update({
-                where: { id: storedToken.id },
+        if (!metadata) return;
+        await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM users WHERE id = ${metadata.userId} FOR UPDATE`;
+            const stored = await tx.refreshToken.findUnique({
+                where: { token: tokenHash },
+            });
+            if (!stored) return;
+            // A logout of the parent after rotation must also revoke the child,
+            // while leaving other devices' token families usable.
+            await tx.refreshToken.updateMany({
+                where: {
+                    userId: metadata.userId,
+                    revokedAt: null,
+                    ...(stored.familyId
+                        ? { familyId: stored.familyId }
+                        : { id: stored.id }),
+                },
                 data: { revokedAt: new Date() },
             });
-        }
+        });
     }
 
     async getMe(userId: string) {
@@ -482,15 +511,21 @@ export class AuthService {
         return { accessToken, refreshToken };
     }
 
-    private async storeRefreshToken(userId: string, rawToken: string) {
+    private async storeRefreshToken(
+        userId: string,
+        rawToken: string,
+        tx: Prisma.TransactionClient = this.prisma,
+        familyId: string = crypto.randomUUID(),
+    ) {
         const tokenHash = this.hashToken(rawToken);
         const expiresAt = this.calculateRefreshExpiry();
 
-        await this.prisma.refreshToken.create({
+        await tx.refreshToken.create({
             data: {
                 userId,
                 token: tokenHash,
                 expiresAt,
+                familyId,
             },
         });
     }

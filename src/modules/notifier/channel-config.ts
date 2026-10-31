@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { toIsoString } from '../../common/utils/date.util';
 import { NotificationChannelType } from '../../generated/prisma/enums';
 import type { NotificationPayload } from './notifier.types';
+import { parseNotificationUrl } from './notification-url';
 
 export interface FeishuConfig {
     webhookUrl: string;
@@ -38,8 +39,6 @@ export const DEFAULT_WECHAT_FIELDS: Record<string, string> = {
     phrase2: 'status',
     time3: 'checkedAt',
 };
-
-const HTTP_URL_PATTERN = /^https?:\/\//i;
 
 function asRecord(
     config: unknown,
@@ -92,9 +91,11 @@ function requireUrl(
     channelType: string,
 ): string {
     const value = requireString(config, key, channelType);
-    if (!HTTP_URL_PATTERN.test(value)) {
+    try {
+        parseNotificationUrl(value);
+    } catch {
         throw new BadRequestException(
-            `${channelType} channel config field "${key}" must be an http(s) URL`,
+            `${channelType} channel config field "${key}" must be a public http(s) URL without credentials or a fragment`,
         );
     }
     return value;

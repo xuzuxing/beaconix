@@ -107,6 +107,7 @@ export class AuditLogInterceptor implements NestInterceptor {
                                     const after = this.extractAfter(
                                         responseData,
                                         options.idField ?? 'id',
+                                        options.entity,
                                     );
                                     const resolvedEntityId =
                                         entityId ??
@@ -175,33 +176,52 @@ export class AuditLogInterceptor implements NestInterceptor {
     private static readonly SENSITIVE_FIELDS = new Set([
         'password',
         'token',
-        'refreshToken',
-        // `key` is intentionally absent: the only columns using that name are
-        // the Project short code and the `settings` primary key, both
-        // non-sensitive, and redacting them made audit snapshots hard to read.
-        // Secret API credentials live in `keyHash`, which stays redacted.
-        'keyHash',
+        'refreshtoken',
+        // Bare `key` is contextual: Project/Setting keys are public metadata,
+        // but ApiKey creation returns a one-time secret in that same field.
+        'keyhash',
         'secret',
         // 2FA material that must never reach the audit log
-        'secretEnc',
-        'codeHash',
-        'setupToken',
-        'challengeId',
-        'recoveryCodes',
-        'credentialsEnc',
-        'tlsKey',
+        'secretenc',
+        'codehash',
+        'setuptoken',
+        'challengeid',
+        'recoverycodes',
+        'credentialsenc',
+        'tlskey',
+        'appsecret',
+        'clientsecret',
+        'corpsecret',
+        'accesstoken',
+        'apikey',
+        'xapikey',
+        'accesskey',
+        'accesskeyid',
+        'secretaccesskey',
+        'privatekey',
+        'apiv3key',
+        'pushkey',
+        'pushaeskey',
+        'webhookurl',
+        'authorization',
+        'proxyauthorization',
+        'cookie',
+        'setcookie',
     ]);
 
-    private stripSensitiveFields(data: any): any {
+    private stripSensitiveFields(data: any, entity?: string): any {
         if (!data || typeof data !== 'object') return data;
         if (Array.isArray(data))
-            return data.map((item) => this.stripSensitiveFields(item));
+            return data.map((item) => this.stripSensitiveFields(item, entity));
         if (data instanceof Date) return data;
         const cleaned = { ...data };
         for (const key of Object.keys(cleaned)) {
-            cleaned[key] = AuditLogInterceptor.SENSITIVE_FIELDS.has(key)
-                ? '[REDACTED]'
-                : this.stripSensitiveFields(cleaned[key]);
+            const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+            cleaned[key] =
+                AuditLogInterceptor.SENSITIVE_FIELDS.has(normalized) ||
+                (normalized === 'key' && entity === 'ApiKey')
+                    ? '[REDACTED]'
+                    : this.stripSensitiveFields(cleaned[key], entity);
         }
         if (cleaned.isSecret && 'value' in cleaned) {
             cleaned.value = '[REDACTED]';
@@ -222,20 +242,26 @@ export class AuditLogInterceptor implements NestInterceptor {
             const record = await delegate.findUnique({
                 where: { [idField]: entityId },
             });
-            return record ? this.stripSensitiveFields(record) : undefined;
+            return record
+                ? this.stripSensitiveFields(record, entity)
+                : undefined;
         } catch {
             return undefined;
         }
     }
 
-    private extractAfter(responseData: any, idField: string): any {
+    private extractAfter(
+        responseData: any,
+        idField: string,
+        entity?: string,
+    ): any {
         if (!responseData) return undefined;
         // If response is wrapped by TransformInterceptor: { data, meta }
         // At this point the response is still raw (before TransformInterceptor wraps it)
         if (responseData?.[idField])
-            return this.stripSensitiveFields(responseData);
+            return this.stripSensitiveFields(responseData, entity);
         if (responseData?.data?.[idField])
-            return this.stripSensitiveFields(responseData.data);
+            return this.stripSensitiveFields(responseData.data, entity);
         return undefined;
     }
 

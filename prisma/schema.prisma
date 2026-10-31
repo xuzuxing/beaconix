@@ -305,11 +305,14 @@ model RefreshToken {
   token     String    @unique // hashed refresh token
   expiresAt DateTime
   revokedAt DateTime? // null = still valid
+  /// Rotation family; legacy tokens are assigned a family on their first rotation.
+  familyId  String?
   createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([userId, familyId])
   @@index([expiresAt])
   @@map("refresh_tokens")
 }
