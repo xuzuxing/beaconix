@@ -826,10 +826,14 @@ describe('RefundService', () => {
     describe('handleWechatRefundCallback', () => {
         it('settles the refund when WeChat reports SUCCESS', async () => {
             const ctx = createService();
+            ctx.prisma.order.findUniqueOrThrow.mockResolvedValue(makeOrder());
+            ctx.prisma.payment.findUnique.mockResolvedValue(payment);
             ctx.prisma.refund.findUnique.mockResolvedValue(makeRefund());
             ctx.provider.parseRefundCallback.mockResolvedValue({
                 status: 'SUCCESS',
                 outRefundNo: 'RF1',
+                refundFee: 19933,
+                totalFee: payment.amount,
                 channelRefundId: 'wx-refund-1',
             });
             const tx = makeTx();
@@ -846,10 +850,14 @@ describe('RefundService', () => {
 
         it('marks the refund FAILED when WeChat closed it', async () => {
             const ctx = createService();
+            ctx.prisma.order.findUniqueOrThrow.mockResolvedValue(makeOrder());
+            ctx.prisma.payment.findUnique.mockResolvedValue(payment);
             ctx.prisma.refund.findUnique.mockResolvedValue(makeRefund());
             ctx.provider.parseRefundCallback.mockResolvedValue({
                 status: 'FAILED',
                 outRefundNo: 'RF1',
+                refundFee: 19933,
+                totalFee: payment.amount,
                 failureReason: 'CLOSED',
             });
 
@@ -870,6 +878,8 @@ describe('RefundService', () => {
 
         it('answers FAIL for an unknown refund number', async () => {
             const ctx = createService();
+            ctx.prisma.order.findUniqueOrThrow.mockResolvedValue(makeOrder());
+            ctx.prisma.payment.findUnique.mockResolvedValue(payment);
             ctx.prisma.refund.findUnique.mockResolvedValue(null);
             ctx.provider.parseRefundCallback.mockResolvedValue({
                 status: 'SUCCESS',

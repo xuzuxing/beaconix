@@ -27,6 +27,9 @@ export const SCHEDULED_JOBS = {
     workspaceNotificationDelivery: 'workspace-notification-delivery',
     wechatVirtualPayReconcile: 'wechat-virtual-pay-reconcile',
     refundReconcile: 'refund-reconcile',
+    paymentReconcile: 'payment-reconcile',
+    monitorNoDataSweep: 'monitor-no-data-sweep',
+    alertDeliveryFailureSummary: 'alert-delivery-failure-summary',
 } as const;
 
 export type ScheduledJobName =
@@ -60,4 +63,7 @@ export const SCHEDULED_JOB_PATTERNS: Record<ScheduledJobName, string> = {
     'wechat-virtual-pay-reconcile': '*/5 * * * *',
     // 退款同理：微信回调可能丢失，支付宝压根没有退款回调
     'refund-reconcile': '*/5 * * * *',
+    'payment-reconcile': '*/5 * * * *',
+    'monitor-no-data-sweep': '* * * * *',
+    'alert-delivery-failure-summary': '0 9 * * *',
 };

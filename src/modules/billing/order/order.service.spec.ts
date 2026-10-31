@@ -65,9 +65,13 @@ function createService() {
         membership: { findUnique: jest.fn() },
     };
 
-    const service = new OrderService(prisma as unknown as PrismaService);
+    const payments = { cancelOrder: jest.fn().mockResolvedValue(true) };
+    const service = new OrderService(
+        prisma as unknown as PrismaService,
+        payments as never,
+    );
 
-    return { service, prisma };
+    return { service, prisma, payments };
 }
 
 describe('OrderService', () => {

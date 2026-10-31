@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { AdminAlertDeliveriesController } from './alert-deliveries/admin-alert-deliveries.controller';
+import { AdminAlertDeliveriesService } from './alert-deliveries/admin-alert-deliveries.service';
 import { QueuesModule } from '../../infra/queue/queues.module';
 import { AttachmentsModule } from '../attachments/attachments.module';
 import { BillingModule } from '../billing/billing.module';
@@ -34,6 +36,7 @@ import { AdminTicketsService } from './tickets/admin-tickets.service';
         NotificationsModule,
     ],
     controllers: [
+        AdminAlertDeliveriesController,
         SystemProbesController,
         AdminTenantsController,
         AdminMetricsController,
@@ -45,6 +48,7 @@ import { AdminTicketsService } from './tickets/admin-tickets.service';
         AdminTicketCategoriesController,
     ],
     providers: [
+        AdminAlertDeliveriesService,
         SystemProbesService,
         SystemProbeScheduler,
         SystemProbeAssignmentStore,

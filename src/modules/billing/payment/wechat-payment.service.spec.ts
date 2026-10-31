@@ -9,6 +9,9 @@ function createService(mock: boolean) {
         parseNotification: jest.fn(),
         createRefund: jest.fn(),
         queryRefund: jest.fn(),
+        queryTransaction: jest.fn(),
+        closeTransaction: jest.fn(),
+        parseRefundNotification: jest.fn(),
     };
     const runtimeConfig = {
         pay: jest.fn().mockResolvedValue({ mock }),
@@ -23,6 +26,72 @@ function createService(mock: boolean) {
 }
 
 describe('WechatPaymentService', () => {
+    it('queries and closes through the authenticated V3 client', async () => {
+        const { service, payClient } = createService(false);
+        const result = {
+            out_trade_no: 'P1',
+            trade_state: 'SUCCESS',
+            amount: { total: 100 },
+        };
+        payClient.queryTransaction.mockResolvedValue(result);
+        expect(await service.queryPayment('P1')).toEqual(result);
+        await service.closePayment('P1');
+        expect(payClient.queryTransaction).toHaveBeenCalledWith('P1');
+        expect(payClient.closeTransaction).toHaveBeenCalledWith('P1');
+    });
+
+    it('never invents paid funds when querying in mock mode', async () => {
+        const { service, payClient } = createService(true);
+        expect((await service.queryPayment('P1')).trade_state).toBe('NOTPAY');
+        await service.closePayment('P1');
+        expect(payClient.queryTransaction).not.toHaveBeenCalled();
+        expect(payClient.closeTransaction).not.toHaveBeenCalled();
+    });
+
+    it('forwards order expiry to V3', async () => {
+        const { service, payClient } = createService(false);
+        payClient.createJsapiTransaction.mockResolvedValue({ prepayId: 'id' });
+        const expiresAt = new Date('2026-10-30T00:00:00Z');
+        await service.createPayment({
+            outTradeNo: 'P1',
+            totalFee: 100,
+            payerId: 'o',
+            body: 'order',
+            expiresAt,
+        });
+        expect(payClient.createJsapiTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({ timeExpire: expiresAt.toISOString() }),
+        );
+    });
+
+    it.each([true, false])(
+        'preserves refund amounts and payment identity (mock=%s)',
+        async (mock) => {
+            const { service, payClient } = createService(mock);
+            const payload = {
+                out_refund_no: 'RF1',
+                refund_status: 'SUCCESS',
+                out_trade_no: 'P1',
+                transaction_id: 'TX1',
+                amount: { refund: 50, total: 100, currency: 'CNY' },
+            };
+            payClient.parseRefundNotification = jest
+                .fn()
+                .mockResolvedValue(payload);
+            expect(
+                await service.parseRefundCallback(
+                    JSON.stringify(payload),
+                    'sig',
+                ),
+            ).toMatchObject({
+                refundFee: 50,
+                totalFee: 100,
+                currency: 'CNY',
+                outTradeNo: 'P1',
+                transactionId: 'TX1',
+            });
+        },
+    );
     describe('mock mode (WECHAT_PAY_MOCK=true)', () => {
         it('returns mock pay params without touching the Pay client', async () => {
             const { service, payClient } = createService(true);

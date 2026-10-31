@@ -1,4 +1,5 @@
-import { Logger } from '@nestjs/common';
+import { Logger, Optional } from '@nestjs/common';
+import { MetricsService } from '../observability/metrics/metrics.service';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { ScheduledJobRegistry } from './scheduled-job.registry';
@@ -15,7 +16,10 @@ import { SCHEDULED_JOBS_QUEUE } from './scheduled-jobs.constants';
 export class ScheduledJobsProcessor extends WorkerHost {
     private readonly logger = new Logger(ScheduledJobsProcessor.name);
 
-    constructor(private readonly registry: ScheduledJobRegistry) {
+    constructor(
+        private readonly registry: ScheduledJobRegistry,
+        @Optional() private readonly metrics?: MetricsService,
+    ) {
         super();
     }
 
@@ -31,6 +35,26 @@ export class ScheduledJobsProcessor extends WorkerHost {
 
         // Errors propagate on purpose: a failed run lands in the failed set and
         // shows up in the scheduler health endpoint.
-        await definition.handler();
+        this.observe(definition.name, 'start');
+        try {
+            await definition.handler();
+            this.observe(definition.name, 'success');
+        } catch (error) {
+            this.observe(definition.name, 'failure');
+            throw error;
+        } finally {
+            this.observe(definition.name, 'complete');
+        }
+    }
+
+    private observe(
+        name: string,
+        boundary: 'start' | 'success' | 'failure' | 'complete',
+    ) {
+        try {
+            this.metrics?.recordSchedulerBoundary(name, boundary);
+        } catch {
+            /* Best effort. */
+        }
     }
 }

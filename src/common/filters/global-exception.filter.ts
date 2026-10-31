@@ -18,6 +18,7 @@ import {
     AlipayConfigurationError,
 } from '../../infra/alipay/alipay.types';
 import { SettingsService } from '../../modules/settings';
+import { withTimeout } from '../utils/with-timeout';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
@@ -101,9 +102,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
         let enabled: boolean;
         try {
-            enabled = await this.settingsService.getBoolean(
-                'develop.debugMode',
-                false,
+            // Error responses (especially readiness) must not wait indefinitely
+            // for the very database whose outage caused the original failure.
+            enabled = await withTimeout(
+                this.settingsService.getBoolean('develop.debugMode', false),
+                250,
             );
         } catch {
             return undefined;

@@ -6,6 +6,7 @@ import { ScheduledJobsRegistrar } from './scheduled-jobs.registrar';
 
 function createRegistrar(timezone = '') {
     const queue = {
+        getJobScheduler: jest.fn().mockResolvedValue(undefined),
         upsertJobScheduler: jest.fn().mockResolvedValue(undefined),
     };
     const registry = {

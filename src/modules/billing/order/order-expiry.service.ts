@@ -6,6 +6,7 @@ import {
     SCHEDULED_JOB_PATTERNS,
 } from '../../../infra/scheduler/scheduled-jobs.constants';
 import { OrderStatus } from '../../../generated/prisma/enums';
+import { PaymentService } from '../payment/payment.service';
 
 @Injectable()
 export class OrderExpiryService implements OnModuleInit {
@@ -14,6 +15,7 @@ export class OrderExpiryService implements OnModuleInit {
     constructor(
         private readonly prisma: PrismaService,
         private readonly registry: ScheduledJobRegistry,
+        private readonly payments: PaymentService,
     ) {}
 
     onModuleInit(): void {
@@ -25,21 +27,26 @@ export class OrderExpiryService implements OnModuleInit {
     }
 
     async cancelExpiredOrders(): Promise<number> {
-        const result = await this.prisma.order.updateMany({
+        const orders = await this.prisma.order.findMany({
             where: {
                 status: OrderStatus.PENDING,
                 expiresAt: { lte: new Date() },
             },
-            data: {
-                status: OrderStatus.CANCELLED,
-                cancelledAt: new Date(),
-            },
+            select: { id: true },
+            orderBy: [{ expiresAt: 'asc' }, { id: 'asc' }],
+            take: 100,
         });
-
-        if (result.count > 0) {
-            this.logger.log(`Cancelled ${result.count} expired order(s)`);
+        let count = 0;
+        for (const order of orders) {
+            try {
+                if (await this.payments.cancelOrder(order.id, true)) count += 1;
+            } catch (error) {
+                this.logger.warn(
+                    `Order cancellation failed for ${order.id}: ${error instanceof Error ? error.message : String(error)}`,
+                );
+            }
         }
-
-        return result.count;
+        if (count) this.logger.log(`Cancelled ${count} expired order(s)`);
+        return count;
     }
 }

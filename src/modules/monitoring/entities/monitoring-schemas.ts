@@ -145,7 +145,10 @@ export const alertSchema: SchemaObject = array(
         monitorName: string,
         target: string,
         monitorDeleted: boolean,
-        kind: { type: 'string', enum: ['CONNECTIVITY', 'AVAILABILITY', 'SSL'] },
+        kind: {
+            type: 'string',
+            enum: ['CONNECTIVITY', 'AVAILABILITY', 'SSL', 'NO_DATA'],
+        },
         level: { type: 'string', enum: ['warning', 'critical'] },
         status: { type: 'string', enum: ['ongoing', 'resolved'] },
         suppressedReason: {

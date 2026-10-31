@@ -7,7 +7,9 @@ export type MonitorEvent =
     | 'DEGRADED'
     | 'RECOVER'
     | 'AVAILABILITY_ALERT'
-    | 'AVAILABILITY_RECOVERED';
+    | 'AVAILABILITY_RECOVERED'
+    | 'NO_DATA'
+    | 'NO_DATA_RECOVERED';
 
 export interface NotificationPayload {
     idempotencyKey?: string;

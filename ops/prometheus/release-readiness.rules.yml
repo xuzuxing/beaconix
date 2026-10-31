@@ -1,0 +1,95 @@
+# Requires externally managed Prometheus + Alertmanager and independent delivery.
+# Target labels: job=beaconix-api (metrics), job=beaconix-ready (blackbox HTTP).
+groups:
+  - name: beaconix-release-readiness
+    rules:
+      - alert: BeaconApiUnreachable
+        expr: up{job="beaconix-api"} == 0 or absent(up{job="beaconix-api"})
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Beacon metrics target unreachable or absent
+      - alert: BeaconNotReady
+        expr: probe_success{job="beaconix-ready"} == 0 or absent(probe_success{job="beaconix-ready"})
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: Beacon readiness failed or readiness probe missing
+      - alert: BeaconSchedulerUnregistered
+        expr: max by (job_name) (beaconix_scheduler_registered) == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: A scheduler definition cannot be confirmed in Redis
+      - alert: BeaconCriticalDefinitionMissing
+        expr: >-
+          absent(beaconix_scheduler_registered{job_name="monitor-scan"})
+          or absent(beaconix_scheduler_registered{job_name="monitor-no-data-sweep"})
+          or absent(beaconix_scheduler_registered{job_name="monitor-capacity-sweep"})
+          or absent(beaconix_scheduler_registered{job_name="alert-outbox-sweep"})
+          or absent(beaconix_scheduler_registered{job_name="workspace-notification-delivery"})
+          or absent(beaconix_scheduler_registered{job_name="payment-reconcile"})
+          or absent(beaconix_scheduler_registered{job_name="refund-reconcile"})
+          or absent(beaconix_scheduler_registered{job_name="wechat-virtual-pay-reconcile"})
+          or absent(beaconix_scheduler_registered{job_name="alert-delivery-failure-summary"})
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: Expected scheduler registration samples are missing
+      - alert: BeaconMinuteJobStalled
+        expr: >-
+          (time() - max by (job_name) (beaconix_scheduler_run_timestamp_seconds{boundary="success",job_name=~"monitor-scan|monitor-no-data-sweep|monitor-capacity-sweep|alert-outbox-sweep|workspace-notification-delivery"}) > 180)
+          or
+          (max by (job_name) (beaconix_scheduler_registered{job_name=~"monitor-scan|monitor-no-data-sweep|monitor-capacity-sweep|alert-outbox-sweep|workspace-notification-delivery"})
+          unless on (job_name) max by (job_name) (beaconix_scheduler_run_timestamp_seconds{boundary="success"}))
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: Minute handler has no recent success (or has never succeeded)
+      - alert: BeaconPaymentJobStalled
+        expr: >-
+          (time() - max by (job_name) (beaconix_scheduler_run_timestamp_seconds{boundary="success",job_name=~"payment-reconcile|refund-reconcile|wechat-virtual-pay-reconcile"}) > 900)
+          or
+          (max by (job_name) (beaconix_scheduler_registered{job_name=~"payment-reconcile|refund-reconcile|wechat-virtual-pay-reconcile"})
+          unless on (job_name) max by (job_name) (beaconix_scheduler_run_timestamp_seconds{boundary="success"}))
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Payment reconciliation handler has no recent success
+      - alert: BeaconDailySummaryMissing
+        expr: >-
+          ((max by (job_name) (beaconix_scheduler_run_timestamp_seconds{boundary="success",job_name="alert-delivery-failure-summary"})
+          < time() - ((time() + 28800) % 86400))
+          or
+          (max by (job_name) (beaconix_scheduler_registered{job_name="alert-delivery-failure-summary"})
+          unless on (job_name) max by (job_name) (beaconix_scheduler_run_timestamp_seconds{boundary="success"})))
+          and on () vector(((time() + 28800) % 86400) > bool 34200) == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: No daily failure-summary success after 09:30 Asia/Shanghai
+      - alert: BeaconSnapshotStale
+        expr: >-
+          (time() - max by (source) (beaconix_metrics_snapshot_last_success_timestamp_seconds) > 60)
+          or absent(beaconix_metrics_snapshot_last_success_timestamp_seconds{source="alert-deliveries"})
+          or absent(beaconix_metrics_snapshot_last_success_timestamp_seconds{source="workspace-notifications"})
+          or absent(beaconix_metrics_snapshot_last_success_timestamp_seconds{source="monitor-checks"})
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: Backlog samples are stale or have never succeeded
+      - alert: BeaconDueWorkStalled
+        expr: >-
+          (max by (source) (beaconix_work_backlog{measurement="oldest_age_seconds"}) > 300)
+          and on (source) (max by (source) (beaconix_work_backlog{measurement="count"}) > 0)
+          and on (source) (time() - max by (source) (beaconix_metrics_snapshot_last_success_timestamp_seconds) < 60)
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: Due SQL work persists beyond its retry/lease deadline
+      - alert: BeaconQueueFailures
+        expr: max by (queue_name) (beaconix_queue_jobs{status="failed"}) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: BullMQ contains failed attempts; inspect business outcomes and retry policy

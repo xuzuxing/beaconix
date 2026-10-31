@@ -67,6 +67,22 @@ function createService() {
 }
 
 describe('AdminMetricsService', () => {
+    it('bounds Redis stalls and reports unavailable instead of a healthy empty backlog', async () => {
+        jest.useFakeTimers();
+        try {
+            const { service, scanQueue } = createService();
+            scanQueue.getJobCounts.mockImplementation(
+                () => new Promise(() => undefined),
+            );
+            const pending = expect(
+                service.getSchedulerHealth(),
+            ).rejects.toThrow('Scheduler health unavailable');
+            await jest.advanceTimersByTimeAsync(3000);
+            await pending;
+        } finally {
+            jest.useRealTimers();
+        }
+    });
     it('builds per-tenant usage metrics', async () => {
         const { service, prisma } = createService();
         prisma.organization.findMany.mockResolvedValue([

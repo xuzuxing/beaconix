@@ -87,4 +87,9 @@ RUN find node_modules/.prisma -type f -not -name "*linux-musl*" -name "*.node" -
 ENV PORT=3000
 EXPOSE $PORT
 
-CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy --config prisma.config.ts && node dist/src/main"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD node -e "const p=(process.env.GLOBAL_PREFIX??'/api').trim().replace(/^\/+|\/+$/g,'');fetch('http://localhost:'+process.env.PORT+(p?'/'+p:'')+'/health/live',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Run migrations first, then start the server
+# DATABASE_URL is injected by Render at container startup — not available at build time
+CMD ["sh", "-c", "npx prisma migrate deploy --config prisma.config.ts && node dist/src/main"]

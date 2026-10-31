@@ -133,6 +133,7 @@ enum NotificationType {
   MONITOR_CAPACITY_RESTORED
   MONITOR_ALERT
   MONITOR_RECOVERED
+  ALERT_DELIVERY_FAILED_SUMMARY
   API_KEY_CREATED
   API_KEY_REVOKED
   PERSONAL_ACCESS_TOKEN_CREATED
@@ -1081,6 +1082,8 @@ model MonitorState {
   status             MonitorStatus  @default(UNKNOWN)
   failCount          Int            @default(0)
   lastCheckAt        DateTime?
+  noDataSince        DateTime?
+  lastEffectiveObservationAt DateTime?
   // 最近一次"本地检测"时间（探针回调不会推进它），调度到期判定只看这一列
   lastLocalCheckAt   DateTime?
   executionBlockedReason String?
@@ -1474,6 +1477,7 @@ model AlertDelivery {
 
   @@unique([eventId, eventRevision, phase, channelId])
   @@index([status, nextAttemptAt])
+  @@index([status, createdAt, id])
   @@map("alert_deliveries")
 }
 
@@ -1736,19 +1740,21 @@ model Order {
 
 // 支付记录
 model Payment {
-  id            String         @id @default(cuid())
-  orderId       String         @unique
-  channel       PaymentChannel
+  id             String         @id @default(cuid())
+  orderId        String         @unique
+  channel        PaymentChannel
   /// 平台侧唯一单号：微信支付 V3 是 `transaction_id`，虚拟支付是 `wx_order_id`
   /// （发货推送里的 `WeChatPayInfo.MchOrderNo`）。幂等去重以此为准。
-  transactionId String?        @unique
-  prepayId      String?
-  amount        Int
+  transactionId  String?        @unique
+  prepayId       String?
+  /// 最终结算的商户支付尝试单号；历史记录为空时回退到 Order.orderNo。
+  outTradeNo     String?
+  amount         Int
   /// 累计已退金额（分），与 `Order.refundedAmount` 同步累加。
-  refundedAmount Int           @default(0)
-  status        PaymentStatus  @default(PENDING)
-  paidAt        DateTime?
-  rawCallback   Json?
+  refundedAmount Int            @default(0)
+  status         PaymentStatus  @default(PENDING)
+  paidAt         DateTime?
+  rawCallback    Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1817,25 +1823,31 @@ enum PaymentAttemptStatus {
 }
 
 model PaymentAttempt {
-  id         String              @id @default(cuid())
-  orderId    String
-  channel    PaymentChannel
+  id                  String               @id @default(cuid())
+  orderId             String
+  channel             PaymentChannel
   /// 商家业务单号：8-32 位、不以 `_` 开头、每次下单重新生成。
-  outTradeNo String              @unique
+  outTradeNo          String               @unique
   /// 下单用的用户 openid（虚拟支付按 openid + 单号查单）。
-  openid     String
+  openid              String
   /// 虚拟支付道具 ID；V3 通道为空。
-  productId  String?
+  productId           String?
   /// 金额（分），下单时从订单抄下来，回调用它核对实付金额。
-  amount     Int
+  amount              Int
   /// 0 = 现网，1 = 沙箱。
-  env        Int                 @default(0)
-  status     PaymentAttemptStatus @default(PENDING)
-  /// 平台侧唯一单号（= `wx_order_id`），幂等键。
-  wxOrderId  String?             @unique
-  paidAt     DateTime?
+  env                 Int                  @default(0)
+  status              PaymentAttemptStatus @default(PENDING)
+  /// 渠道交易号（虚拟支付 wx_order_id、V3 transaction_id、支付宝 trade_no），幂等键。
+  wxOrderId           String?              @unique
+  paidAt              DateTime?
   /// 回调原文（虚拟支付是 XML 字符串，包装成 `{ xml }`）。
-  rawNotify  Json?
+  rawNotify           Json?
+  prepayId            String?
+  lastCheckedAt       DateTime?
+  lastError           String?
+  closePending        Boolean              @default(false)
+  reconcileLeaseToken String?
+  reconcileLeaseUntil DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1844,6 +1856,7 @@ model PaymentAttempt {
 
   @@index([orderId])
   @@index([status, createdAt])
+  @@index([channel, status, lastCheckedAt])
   @@map("payment_attempts")
 }
 

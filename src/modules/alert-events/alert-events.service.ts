@@ -208,6 +208,33 @@ export class AlertEventsService {
         return { deliveries, availabilityAlertActive };
     }
 
+    async noData(
+        tx: Tx,
+        monitor: MonitorModel,
+        active: boolean,
+        checkedAt: Date,
+        status: string,
+    ): Promise<number> {
+        return this.reconcile(
+            tx,
+            monitor,
+            'NO_DATA',
+            active,
+            {
+                reason: 'NO_DATA',
+                level: 'warning',
+                threshold: Math.max(3 * monitor.interval, 600),
+                unit: 'seconds',
+                message: active
+                    ? 'No recent effective observation. Monitor health is unknown.'
+                    : null,
+            },
+            { success: false, latency: 0, checkedAt },
+            true,
+            status,
+        );
+    }
+
     private async reconcile(
         tx: Tx,
         monitor: MonitorModel,
@@ -300,9 +327,14 @@ export class AlertEventsService {
                     title: active
                         ? `${monitor.name}: ${kind.toLowerCase()} alert`
                         : `${monitor.name}: ${kind.toLowerCase()} recovered`,
-                    body: active
-                        ? 'A monitoring condition requires attention. Review the incident details.'
-                        : 'The monitoring condition has recovered.',
+                    body:
+                        kind === 'NO_DATA'
+                            ? active
+                                ? 'No recent effective observation. Monitor health is unknown.'
+                                : `Effective observations have resumed. Current monitor status: ${status}.`
+                            : active
+                              ? 'A monitoring condition requires attention. Review the incident details.'
+                              : 'The monitoring condition has recovered.',
                     resourceType: 'Monitor',
                     resourceId: monitor.id,
                     meta: {
@@ -344,18 +376,23 @@ export class AlertEventsService {
             monitorType: monitor.type,
             target: monitor.target,
             organizationId: monitor.organizationId,
-            previousStatus: active ? 'UP' : 'DOWN',
+            previousStatus:
+                kind === 'NO_DATA' ? 'UNKNOWN' : active ? 'UP' : 'DOWN',
             status,
             event:
-                kind === 'AVAILABILITY'
+                kind === 'NO_DATA'
                     ? active
-                        ? 'AVAILABILITY_ALERT'
-                        : 'AVAILABILITY_RECOVERED'
-                    : active
-                      ? 'DOWN'
-                      : 'RECOVER',
+                        ? 'NO_DATA'
+                        : 'NO_DATA_RECOVERED'
+                    : kind === 'AVAILABILITY'
+                      ? active
+                          ? 'AVAILABILITY_ALERT'
+                          : 'AVAILABILITY_RECOVERED'
+                      : active
+                        ? 'DOWN'
+                        : 'RECOVER',
             failCount: 0,
-            latency: outcome.latency,
+            latency: kind === 'NO_DATA' ? null : outcome.latency,
             error: active ? (evidence.message ?? event.reason) : null,
             checkedAt: outcome.checkedAt ?? at,
             ...(kind === 'AVAILABILITY'

@@ -176,6 +176,12 @@ export class AdminSchedulerProbesEntity {
 }
 
 export class AdminSchedulerHealthEntity {
+    @ApiProperty({
+        type: [String],
+        description:
+            'Jobs defined on this API instance; compare with Redis schedulers. Execution history is in Prometheus worker metrics.',
+    })
+    definedJobs: string[];
     @ApiProperty({ type: AdminSchedulerQueueEntity })
     scanQueue: AdminSchedulerQueueEntity;
 

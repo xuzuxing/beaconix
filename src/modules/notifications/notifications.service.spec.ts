@@ -120,6 +120,44 @@ function fixture() {
 }
 
 describe('NotificationsService transactional publishing', () => {
+    it('deduplicates a daily failure summary and reserves both inbox and email with admin audience', async () => {
+        const { service, deliveries, notices, authorization, event } =
+            fixture();
+        const summary = {
+            ...event,
+            eventKey: 'alert-delivery-failures:org:2026-10-30',
+            type: 'ALERT_DELIVERY_FAILED_SUMMARY' as const,
+            accessScope: 'ORGANIZATION' as const,
+            projectId: undefined,
+            resourceType: 'Organization',
+            resourceId: 'org',
+            email: true,
+        };
+        await service.publish(summary);
+        await service.publish({
+            ...summary,
+            body: 'Changed count on the same day',
+        });
+        expect(notices.size).toBe(1);
+        expect([...deliveries.values()].map((d) => d.channel).sort()).toEqual([
+            'EMAIL',
+            'SSE',
+        ]);
+        expect(authorization.eligible).toHaveBeenCalledWith(
+            expect.objectContaining({
+                accessScope: 'ORGANIZATION',
+                organizationRoles: ['OWNER', 'ADMIN'],
+                organizationId: 'org',
+            }),
+            expect.anything(),
+        );
+        await service.publish({
+            ...summary,
+            eventKey: 'alert-delivery-failures:org:2026-10-31',
+        });
+        expect(notices.size).toBe(2);
+        expect(deliveries.size).toBe(4);
+    });
     it.each([
         ['PASSWORD_CHANGED', 'ACCOUNT', undefined],
         ['PASSWORD_RESET_COMPLETED', 'ACCOUNT', undefined],

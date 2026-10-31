@@ -3,6 +3,7 @@ import { QueuesModule } from '../queue/queues.module';
 import { ScheduledJobRegistry } from './scheduled-job.registry';
 import { ScheduledJobsProcessor } from './scheduled-jobs.processor';
 import { ScheduledJobsRegistrar } from './scheduled-jobs.registrar';
+import { SchedulerHealthCollector } from './scheduler-health.collector';
 
 /**
  * Owns the recurring-job plumbing: feature modules only register their handler
@@ -16,6 +17,7 @@ import { ScheduledJobsRegistrar } from './scheduled-jobs.registrar';
         ScheduledJobRegistry,
         ScheduledJobsProcessor,
         ScheduledJobsRegistrar,
+        SchedulerHealthCollector,
     ],
     exports: [ScheduledJobRegistry],
 })

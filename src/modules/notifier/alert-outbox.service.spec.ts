@@ -66,7 +66,11 @@ describe('AlertOutboxService', () => {
         queue.add.mockRejectedValue(new Error('Redis unavailable'));
         await expect(service.dispatch()).resolves.toBe(1);
         expect(prisma.alertDelivery.updateMany).toHaveBeenLastCalledWith({
-            where: { id: row.id, status: 'QUEUED' },
+            where: {
+                id: row.id,
+                status: 'QUEUED',
+                leaseUntil: expect.any(Date),
+            },
             data: expect.objectContaining({
                 status: 'PENDING',
                 leaseUntil: null,
@@ -90,5 +94,28 @@ describe('AlertOutboxService', () => {
             }),
         });
         expect(queue.add).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not undo a newer claim when an old enqueue attempt fails', async () => {
+        const { service, prisma, queue, row } = fixture();
+        const stored = { ...row };
+        prisma.alertDelivery.findMany.mockResolvedValue([row]);
+        prisma.alertDelivery.updateMany.mockImplementation(
+            ({ where, data }) => {
+                const matches = Object.entries(where).every(
+                    ([key, value]) => stored[key] === value,
+                );
+                if (matches) Object.assign(stored, data);
+                return Promise.resolve({ count: matches ? 1 : 0 });
+            },
+        );
+        const nextLease = new Date(Date.now() + 300_000);
+        queue.add.mockImplementation(() => {
+            Object.assign(stored, { status: 'QUEUED', leaseUntil: nextLease });
+            return Promise.reject(new Error('old Redis enqueue failed'));
+        });
+        await service.dispatch();
+        expect(stored.status).toBe('QUEUED');
+        expect(stored.leaseUntil).toBe(nextLease);
     });
 });

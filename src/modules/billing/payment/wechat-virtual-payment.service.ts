@@ -234,17 +234,35 @@ export class WechatVirtualPaymentService implements RefundProvider {
         });
         const { env } = await this.client.credentials();
 
-        await this.prisma.paymentAttempt.create({
-            data: {
-                orderId: order.id,
-                channel: PaymentChannel.WECHAT_VIRTUAL,
-                outTradeNo,
-                openid: identity.openid,
-                productId,
-                amount: order.amount,
-                env,
-                status: PaymentAttemptStatus.PENDING,
-            },
+        await this.prisma.$transaction(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${order.organizationId} FOR UPDATE`;
+            await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`;
+            const current = await tx.order.findUniqueOrThrow({
+                where: { id: order.id },
+            });
+            const payment = await tx.payment.findUnique({
+                where: { orderId: order.id },
+            });
+            if (
+                current.status !== OrderStatus.PENDING ||
+                current.expiresAt <= new Date() ||
+                payment?.status === PaymentStatus.SUCCESS ||
+                payment?.status === PaymentStatus.REFUNDED
+            ) {
+                throw new BadRequestException('Order is no longer payable');
+            }
+            await tx.paymentAttempt.create({
+                data: {
+                    orderId: order.id,
+                    channel: PaymentChannel.WECHAT_VIRTUAL,
+                    outTradeNo,
+                    openid: identity.openid,
+                    productId,
+                    amount: order.amount,
+                    env,
+                    status: PaymentAttemptStatus.PENDING,
+                },
+            });
         });
 
         return {
@@ -529,6 +547,11 @@ export class WechatVirtualPaymentService implements RefundProvider {
 
         try {
             return await this.prisma.$transaction(async (tx) => {
+                await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${order.organizationId} FOR UPDATE`;
+                await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`;
+                const currentOrder = await tx.order.findUniqueOrThrow({
+                    where: { id: order.id },
+                });
                 const claimed = await tx.paymentAttempt.updateMany({
                     where: {
                         id: attempt.id,
@@ -546,14 +569,35 @@ export class WechatVirtualPaymentService implements RefundProvider {
                     return { settled: false, duplicate: false };
                 }
 
-                const payment = await this.ensurePayment(tx, order, params);
+                if (
+                    currentOrder.status !== OrderStatus.PENDING &&
+                    currentOrder.status !== OrderStatus.PAID
+                ) {
+                    await tx.paymentAttempt.updateMany({
+                        where: { id: attempt.id },
+                        data: {
+                            lastError: `Order is ${currentOrder.status}; manual refund required`,
+                        },
+                    });
+                    await this.notifyAdminsAboutDuplicatePayment(
+                        tx,
+                        order,
+                        attempt.outTradeNo,
+                    );
+                    return { settled: false, duplicate: true };
+                }
+
+                const payment = await this.ensurePayment(tx, currentOrder, {
+                    ...params,
+                    outTradeNo: attempt.outTradeNo,
+                });
 
                 if (!payment) {
                     return { settled: false, duplicate: true };
                 }
 
                 await settlePaidOrder(tx, {
-                    order,
+                    order: currentOrder,
                     paymentId: payment.id,
                     notifications: this.notifications,
                 });
@@ -588,25 +632,29 @@ export class WechatVirtualPaymentService implements RefundProvider {
     private async ensurePayment(
         tx: Prisma.TransactionClient,
         order: OrderModel,
-        params: { wxOrderId: string | null; paidAt: Date; rawPayload: unknown },
+        params: {
+            wxOrderId: string | null;
+            paidAt: Date;
+            rawPayload: unknown;
+            outTradeNo: string;
+        },
     ): Promise<{ id: string } | null> {
         const existing = await tx.payment.findUnique({
             where: { orderId: order.id },
         });
 
-        if (existing?.status === PaymentStatus.SUCCESS) {
-            if (
-                existing.transactionId &&
-                params.wxOrderId &&
-                existing.transactionId !== params.wxOrderId
-            ) {
+        if (
+            existing?.status === PaymentStatus.SUCCESS ||
+            order.status === OrderStatus.PAID
+        ) {
+            if (existing?.outTradeNo !== params.outTradeNo) {
                 this.logger.error(
-                    `Duplicate payment for order ${order.orderNo}: already settled with ${existing.transactionId}, got ${params.wxOrderId} — manual refund required`,
+                    `Duplicate payment for order ${order.orderNo}: got ${params.outTradeNo}; manual refund required`,
                 );
                 await this.notifyAdminsAboutDuplicatePayment(
                     tx,
                     order,
-                    params.wxOrderId,
+                    params.outTradeNo,
                 );
             }
 
@@ -619,6 +667,7 @@ export class WechatVirtualPaymentService implements RefundProvider {
                 data: {
                     channel: PaymentChannel.WECHAT_VIRTUAL,
                     transactionId: params.wxOrderId,
+                    outTradeNo: params.outTradeNo,
                     status: PaymentStatus.SUCCESS,
                     paidAt: params.paidAt,
                     rawCallback: params.rawPayload as Prisma.InputJsonValue,
@@ -632,6 +681,7 @@ export class WechatVirtualPaymentService implements RefundProvider {
                 orderId: order.id,
                 channel: PaymentChannel.WECHAT_VIRTUAL,
                 transactionId: params.wxOrderId,
+                outTradeNo: params.outTradeNo,
                 amount: order.amount,
                 status: PaymentStatus.SUCCESS,
                 paidAt: params.paidAt,
@@ -707,6 +757,17 @@ export class WechatVirtualPaymentService implements RefundProvider {
                 where: { orderId: attempt.orderId },
             });
 
+            const winner = await this.findRefundableAttempt(attempt.orderId);
+            if (
+                attempt.channel !== PaymentChannel.WECHAT_VIRTUAL ||
+                winner?.outTradeNo !== attempt.outTradeNo
+            ) {
+                this.logger.warn(
+                    `Refund for non-settling attempt ${notify.outTradeNo}; manual reconciliation required`,
+                );
+                return successResult(format, false);
+            }
+
             if (payment?.status === PaymentStatus.REFUNDED) {
                 return successResult(format, false);
             }
@@ -727,6 +788,7 @@ export class WechatVirtualPaymentService implements RefundProvider {
                 await this.refunds.markSuccess(inFlightRefund.id, {
                     status: 'SUCCESS',
                     channelRefundId: notify.refundId ?? undefined,
+                    refundFee: notify.refundFee ?? undefined,
                     raw: { source: 'xpay_refund_notify' },
                 });
 
@@ -903,7 +965,10 @@ export class WechatVirtualPaymentService implements RefundProvider {
             include: { order: true },
         });
 
-        if (attempt) return attempt;
+        if (attempt)
+            return attempt.channel === PaymentChannel.WECHAT_VIRTUAL
+                ? attempt
+                : null;
 
         // 尝试记录丢了（例如推送先于下单落库、或跨环境重放）：用 attach
         // （= orderNo）找回订单并补一条尝试，保证之后还能按 wx_order_id 幂等。
@@ -1072,9 +1137,25 @@ export class WechatVirtualPaymentService implements RefundProvider {
     private async findRefundableAttempt(orderId?: string) {
         if (!orderId) return null;
 
+        const payment = await this.prisma.payment.findUnique({
+            where: { orderId },
+        });
+        if (!payment || payment.channel !== PaymentChannel.WECHAT_VIRTUAL)
+            return null;
+        const identity = payment.outTradeNo
+            ? { outTradeNo: payment.outTradeNo }
+            : payment.transactionId
+              ? { wxOrderId: payment.transactionId }
+              : null;
+        if (!identity) return null;
+
         return this.prisma.paymentAttempt.findFirst({
-            where: { orderId, status: PaymentAttemptStatus.PAID },
-            orderBy: { paidAt: 'desc' },
+            where: {
+                orderId,
+                channel: PaymentChannel.WECHAT_VIRTUAL,
+                status: PaymentAttemptStatus.PAID,
+                ...identity,
+            },
             select: { outTradeNo: true, openid: true },
         });
     }

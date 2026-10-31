@@ -37,7 +37,7 @@ async function bootstrap() {
     app.useBodyParser('text', { type: ['text/xml', 'application/xml'] });
 
     // Global prefix
-    app.setGlobalPrefix('api');
+    app.setGlobalPrefix(appConfig.globalPrefix);
 
     app.enableCors({
         origin:
@@ -117,7 +117,7 @@ async function bootstrap() {
         ignoreGlobalPrefix: false,
     });
     app.use(
-        '/api/docs',
+        `${appConfig.globalPrefix}/docs`,
         apiReference({
             content: document,
             localization: {
@@ -133,7 +133,7 @@ async function bootstrap() {
             `Application running on port http://${appConfig.host}:${appConfig.port} with env ${appConfig.env}`,
         );
         logger.log(
-            `Swagger docs available at http://${appConfig.host}:${appConfig.port}/api/docs`,
+            `Swagger docs available at http://${appConfig.host}:${appConfig.port}${appConfig.globalPrefix}/docs`,
         );
     });
 }

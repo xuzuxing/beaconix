@@ -3,6 +3,7 @@ import { toIsoString } from '../../../common/utils/date.util';
 import { EmailService } from '../../email/email.service';
 import { EmailTemplate } from '../../email/email.types';
 import { parseEmailConfig } from '../channel-config';
+import { renderText, renderTitle } from '../channel-message';
 import type { NotificationChannelModel } from '../../../generated/prisma/models';
 import type {
     NotificationChannelSender,
@@ -20,6 +21,28 @@ export class EmailSender implements NotificationChannelSender {
         payload: NotificationPayload,
     ): Promise<void> {
         const config = parseEmailConfig(channel.config);
+
+        if (
+            payload.event === 'NO_DATA' ||
+            payload.event === 'NO_DATA_RECOVERED'
+        ) {
+            await Promise.all(
+                config.to.map((to) =>
+                    this.emailService.send(
+                        EmailTemplate.NOTIFICATION,
+                        {
+                            to,
+                            title: renderTitle(payload),
+                            body: renderText(payload),
+                        },
+                        payload.idempotencyKey
+                            ? `${payload.idempotencyKey}:${to}`
+                            : undefined,
+                    ),
+                ),
+            );
+            return;
+        }
 
         const template =
             payload.event === 'RECOVER'

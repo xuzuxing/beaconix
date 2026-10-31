@@ -49,7 +49,7 @@ export const loggerConfig = registerAs('logger', (): LoggerConfig => ({
     toConsole: parseBoolean(optionalEnv('LOGGER_TO_CONSOLE', 'true')),
     toFile: parseBoolean(optionalEnv('LOGGER_TO_FILE', 'false')),
     excludePaths: parseCsv(
-        optionalEnv('LOGGER_EXCLUDE_PATHS', '/api/docs,/health'),
+        optionalEnv('LOGGER_EXCLUDE_PATHS', '/docs,/health,/metrics'),
     ),
     sensitiveFields: parseCsv(
         optionalEnv(

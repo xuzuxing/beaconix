@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { HealthIndicatorService } from '@nestjs/terminus';
 import { RedisService } from '../../redis/redis.service';
+import { withTimeout } from '../../../common/utils/with-timeout';
 
 /**
  * Redis 健康检查指示器
@@ -29,11 +30,13 @@ export class RedisHealthIndicator {
 
         try {
             // 执行 PING 命令测试连接
-            const result: string = await this.redisService.getClient().ping();
+            const result = await withTimeout(
+                this.redisService.getClient().ping(),
+            );
 
             if (result !== 'PONG') {
                 return indicator.down({
-                    message: `Redis PING failed: ${result}`,
+                    message: 'Redis unavailable',
                     responseTime: `${Date.now() - startTime}ms`,
                 });
             }
@@ -42,9 +45,9 @@ export class RedisHealthIndicator {
                 message: 'Redis is healthy',
                 responseTime: `${Date.now() - startTime}ms`,
             });
-        } catch (error) {
+        } catch {
             return indicator.down({
-                message: error instanceof Error ? error.message : String(error),
+                message: 'Redis unavailable',
                 responseTime: `${Date.now() - startTime}ms`,
             });
         }

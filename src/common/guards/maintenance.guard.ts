@@ -3,9 +3,12 @@ import {
     ExecutionContext,
     Injectable,
     Logger,
+    Optional,
     ServiceUnavailableException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { ConfigService } from '@nestjs/config';
+import { httpPath } from '../../config/http-path';
 import type { Request, Response } from 'express';
 import { GlobalRole } from '../../generated/prisma/enums';
 // 直接引具体文件而不是 modules/settings 的 barrel：
@@ -19,7 +22,7 @@ import { SKIP_MAINTENANCE_KEY } from '../decorators/skip-maintenance.decorator';
 const RETRY_AFTER_SECONDS = 60;
 
 /**
- * 维护期仍然放行的路径前缀（含全局 `/api` 前缀）。
+ * 维护期仍然放行的相对路径前缀，匹配时拼上配置的全局前缀。
  *
  * 这些是「维护期不能让系统失联」的入口：健康检查、登录/刷新（否则超管进不去、
  * 也就关不掉开关）、支付回调（放过会掉单）、探针上报（否则监控数据断层）、
@@ -29,19 +32,20 @@ const RETRY_AFTER_SECONDS = 60;
  * `/api/status-pages` 一起放行。新增对外区域时记得同步这里。
  */
 const MAINTENANCE_EXEMPT_PREFIXES: readonly string[] = [
-    '/api/health',
-    '/api/status',
-    '/api/auth',
-    '/api/plans',
-    '/api/settings/public',
-    '/api/payment',
-    '/api/probes',
+    '/health',
+    '/status',
+    '/auth',
+    '/plans',
+    '/settings/public',
+    '/payment',
+    '/probes',
 ];
 
-function isExemptPath(path: string): boolean {
-    return MAINTENANCE_EXEMPT_PREFIXES.some(
-        (prefix) => path === prefix || path.startsWith(`${prefix}/`),
-    );
+function isExemptPath(path: string, globalPrefix: string): boolean {
+    return MAINTENANCE_EXEMPT_PREFIXES.some((relative) => {
+        const prefix = httpPath(globalPrefix, relative);
+        return path === prefix || path.startsWith(`${prefix}/`);
+    });
 }
 
 /**
@@ -58,9 +62,26 @@ export class MaintenanceGuard implements CanActivate {
     constructor(
         private readonly reflector: Reflector,
         private readonly settingsService: SettingsService,
+        @Optional() private readonly configService?: ConfigService,
     ) {}
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
+        // Health and other explicit exemptions must never wait on settings/DB.
+        const skip = this.reflector.getAllAndOverride<boolean>(
+            SKIP_MAINTENANCE_KEY,
+            [context.getHandler(), context.getClass()],
+        );
+        if (skip) return true;
+        const request = context.switchToHttp().getRequest<Request>();
+        if (
+            isExemptPath(
+                request.path,
+                this.configService?.get<string>('app.globalPrefix') ?? '/api',
+            )
+        )
+            return true;
+        const user = request['user'] as { globalRole?: GlobalRole } | undefined;
+        if (user?.globalRole === GlobalRole.SUPER_ADMIN) return true;
         let maintenance: boolean;
         try {
             maintenance = await this.settingsService.getBoolean(
@@ -75,18 +96,6 @@ export class MaintenanceGuard implements CanActivate {
             return true;
         }
         if (!maintenance) return true;
-
-        const skip = this.reflector.getAllAndOverride<boolean>(
-            SKIP_MAINTENANCE_KEY,
-            [context.getHandler(), context.getClass()],
-        );
-        if (skip) return true;
-
-        const request = context.switchToHttp().getRequest<Request>();
-        if (isExemptPath(request.path)) return true;
-
-        const user = request['user'] as { globalRole?: GlobalRole } | undefined;
-        if (user?.globalRole === GlobalRole.SUPER_ADMIN) return true;
 
         const response = context.switchToHttp().getResponse<Response>();
         response.setHeader('Retry-After', String(RETRY_AFTER_SECONDS));

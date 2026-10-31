@@ -85,13 +85,17 @@ function createHarness(options?: {
     queryStatus?: number;
 }) {
     const tx = {
-        order: { update: jest.fn().mockResolvedValue(order) },
+        order: {
+            update: jest.fn().mockResolvedValue(order),
+            findUniqueOrThrow: jest.fn().mockResolvedValue(order),
+        },
         payment: {
             findUnique: jest.fn().mockResolvedValue(null),
             create: jest.fn().mockResolvedValue({ id: 'payment-1' }),
             update: jest.fn().mockResolvedValue({ id: 'payment-1' }),
         },
         paymentAttempt: {
+            create: jest.fn().mockResolvedValue({ id: 'attempt-new' }),
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             update: jest.fn(),
         },
@@ -148,14 +152,20 @@ function createHarness(options?: {
                 openid: 'o_user_openid',
             }),
         },
-        payment: { findUnique: jest.fn().mockResolvedValue(null) },
+        payment: {
+            findUnique: jest.fn().mockResolvedValue({
+                channel: PaymentChannel.WECHAT_VIRTUAL,
+                outTradeNo: 'VABC123456789',
+                status: PaymentStatus.SUCCESS,
+            }),
+        },
         refund: { findFirst: jest.fn().mockResolvedValue(null) },
         order: {
             findFirst: jest.fn().mockResolvedValue(order),
             update: jest.fn(),
         },
-        $transaction: jest.fn(
-            async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx),
+        $transaction: jest.fn((fn: (client: typeof tx) => Promise<unknown>) =>
+            Promise.resolve().then(() => fn(tx)),
         ),
     };
 
@@ -241,6 +251,131 @@ function createHarness(options?: {
 }
 
 describe('WechatVirtualPaymentService', () => {
+    it('rechecks cancellation after session exchange before issuing payData', async () => {
+        const h = createHarness();
+        h.miniprogramClient.code2Session.mockImplementation(() =>
+            Promise.resolve().then(() => {
+                h.tx.order.findUniqueOrThrow.mockResolvedValue({
+                    ...order,
+                    status: 'CANCELLED',
+                });
+                return { openid: 'o_user_openid', sessionKey: 's' };
+            }),
+        );
+        await expect(
+            h.service.createPayment(order.id, 'user-1', { code: 'fresh' }),
+        ).rejects.toThrow('no longer payable');
+        expect(h.tx.paymentAttempt.create).not.toHaveBeenCalled();
+    });
+
+    it.each(['CANCELLED', 'REFUNDED'])(
+        'retains late paid funds on a %s order without issuing entitlement',
+        async (status) => {
+            const h = createHarness();
+            h.tx.order.findUniqueOrThrow.mockResolvedValue({
+                ...order,
+                status,
+            });
+            const result = await h.service.handleNotify({
+                rawBody: deliverXml(),
+                query: {},
+            });
+            expect(result.reply).toContain('<ErrCode>0</ErrCode>');
+            expect(h.tx.paymentAttempt.updateMany).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({ status: 'PAID' }),
+                }),
+            );
+            expect(h.tx.order.update).not.toHaveBeenCalled();
+            expect(h.notifications.publish).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    email: true,
+                    eventKey: expect.stringContaining('payment-duplicate:'),
+                }),
+                expect.anything(),
+            );
+        },
+    );
+
+    it('locates the winning virtual attempt by merchant number, with a transaction fallback for old payments', async () => {
+        const h = createHarness();
+        await h.service.queryRefund({
+            orderId: order.id,
+            outTradeNo: order.orderNo,
+            refundNo: 'RF1',
+        });
+        expect(h.prisma.paymentAttempt.findFirst).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                where: {
+                    orderId: order.id,
+                    channel: PaymentChannel.WECHAT_VIRTUAL,
+                    status: 'PAID',
+                    outTradeNo: 'VABC123456789',
+                },
+            }),
+        );
+        h.prisma.payment.findUnique.mockResolvedValue({
+            channel: PaymentChannel.WECHAT_VIRTUAL,
+            outTradeNo: null,
+            transactionId: 'legacy-tx',
+        });
+        await h.service.queryRefund({
+            orderId: order.id,
+            outTradeNo: order.orderNo,
+            refundNo: 'RF1',
+        });
+        expect(h.prisma.paymentAttempt.findFirst).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                where: {
+                    orderId: order.id,
+                    channel: PaymentChannel.WECHAT_VIRTUAL,
+                    status: 'PAID',
+                    wxOrderId: 'legacy-tx',
+                },
+            }),
+        );
+    });
+
+    it.each([
+        { channel: PaymentChannel.WECHAT, outTradeNo: 'P1' },
+        { channel: PaymentChannel.WECHAT_VIRTUAL },
+    ])(
+        'refuses to guess a refundable virtual attempt from %s',
+        async (payment) => {
+            const h = createHarness();
+            h.prisma.payment.findUnique.mockResolvedValue(payment);
+            expect(
+                (
+                    await h.service.queryRefund({
+                        orderId: order.id,
+                        outTradeNo: order.orderNo,
+                        refundNo: 'RF1',
+                    })
+                ).status,
+            ).toBe('PROCESSING');
+            expect(h.prisma.paymentAttempt.findFirst).not.toHaveBeenCalled();
+            expect(h.client.queryOrder).not.toHaveBeenCalled();
+        },
+    );
+
+    it('does not apply a refund of a duplicate virtual payment to the winning ordinary payment', async () => {
+        const h = createHarness();
+        h.prisma.payment.findUnique.mockResolvedValue({
+            channel: PaymentChannel.ALIPAY,
+            status: 'SUCCESS',
+            outTradeNo: 'P_WINNER',
+        });
+        await h.service.handleNotify({
+            rawBody: JSON.stringify({
+                Event: 'xpay_refund_notify',
+                OutTradeNo: 'VABC123456789',
+                WeChatPayInfo: { RefundFee: 2900 },
+            }),
+            query: {},
+        });
+        expect(h.tx.order.update).not.toHaveBeenCalled();
+        expect(h.refunds.markSuccess).not.toHaveBeenCalled();
+    });
     describe('verifyPushUrl', () => {
         it('echoes echostr back when no pushToken is configured', async () => {
             const harness = createHarness();
@@ -311,7 +446,7 @@ describe('WechatVirtualPaymentService', () => {
                     sessionKey: 'session-key',
                 }),
             );
-            expect(harness.prisma.paymentAttempt.create).toHaveBeenCalledWith({
+            expect(harness.tx.paymentAttempt.create).toHaveBeenCalledWith({
                 data: expect.objectContaining({
                     orderId: order.id,
                     channel: PaymentChannel.WECHAT_VIRTUAL,
@@ -428,7 +563,7 @@ describe('WechatVirtualPaymentService', () => {
                 expect.objectContaining({ title: 'Payment received' }),
                 expect.anything(),
             );
-            expect(harness.prisma.paymentAttempt.create).not.toHaveBeenCalled();
+            expect(harness.tx.paymentAttempt.create).not.toHaveBeenCalled();
         });
 
         it('is idempotent for a repeated push', async () => {
@@ -519,6 +654,8 @@ describe('WechatVirtualPaymentService', () => {
                 orderId: order.id,
                 transactionId: 'wx_order_other',
                 status: PaymentStatus.SUCCESS,
+                channel: PaymentChannel.WECHAT_VIRTUAL,
+                outTradeNo: 'V_WINNER',
             });
 
             const result = await harness.service.handleNotify({
@@ -628,6 +765,8 @@ describe('WechatVirtualPaymentService', () => {
                 id: 'payment-1',
                 orderId: order.id,
                 status: PaymentStatus.SUCCESS,
+                channel: PaymentChannel.WECHAT_VIRTUAL,
+                outTradeNo: 'VABC123456789',
             });
 
             const result = await harness.service.handleNotify({
@@ -670,6 +809,8 @@ describe('WechatVirtualPaymentService', () => {
                 id: 'payment-1',
                 orderId: order.id,
                 status: PaymentStatus.SUCCESS,
+                channel: PaymentChannel.WECHAT_VIRTUAL,
+                outTradeNo: 'VABC123456789',
             });
             harness.prisma.refund.findFirst.mockResolvedValue({
                 id: 'refund-1',
@@ -754,6 +895,8 @@ describe('WechatVirtualPaymentService (JSON pushes)', () => {
             id: 'payment-1',
             orderId: order.id,
             status: PaymentStatus.SUCCESS,
+            channel: PaymentChannel.WECHAT_VIRTUAL,
+            outTradeNo: 'VABC123456789',
         });
 
         const result = await harness.service.handleNotify({

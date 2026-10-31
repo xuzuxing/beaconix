@@ -4,6 +4,7 @@ import {
     ApiForbiddenResponse,
     ApiOkResponse,
     ApiOperation,
+    ApiServiceUnavailableResponse,
     ApiTags,
     ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -23,6 +24,10 @@ export class AdminMetricsController {
     constructor(private readonly adminMetricsService: AdminMetricsService) {}
 
     @Get('scheduler')
+    @ApiServiceUnavailableResponse({
+        description:
+            'Scheduler health unavailable; dependency query failed or exceeded three seconds',
+    })
     @ApiOperation({ summary: 'Monitor scheduler and queue health' })
     @ApiOkResponse({
         type: AdminSchedulerHealthEntity,

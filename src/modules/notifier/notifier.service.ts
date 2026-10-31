@@ -355,7 +355,12 @@ export class NotifierService {
         const renewal = setInterval(() => {
             void this.prisma.alertDelivery
                 .updateMany({
-                    where: { id: deliveryId, status: 'SENDING', leaseToken },
+                    where: {
+                        id: deliveryId,
+                        status: 'SENDING',
+                        leaseToken,
+                        leaseUntil: { gt: new Date() },
+                    },
                     data: { leaseUntil: new Date(Date.now() + 120_000) },
                 })
                 .catch((error: unknown) =>
@@ -367,6 +372,23 @@ export class NotifierService {
         try {
             await this.dispatch(channel, payload);
             await this.prisma.$transaction(async (tx) => {
+                // A slow sender can finish after the SQL lease was reclaimed.
+                // Fence the acknowledgement before writing success evidence.
+                const completed = await tx.alertDelivery.updateMany({
+                    where: {
+                        id: deliveryId,
+                        status: 'SENDING',
+                        leaseToken,
+                        leaseUntil: { gt: new Date() },
+                    },
+                    data: {
+                        status: 'SUCCESS',
+                        deliveredAt: new Date(),
+                        leaseUntil: null,
+                        leaseToken: null,
+                    },
+                });
+                if (!completed.count) return;
                 await tx.notificationLog.create({
                     data: {
                         monitorId: delivery.event.monitorId,
@@ -376,15 +398,6 @@ export class NotifierService {
                         phase: delivery.phase,
                         attempt: delivery.attempts + 1,
                         status: NotificationStatus.SUCCESS,
-                    },
-                });
-                await tx.alertDelivery.update({
-                    where: { id: deliveryId },
-                    data: {
-                        status: 'SUCCESS',
-                        deliveredAt: new Date(),
-                        leaseUntil: null,
-                        leaseToken: null,
                     },
                 });
                 await tx.alertEvent.updateMany({

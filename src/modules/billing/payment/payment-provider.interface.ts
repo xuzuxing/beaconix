@@ -12,6 +12,7 @@ export interface PaymentProviderCreateInput {
     body: string;
     /** Channel-specific product/method selector (Alipay: page.pay / wap.pay / precreate). */
     payMethod?: string;
+    expiresAt?: Date;
 }
 
 export interface PaymentProviderPayParams {
@@ -34,7 +35,7 @@ export type PaymentCallbackHeaders = Record<
 export interface PaymentProviderRefundInput {
     /** 平台退款单号，同时是渠道幂等键（微信 `out_refund_no`、支付宝 `out_request_no`）。 */
     outRefundNo: string;
-    /** 平台订单号（`Order.orderNo`），用于渠道侧定位原支付。 */
+    /** 获胜支付尝试的商户单号；旧支付回退为 `Order.orderNo`。 */
     outTradeNo: string;
     /** 平台订单 id：虚拟支付要靠它找 `PaymentAttempt`（openid + 真实单号）。 */
     orderId?: string;
@@ -60,6 +61,11 @@ export interface PaymentProviderRefundResult {
     channelRefundId?: string;
     failureReason?: string;
     raw?: unknown;
+    refundFee?: number;
+    totalFee?: number;
+    outTradeNo?: string;
+    transactionId?: string;
+    currency?: string;
 }
 
 /** 渠道退款结果通知解析后的内容。 */
@@ -100,6 +106,9 @@ export interface PaymentProvider {
     createPayment(
         input: PaymentProviderCreateInput,
     ): Promise<PaymentProviderPayParams>;
+
+    queryPayment?(outTradeNo: string): Promise<PaymentProviderCallbackResult>;
+    closePayment?(outTradeNo: string): Promise<void>;
 
     /**
      * Verifies and decodes an async payment callback body.

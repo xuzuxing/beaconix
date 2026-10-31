@@ -12,6 +12,8 @@ import {
     AttachmentCleanupService,
     WechatVirtualPayReconcileService,
     RefundReconcileService,
+    PaymentReconcileService,
+    AlertDeliveryFailureSummaryService,
 } from './jobs';
 
 @Module({
@@ -30,6 +32,8 @@ import {
         AttachmentCleanupService,
         WechatVirtualPayReconcileService,
         RefundReconcileService,
+        PaymentReconcileService,
+        AlertDeliveryFailureSummaryService,
     ],
 })
 export class CronModule {}

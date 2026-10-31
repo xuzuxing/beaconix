@@ -5,6 +5,11 @@ import type { NotificationPayload } from './notifier.types';
 export function renderTitle(payload: NotificationPayload): string {
     const prefix = payload.test ? '[TEST] ' : '';
 
+    if (payload.event === 'NO_DATA')
+        return `${prefix}[NO DATA] ${payload.monitorName}`;
+    if (payload.event === 'NO_DATA_RECOVERED')
+        return `${prefix}[OBSERVATIONS RESUMED] ${payload.monitorName}`;
+
     if (payload.event === 'AVAILABILITY_RECOVERED') {
         return `${prefix}[AVAILABILITY RECOVERED] ${payload.monitorName}`;
     }
@@ -24,6 +29,18 @@ function isAvailabilityEvent(payload: NotificationPayload): boolean {
     );
 }
 
+function isNoDataEvent(payload: NotificationPayload): boolean {
+    return payload.event === 'NO_DATA' || payload.event === 'NO_DATA_RECOVERED';
+}
+
+function timeLabel(payload: NotificationPayload): string {
+    return payload.event === 'NO_DATA'
+        ? 'Detected at'
+        : payload.event === 'NO_DATA_RECOVERED'
+          ? 'Observation at'
+          : 'Checked at';
+}
+
 /** One-line availability summary, or null when the alert carries no figures. */
 function availabilityLine(payload: NotificationPayload): string | null {
     if (payload.availabilityPercent === undefined) return null;
@@ -39,7 +56,9 @@ function availabilityLine(payload: NotificationPayload): string | null {
 function detailLines(payload: NotificationPayload): string[] {
     const lines = [`Target: ${payload.target}`];
 
-    if (isAvailabilityEvent(payload)) {
+    if (isNoDataEvent(payload)) {
+        lines.push(`Status: ${payload.status}`);
+    } else if (isAvailabilityEvent(payload)) {
         const availability = availabilityLine(payload);
         if (availability) lines.push(availability);
         lines.push(`Status: ${payload.status}`);
@@ -47,7 +66,7 @@ function detailLines(payload: NotificationPayload): string[] {
         lines.push(`Status: ${payload.previousStatus} -> ${payload.status}`);
     }
 
-    lines.push(`Checked at: ${toIsoString(payload.checkedAt)}`);
+    lines.push(`${timeLabel(payload)}: ${toIsoString(payload.checkedAt)}`);
 
     if (payload.latency !== null) {
         lines.push(`Latency: ${payload.latency}ms`);
@@ -74,7 +93,9 @@ export function renderMarkdown(payload: NotificationPayload): string {
         `**Target:** ${payload.target}`,
     ];
 
-    if (isAvailabilityEvent(payload)) {
+    if (isNoDataEvent(payload)) {
+        lines.push(`**Status:** **${payload.status}**`);
+    } else if (isAvailabilityEvent(payload)) {
         const availability = availabilityLine(payload);
         if (availability) lines.push(`**${availability}**`);
         lines.push(`**Status:** **${payload.status}**`);
@@ -96,7 +117,7 @@ export function renderMarkdown(payload: NotificationPayload): string {
         lines.push(`**Consecutive failures:** ${payload.failCount}`);
     }
 
-    lines.push(`**Checked at:** ${toIsoString(payload.checkedAt)}`);
+    lines.push(`**${timeLabel(payload)}:** ${toIsoString(payload.checkedAt)}`);
 
     return lines.join('\n');
 }

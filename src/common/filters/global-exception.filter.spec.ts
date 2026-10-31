@@ -175,4 +175,23 @@ describe('GlobalExceptionFilter', () => {
             expect.not.objectContaining({ detail: expect.anything() }),
         );
     });
+
+    it('responds even when the debug setting query never settles', async () => {
+        jest.useFakeTimers();
+        try {
+            const filter = new GlobalExceptionFilter({
+                getBoolean: () => new Promise(() => undefined),
+            } as never);
+            const { host, json, status } = createHost();
+            const pending = filter.catch(new Error('original outage'), host);
+            await jest.advanceTimersByTimeAsync(250);
+            await pending;
+            expect(status).toHaveBeenCalledWith(500);
+            expect(json).toHaveBeenCalledWith(
+                expect.not.objectContaining({ detail: expect.anything() }),
+            );
+        } finally {
+            jest.useRealTimers();
+        }
+    });
 });

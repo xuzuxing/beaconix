@@ -26,6 +26,7 @@ const baseAppConfig: AppConfig = {
     isDevelopment: false,
     isTest: false,
     corsOrigins: [],
+    globalPrefix: '/api',
     webUrl: 'http://localhost:3000',
 };
 

@@ -27,6 +27,7 @@ import type {
     CheckFailureKind,
     CheckMetadata,
 } from '../checker/checkers/check-result';
+import { observationIsFresh, NO_DATA_REASON } from './no-data-policy';
 
 /** A check outcome (local run or probe report) before it is folded into state. */
 export interface CheckOutcome {
@@ -76,6 +77,8 @@ export interface DerivedState {
 
 /** State columns written by `record` and `settle`; bare values only. */
 interface MonitorStateValues {
+    noDataSince?: Date | null;
+    lastEffectiveObservationAt?: Date;
     status: MonitorStatus;
     failCount: number;
     lastCheckAt?: Date;
@@ -253,20 +256,24 @@ export class StateService {
             };
 
             const evaluated = outcome.evaluated !== false;
-            const derived = evaluated
-                ? deriveState(
-                      {
-                          ...previous,
-                          status:
-                              monitor.enabled &&
-                              previous.status === MonitorStatus.PAUSED
-                                  ? MonitorStatus.UNKNOWN
-                                  : previous.status,
-                      },
-                      outcome.success,
-                      monitor.failureThreshold,
-                  )
-                : previous;
+            const effectiveObservation =
+                evaluated && outcome.serviceVerdict !== 'NO_EVIDENCE';
+            const derived =
+                evaluated &&
+                (!monitor.state?.noDataSince || effectiveObservation)
+                    ? deriveState(
+                          {
+                              ...previous,
+                              status:
+                                  monitor.enabled &&
+                                  previous.status === MonitorStatus.PAUSED
+                                      ? MonitorStatus.UNKNOWN
+                                      : previous.status,
+                          },
+                          outcome.success,
+                          monitor.failureThreshold,
+                      )
+                    : previous;
 
             const checkedAt =
                 outcome.source === CheckSource.PROBE
@@ -301,6 +308,14 @@ export class StateService {
                 !duplicate &&
                 !sameRound &&
                 monitor.enabled &&
+                (!monitor.state?.noDataSince ||
+                    !effectiveObservation ||
+                    ((outcome.checkedAt ?? checkedAt) >
+                        monitor.state.noDataSince &&
+                        observationIsFresh(
+                            monitor.interval,
+                            outcome.checkedAt ?? checkedAt,
+                        ))) &&
                 (!monitor.state?.lastAppliedObservationAt ||
                     checkedAt > monitor.state.lastAppliedObservationAt);
             if (duplicate || sameRound) {
@@ -348,6 +363,11 @@ export class StateService {
                     source === CheckSource.LOCAL ? checkedAt : undefined,
                 ssl: outcome.ssl,
             });
+            // Probe application is ordered by receipt time; freshness still
+            // follows its actual sample time when the caller supplies it.
+            stateValues.lastEffectiveObservationAt = effectiveObservation
+                ? (outcome.checkedAt ?? checkedAt)
+                : undefined;
 
             await tx.checkLog.create({
                 data: {
@@ -392,6 +412,19 @@ export class StateService {
                           availabilityAlertActive:
                               monitor.state?.availabilityAlertActive ?? false,
                       };
+            if (apply && effectiveObservation && monitor.state?.noDataSince) {
+                alertResult.deliveries += await this.alerts.noData(
+                    tx,
+                    monitor,
+                    false,
+                    outcome.checkedAt ?? checkedAt,
+                    derived.status,
+                );
+                stateValues.noDataSince = null;
+            }
+            if (monitor.state?.noDataSince && !effectiveObservation) {
+                stateValues.executionBlockedReason = NO_DATA_REASON;
+            }
             const state = apply
                 ? await tx.monitorState.upsert({
                       where: { monitorId },
@@ -482,19 +515,23 @@ export class StateService {
                     failCount: monitor.state?.failCount ?? 0,
                 };
                 const evaluated = log.evaluated !== false;
-                const derived = evaluated
-                    ? deriveState(
-                          {
-                              ...previous,
-                              status:
-                                  previous.status === MonitorStatus.PAUSED
-                                      ? MonitorStatus.UNKNOWN
-                                      : previous.status,
-                          },
-                          verdict.success,
-                          monitor.failureThreshold,
-                      )
-                    : previous;
+                const effectiveObservation =
+                    evaluated && verdict.serviceVerdict !== 'NO_EVIDENCE';
+                const derived =
+                    evaluated &&
+                    (!monitor.state?.noDataSince || effectiveObservation)
+                        ? deriveState(
+                              {
+                                  ...previous,
+                                  status:
+                                      previous.status === MonitorStatus.PAUSED
+                                          ? MonitorStatus.UNKNOWN
+                                          : previous.status,
+                              },
+                              verdict.success,
+                              monitor.failureThreshold,
+                          )
+                        : previous;
                 const connectivityFailCount = this.buildConnectivityCount(
                     monitor.state?.connectivityFailCount ?? 0,
                     verdict.serviceVerdict,
@@ -527,6 +564,20 @@ export class StateService {
                         appliedAt: settledAt,
                     },
                 });
+
+                // A delayed round is consumed, but cannot end an execution gap.
+                if (
+                    effectiveObservation &&
+                    monitor.state?.noDataSince &&
+                    (checkedAt <= monitor.state.noDataSince ||
+                        !observationIsFresh(
+                            monitor.interval,
+                            checkedAt,
+                            settledAt,
+                        ))
+                ) {
+                    return null;
+                }
 
                 const outcome: CheckOutcome = {
                     success: verdict.success,
@@ -573,6 +624,22 @@ export class StateService {
                     appliedAt: settledAt,
                     ssl: verdict.ssl,
                 });
+                stateValues.lastEffectiveObservationAt = effectiveObservation
+                    ? checkedAt
+                    : undefined;
+                if (effectiveObservation && monitor.state?.noDataSince) {
+                    alertResult.deliveries += await this.alerts.noData(
+                        tx,
+                        monitor,
+                        false,
+                        checkedAt,
+                        derived.status,
+                    );
+                    stateValues.noDataSince = null;
+                }
+                if (monitor.state?.noDataSince && !effectiveObservation) {
+                    stateValues.executionBlockedReason = NO_DATA_REASON;
+                }
                 const state = await tx.monitorState.upsert({
                     where: { monitorId },
                     create: {
@@ -864,6 +931,7 @@ export class StateService {
                 failCount: monitor.state?.failCount ?? 0,
                 lastCheckAt: monitor.state?.lastCheckAt ?? null,
                 lastLatency: monitor.state?.lastLatency ?? null,
+                noDataSince: monitor.state?.noDataSince ?? null,
                 lastError: monitor.state?.lastError ?? null,
                 lastNotifiedStatus: monitor.state?.lastNotifiedStatus ?? null,
                 sslExpiresAt: monitor.state?.sslExpiresAt ?? null,

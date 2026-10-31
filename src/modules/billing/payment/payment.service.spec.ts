@@ -1,7 +1,6 @@
 import { PaymentChannel, PaymentStatus } from '../../../generated/prisma/enums';
 import { AlipayPayMethod } from '../../../infra/alipay';
 import { PaymentService } from './payment.service';
-import type { PrismaService } from '../../../infra/database/prisma.service';
 import type { PaymentProviderFactory } from './payment-provider.factory';
 
 const order = {
@@ -41,16 +40,35 @@ function withPaidAmount(callback: unknown): unknown {
 
 function createService() {
     const prisma = {
-        order: { findUnique: jest.fn() },
+        order: {
+            findUnique: jest.fn(),
+            findUniqueOrThrow: jest.fn(
+                async () =>
+                    (await prisma.payment.findFirst())?.order ??
+                    (await prisma.order.findUnique()),
+            ),
+        },
         membership: { findUnique: jest.fn() },
         payment: {
             upsert: jest.fn(),
             findFirst: jest.fn(),
-            findUnique: jest.fn(),
+            findUnique: jest.fn(async () => await prisma.payment.findFirst()),
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
+        paymentAttempt: {
+            findUnique: jest.fn().mockResolvedValue(null),
+            create: jest
+                .fn()
+                .mockImplementation(({ data }) =>
+                    Promise.resolve({ id: 'attempt-new', ...data }),
+                ),
+            upsert: jest.fn(),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        $queryRaw: jest.fn(),
         $transaction: jest.fn(),
     };
+    prisma.$transaction.mockImplementation((work) => work(prisma));
     const provider = {
         createPayment: jest.fn(),
         verifyCallback: jest.fn(),
@@ -81,7 +99,7 @@ function createService() {
     };
 
     const service = new PaymentService(
-        prisma as unknown as PrismaService,
+        prisma,
         paymentProviderFactory as unknown as PaymentProviderFactory,
         notifications as never,
         {
@@ -90,6 +108,17 @@ function createService() {
     );
 
     return { service, prisma, provider, paymentProviderFactory, notifications };
+}
+
+function legacyTransaction(
+    tx: any,
+    prisma: ReturnType<typeof createService>['prisma'],
+) {
+    tx.$queryRaw ??= prisma.$queryRaw;
+    tx.order.findUniqueOrThrow ??= prisma.order.findUniqueOrThrow;
+    tx.payment.findUnique ??= prisma.payment.findUnique;
+    tx.paymentAttempt ??= prisma.paymentAttempt;
+    return tx;
 }
 
 describe('PaymentService', () => {
@@ -108,12 +137,13 @@ describe('PaymentService', () => {
 
             expect(paymentProviderFactory.get).toHaveBeenCalledWith('WECHAT');
             expect(provider.createPayment).toHaveBeenCalledWith({
-                outTradeNo: 'BWABC123',
+                outTradeNo: expect.stringMatching(/^P[0-9a-f]{30}$/),
                 totalFee: 2900,
                 payerId: 'o_xxx',
                 body: 'Beaconix plan order BWABC123',
+                expiresAt: order.expiresAt,
             });
-            expect(result).toEqual(payParams);
+            expect(result).toMatchObject(payParams);
             expect(prisma.payment.upsert).toHaveBeenCalledWith(
                 expect.objectContaining({
                     where: { orderId: 'order-1' },
@@ -223,7 +253,9 @@ describe('PaymentService', () => {
                         .mockResolvedValue({ sortOrder: 2 }),
                 },
             };
-            prisma.$transaction.mockImplementation((callback) => callback(tx));
+            prisma.$transaction.mockImplementation((callback) =>
+                callback(legacyTransaction(tx, prisma)),
+            );
             await service.handleWechatCallback('{}', 'signature');
             expect(tx.subscription.create).not.toHaveBeenCalled();
             // 续费订单的快照是「原到期时刻 → 延长后的到期时刻」。
@@ -279,7 +311,9 @@ describe('PaymentService', () => {
                         .mockResolvedValue({ sortOrder: 2 }),
                 },
             };
-            prisma.$transaction.mockImplementation((callback) => callback(tx));
+            prisma.$transaction.mockImplementation((callback) =>
+                callback(legacyTransaction(tx, prisma)),
+            );
             notifications.publish.mockRejectedValue(
                 new Error('outbox unavailable'),
             );
@@ -320,7 +354,9 @@ describe('PaymentService', () => {
                         .mockResolvedValue({ sortOrder: 2 }),
                 },
             };
-            prisma.$transaction.mockImplementation((fn) => fn(tx));
+            prisma.$transaction.mockImplementation((fn) =>
+                fn(legacyTransaction(tx, prisma)),
+            );
 
             const result = await service.handleWechatCallback(
                 JSON.stringify({}),
@@ -426,7 +462,9 @@ describe('PaymentService', () => {
                     create: jest.fn().mockResolvedValue({ id: 'sub-team' }),
                 },
             };
-            prisma.$transaction.mockImplementation((fn) => fn(tx));
+            prisma.$transaction.mockImplementation((fn) =>
+                fn(legacyTransaction(tx, prisma)),
+            );
 
             await service.handleWechatCallback('{}', 'signature');
 
@@ -487,7 +525,9 @@ describe('PaymentService', () => {
                     create: jest.fn().mockResolvedValue({ id: 'sub-pro' }),
                 },
             };
-            prisma.$transaction.mockImplementation((fn) => fn(tx));
+            prisma.$transaction.mockImplementation((fn) =>
+                fn(legacyTransaction(tx, prisma)),
+            );
 
             await service.handleWechatCallback('{}', 'signature');
 
@@ -528,7 +568,8 @@ describe('PaymentService', () => {
             );
 
             expect(result).toEqual({ code: 'SUCCESS', message: '成功' });
-            expect(prisma.$transaction).not.toHaveBeenCalled();
+            expect(prisma.$transaction).toHaveBeenCalled();
+            expect(prisma.payment.updateMany).not.toHaveBeenCalled();
             expect(notifications.publish).not.toHaveBeenCalled();
         });
 
@@ -558,7 +599,9 @@ describe('PaymentService', () => {
                     update: jest.fn(),
                 },
             };
-            prisma.$transaction.mockImplementation((fn) => fn(tx));
+            prisma.$transaction.mockImplementation((fn) =>
+                fn(legacyTransaction(tx, prisma)),
+            );
 
             const result = await service.handleWechatCallback(
                 '{}',
@@ -604,7 +647,9 @@ describe('PaymentService', () => {
                         .mockResolvedValue({ sortOrder: 2 }),
                 },
             };
-            prisma.$transaction.mockImplementation((fn) => fn(tx));
+            prisma.$transaction.mockImplementation((fn) =>
+                fn(legacyTransaction(tx, prisma)),
+            );
 
             const result = await service.handleWechatCallback(
                 '{}',
@@ -642,16 +687,17 @@ describe('PaymentService', () => {
 
             expect(paymentProviderFactory.get).toHaveBeenCalledWith('ALIPAY');
             expect(provider.createPayment).toHaveBeenCalledWith({
-                outTradeNo: 'BWABC123',
+                outTradeNo: expect.stringMatching(/^P[0-9a-f]{30}$/),
                 totalFee: 2900,
                 // 支付宝渠道没有付款人身份
                 payerId: undefined,
                 payMethod: AlipayPayMethod.PAGE,
                 body: 'Beaconix plan order BWABC123',
+                expiresAt: order.expiresAt,
             });
             expect(result).toEqual({
                 payUrl: 'https://openapi.alipay.com/gateway.do?sign=x',
-                outTradeNo: 'BWABC123',
+                outTradeNo: expect.stringMatching(/^P[0-9a-f]{30}$/),
             });
         });
 
@@ -669,10 +715,9 @@ describe('PaymentService', () => {
                 channel: PaymentChannel.ALIPAY,
             });
 
-            expect(prisma.payment.upsert).toHaveBeenCalledWith(
+            expect(prisma.payment.updateMany).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    create: expect.objectContaining({
-                        channel: 'ALIPAY',
+                    data: expect.objectContaining({
                         prepayId:
                             'https://openapi.alipay.com/gateway.do?sign=x',
                     }),
@@ -768,14 +813,19 @@ describe('PaymentService', () => {
                 expect.objectContaining({
                     where: {
                         id: 'payment-1',
-                        status: { not: PaymentStatus.SUCCESS },
+                        status: {
+                            notIn: [
+                                PaymentStatus.SUCCESS,
+                                PaymentStatus.REFUNDED,
+                            ],
+                        },
                     },
                     data: expect.objectContaining({
                         status: PaymentStatus.FAILED,
                     }),
                 }),
             );
-            expect(prisma.$transaction).not.toHaveBeenCalled();
+            expect(prisma.$transaction).toHaveBeenCalled();
         }
 
         it('rejects a callback whose amount is lower than the order', async () => {
@@ -867,7 +917,7 @@ describe('PaymentService', () => {
 
             expect(result.code).toBe('FAIL');
             expect(prisma.payment.updateMany).not.toHaveBeenCalled();
-            expect(prisma.$transaction).not.toHaveBeenCalled();
+            expect(prisma.$transaction).toHaveBeenCalled();
         });
     });
 });

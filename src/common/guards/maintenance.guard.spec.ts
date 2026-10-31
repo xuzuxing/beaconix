@@ -3,6 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { GlobalRole } from '../../generated/prisma/enums';
 import { SettingsService } from '../../modules/settings/settings.service';
 import { MaintenanceGuard } from './maintenance.guard';
+import { ConfigService } from '@nestjs/config';
 
 describe('MaintenanceGuard', () => {
     function setup(
@@ -12,6 +13,7 @@ describe('MaintenanceGuard', () => {
             globalRole?: GlobalRole;
             skip?: boolean;
             readError?: boolean;
+            prefix?: string;
         } = {},
     ) {
         const setHeader = jest.fn();
@@ -35,16 +37,23 @@ describe('MaintenanceGuard', () => {
             getBoolean: options.readError
                 ? jest.fn().mockRejectedValue(new Error('db down'))
                 : jest.fn().mockResolvedValue(options.maintenance ?? false),
-        } as unknown as SettingsService;
+        };
 
         const reflector = {
             getAllAndOverride: jest.fn().mockReturnValue(options.skip ?? false),
         } as unknown as Reflector;
 
         return {
-            guard: new MaintenanceGuard(reflector, settingsService),
+            guard: new MaintenanceGuard(
+                reflector,
+                settingsService as unknown as SettingsService,
+                new ConfigService({
+                    app: { globalPrefix: options.prefix ?? '/api' },
+                }),
+            ),
             context,
             setHeader,
+            settingsService,
         };
     }
 
@@ -129,10 +138,35 @@ describe('MaintenanceGuard', () => {
     });
 
     it('honours the @SkipMaintenance() decorator', async () => {
-        const { guard, context } = setup({ maintenance: true, skip: true });
+        const { guard, context, settingsService } = setup({
+            maintenance: true,
+            skip: true,
+        });
 
         await expect(guard.canActivate(context)).resolves.toBe(true);
+        expect(settingsService.getBoolean).not.toHaveBeenCalled();
     });
+
+    it.each(['/backend', ''])(
+        'exempts operational routes under prefix %j before settings access',
+        async (prefix) => {
+            const { guard, context, settingsService } = setup({
+                prefix,
+                path: `${prefix}/health/live`,
+                maintenance: true,
+            });
+            await expect(guard.canActivate(context)).resolves.toBe(true);
+            expect(settingsService.getBoolean).not.toHaveBeenCalled();
+            const old = setup({
+                prefix,
+                path: '/api/health/live',
+                maintenance: true,
+            });
+            await expect(
+                old.guard.canActivate(old.context),
+            ).rejects.toBeInstanceOf(ServiceUnavailableException);
+        },
+    );
 
     it('fails open when the setting cannot be read', async () => {
         const { guard, context } = setup({

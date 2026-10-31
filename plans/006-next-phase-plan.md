@@ -1,6 +1,6 @@
 # 006：下一阶段开发计划（基于闭环审计）
 
-> 状态：待评审。日期：2026-10-28。
+> 状态：历史路线图。2026-10-30：007正确性、008降级宽限与邮件、009支付补偿、010 C5/C6已有实现；011进入可用性收尾，本轮已补本地数据库与业务回归。当前状态与边界见 `plans/README.md`、`plans/011-release-readiness.md`，下文保留原审计事实，不再按旧缺口重复排期。
 > 输入：对 `master`（`c7980a4`）当前工作树的只读审计，覆盖 `src/modules/**` 30 个业务模块、`prisma/schema.prisma`、`docs/**`、`plans/001-005`、`test/**` 与 `probes/agent`。
 > 基线：`pnpm type-check` 通过；工作树已有未提交改动（`Dockerfile`、`.dockerignore`、`package.json` 依赖分层、`pnpm-lock.yaml`、未跟踪 `scripts/notify.json`）与本计划无关，本计划不动它们。
 > 本文件只描述**下一阶段要做什么**，不复述已有设计；设计与验收契约仍以 `plans/001-005`、`docs/design/*` 为准。
@@ -99,6 +99,8 @@
 
 ### 迭代 B：支付链路补全（约 5~7 人日，依赖 A2-A5）
 
+> 2026-10-29：B1–B5 代码与自动化验证已完成，见 [009 实施记录](009-payment-chain-completion.md)。全量单测 176 suites / 2400 tests、离线 HTTP 全链 3 cases 通过；真实 PostgreSQL 迁移 / 并发验收与真实渠道联调未执行（数据库验收按用户要求跳过）。前端契约见 `docs/api/payment-reconciliation.md`。
+
 | 任务 | 落点 | 验收口径 |
 |---|---|---|
 | B1 微信 V3 查单补偿 | 调用 `wechat-pay.client.ts:130 queryTransaction`，新增 `*/5` cron（与 `refund-reconcile.service.ts` 同构，带 lease 防重） | 手工丢回调的订单在 ≤5 分钟内自动结算；重复扫描幂等 |
@@ -113,12 +115,12 @@
 
 | 任务 | 落点 | 验收口径 |
 |---|---|---|
-| C1 告警事件查询端点 | `GET /projects/:projectId/monitoring/alert-events`（按 kind/status/severity/时间/监控过滤 + 分页），`GET .../alert-events/:id`（含投递与证据） | 复用 `docs/api/response-format.md` 的 `items` 分页契约；`ProjectAccessGuard` 新轨 |
+| C1 告警事件查询端点 | 已实现：项目事件列表/详情、关联投递及尝试日志分页，按 kind/status/level/开始时间/监控过滤；失败重试复用原端点 | ProjectAccessGuard + 事务内鉴权；安全投影、历史与权限回归，前端契约见 `docs/api/alert-event-investigation.md`、实施见 012 |
 | C2 确认与关闭 | `AlertEvent.status` 扩为 `ONGOING/ACKED/RESOLVED`，新增 `ACKED` 迁移；`POST .../alert-events/:id/ack`（记录 `ackedBy/ackedAt`）；自动恢复仍由求值写 `RESOLVED`，ACK 不影响判定 | 单测：ACK 后新异常不重复开启新事件；恢复后状态为 RESOLVED |
 | C3 静默与维护窗口 | 新模型 `MonitorSilence`（scope: monitor/项目/全部，`startsAt/endsAt/reason/createdBy`），结算与投递两处判断静默：静默期不新建事件、不投递，事件落 `suppressedReason` | 单测：静默期内异常不产生投递；静默结束后的持续异常立即开启事件 |
 | C4 通用 Webhook 渠道 | `NotificationChannelType` 增 `WEBHOOK`，支持自定义 header 与 HMAC-SHA256 签名（`X-Beacon-Signature: t=..,v1=..`）；payload 复用 `channel-message.ts` 结构 | 单测 + 本地 server 接收验证；签名可被外部独立验证 |
-| C5 死信可见 | `GET /api/admin/alert-deliveries?status=FAILED` + 每日汇总通知（复用 `NotificationDelivery`），保留人工 retry | 终态 FAILED 可达；后台可筛选重试 |
-| C6 stale→UNKNOWN | 每分钟 sweep：`lastAppliedObservationAt`（本地用 `lastLocalCheckAt`）超过 `max(3×interval, 10min)` → 置 `UNKNOWN` 并发一次 `NO_DATA` 事件（同 kind 去重） | 单测：模拟停摆 15 分钟后状态为 UNKNOWN，恢复观测后回 UP 并产生 RECOVERY |
+| C5 死信可见 | 已实现：`GET /api/admin/alert-deliveries?status=FAILED` + 每日组织 OWNER/ADMIN 站内及邮件汇总（复用 `NotificationDelivery`），保留项目人工 retry | 终态 FAILED 可达；后台可筛选重试；离线 HTTP 验证通过 |
+| C6 stale→UNKNOWN | 已实现：每分钟 sweep，独立有效观测时钟 `lastEffectiveObservationAt` 超过 `max(3×interval, 10min)` → UNKNOWN + 单次 NO_DATA；创建/编辑/恢复给予调度宽限 | 离线生命周期测试覆盖停摆、恢复、旧结果拦截和 SSL 独立告警；真实数据库验收按要求跳过 |
 | C7 保留策略扩展 | `monitor-data-cleanup.service.ts` 的 `RETENTION_TARGETS` 增 `alert_events`(180d)/`alert_deliveries`(90d)/`notification_logs`(90d) | 单测沿用现有分批删除 harness |
 | C8 扫描查询下推 | 到期判定改为 SQL 侧条件（`lastLocalCheckAt` + interval 表达式或冗余 `nextCheckAt` 列 + 索引），保留应用层二次校验 | 压测/EXPLAIN 记录写入 `docs/guides/monitoring-operations.md` |
 

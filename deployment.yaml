@@ -84,6 +84,8 @@ data:
   # 监听所有网卡，否则 Service 无法转发
   HOST: "0.0.0.0"
   APP_NAME: "beaconix"
+  # Render custom prefixes with scripts/render-deployment.ts before applying.
+  GLOBAL_PREFIX: "/api"
   # 前端地址，用于邮件里的链接
   APP_WEB_URL: "https://beaconix.app"
   # 允许跨域的前端来源，逗号分隔；留空则关闭 CORS
@@ -187,6 +189,14 @@ spec:
                 name: beaconix-config
             - secretRef:
                 name: beaconix-secrets
+          # Keep probes/Ingress and Nest on the same rendered prefix even if a
+          # stale GLOBAL_PREFIX key remains in the Secret.
+          env:
+            - name: GLOBAL_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: beaconix-config
+                  key: GLOBAL_PREFIX
           volumeMounts:
             - name: storage
               mountPath: /app/storage
