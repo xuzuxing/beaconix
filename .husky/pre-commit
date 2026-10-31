@@ -1,27 +1,5 @@
-echo "Running pre-commit checks..."
-
-echo "Generating Prisma client..."
-if ! pnpm prisma:generate; then
-    echo "Prisma client generation failed!"
-    exit 1
-fi
-
-echo "Checking TypeScript types..."
-if ! pnpm type-check; then
-    echo "TypeScript type check failed!"
-    exit 1
-fi
-
-echo "Checking code formatting..."
-if ! pnpm format:check; then
-    echo "Code formatting check failed! Run 'pnpm format' to fix."
-    exit 1
-fi
-
-echo "Linting code..."
-if ! pnpm lint:check; then
-    echo "Linting failed!"
-    exit 1
-fi
-
-echo "All pre-commit checks passed!"
+# Full Prisma generation, type checks, and lint run in CI.
+# ESLint includes Prettier; only check staged TypeScript files here.
+git diff --cached --name-only --diff-filter=ACMR -z -- \
+    'src/**/*.ts' 'apps/**/*.ts' 'libs/**/*.ts' 'test/**/*.ts' |
+    xargs -0 -r pnpm exec eslint --
