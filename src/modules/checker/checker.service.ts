@@ -331,7 +331,8 @@ export class CheckerService {
         if (open.configRevision !== monitor.configRevision) return null;
         if (
             open.evaluated === false ||
-            open.failureKind === 'ASSERTION' ||
+            (open.failureKind === 'ASSERTION' &&
+                !this.certificatePolicyFailed(open.sslVerdict)) ||
             open.revision !== monitor.revision
         )
             return null;
@@ -632,6 +633,17 @@ export class CheckerService {
             checkedAt: log.checkedAt,
             evaluated: log.evaluated !== false,
         };
+        const certificateFailed = this.certificatePolicyFailed(
+            localVerdict.sslVerdict,
+        );
+        // Certificate policy and reachability are separate evidence. A service
+        // can respond successfully while its certificate is expiring or expired.
+        const localAvailability = {
+            ...localVerdict,
+            success: certificateFailed
+                ? localVerdict.serviceVerdict === 'SUCCESS'
+                : localVerdict.success,
+        };
 
         let expectedProbeCount = 0;
         let tenantProbeCount = 0;
@@ -666,14 +678,16 @@ export class CheckerService {
         const votingProbeCount = samples.length;
         const hasVote = !guards.protected && votingProbeCount > 0;
         const evaluation = hasVote
-            ? this.evaluateRound(monitor, localVerdict, {
+            ? this.evaluateRound(monitor, localAvailability, {
                   expectedProbeCount,
                   tenantSampleCount: tenantProbeCount,
                   samples,
               })
             : null;
 
-        const passed = evaluation ? evaluation.passed : localVerdict.success;
+        const passed = evaluation
+            ? evaluation.passed
+            : localAvailability.success;
         const fallbackLocal = evaluation === null;
 
         const successCount = evaluation?.successCount ?? 0;
@@ -682,7 +696,12 @@ export class CheckerService {
         let finalSuccess: boolean;
         let decision: AppliedAggregation['decision'];
         let failureKind = localVerdict.failureKind;
-        let serviceVerdict = localVerdict.serviceVerdict;
+        const serviceVerdict: NonNullable<CheckResult['serviceVerdict']> =
+            evaluation
+                ? passed
+                    ? 'SUCCESS'
+                    : 'FAILURE'
+                : localVerdict.serviceVerdict;
         let rescuedByProbe = false;
 
         if (fallbackLocal) {
@@ -691,7 +710,7 @@ export class CheckerService {
             finalSuccess = passed;
             failureKind = passed ? null : localVerdict.failureKind;
             decision = 'FALLBACK_LOCAL';
-        } else if (passed && localVerdict.success) {
+        } else if (passed && localAvailability.success) {
             finalSuccess = true;
             failureKind = null;
             decision = 'CONFIRMED_SUCCESS';
@@ -699,23 +718,36 @@ export class CheckerService {
             // A failing local check is rescued by the probe majority.
             finalSuccess = true;
             failureKind = null;
-            serviceVerdict = 'SUCCESS';
             rescuedByProbe = true;
             decision = 'RESCUED';
-        } else if (localVerdict.success) {
+        } else if (localAvailability.success) {
             // The probes vetoed a successful local check.
             finalSuccess = false;
             failureKind = 'AGGREGATE';
-            serviceVerdict = 'FAILURE';
             decision = 'OVERTURNED';
         } else {
             finalSuccess = false;
             decision = 'CONFIRMED_FAILURE';
         }
 
-        const error = finalSuccess
-            ? null
-            : (aggregatedError ?? localVerdict.error ?? 'Check failed');
+        // Probe votes only decide service availability. Keep the current local
+        // certificate failure even when every probe can reach the service.
+        if (certificateFailed) {
+            finalSuccess = false;
+            failureKind = localVerdict.failureKind ?? 'ASSERTION';
+            rescuedByProbe = false;
+        }
+
+        const error = certificateFailed
+            ? [
+                  localVerdict.error ?? 'SSL certificate policy failed',
+                  aggregatedError,
+              ]
+                  .filter(Boolean)
+                  .join('; ')
+            : finalSuccess
+              ? null
+              : (aggregatedError ?? localVerdict.error ?? 'Check failed');
         const finalResult: CheckResult = {
             success: finalSuccess,
             latency: localVerdict.latency,
@@ -1361,26 +1393,24 @@ export class CheckerService {
         if (localResult.evaluated === false) {
             return { protected: true, protectedReason: 'UNEVALUATED' };
         }
-        if (localResult.failureKind === 'ASSERTION') {
+        if (
+            localResult.failureKind === 'ASSERTION' &&
+            !this.certificatePolicyFailed(localResult.sslVerdict)
+        ) {
             return { protected: true, protectedReason: 'ASSERTION' };
         }
 
-        // A certificate verdict is a fact about the certificate, not a
-        // reachability signal, so probes must not override it.
-        const certificatePolicyFailure =
-            localResult.ssl !== undefined ||
-            !!(
-                localResult.sslVerdict &&
-                localResult.sslVerdict !== 'NO_EVIDENCE'
-            );
-        if (
-            certificatePolicyFailure &&
-            (localResult.serviceVerdict === 'SUCCESS' || localResult.ssl)
-        ) {
-            return { protected: true, protectedReason: 'SSL' };
-        }
-
         return { protected: false, protectedReason: null };
+    }
+
+    private certificatePolicyFailed(
+        verdict: string | null | undefined,
+    ): boolean {
+        return (
+            verdict === 'EXPIRING' ||
+            verdict === 'EXPIRED' ||
+            verdict === 'INVALID'
+        );
     }
 
     /** Local service verdict recovered from the pending CheckLog row. */

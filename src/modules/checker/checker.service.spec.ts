@@ -1266,7 +1266,7 @@ describe('CheckerService', () => {
             expect(stateService.settle).toHaveBeenCalledTimes(2);
         });
 
-        it('keeps a certificate policy failure protected from probe votes', async () => {
+        it('keeps a certificate policy failure when no probes are assigned', async () => {
             const { service, prisma, httpChecker, stateService } =
                 createService();
             prisma.monitor.findFirst.mockResolvedValue({
@@ -1295,9 +1295,248 @@ describe('CheckerService', () => {
             expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
             expect(stateService.settle.mock.calls[0][2]).toMatchObject({
                 success: false,
-                aggregation: { protected: true, protectedReason: 'SSL' },
+                serviceVerdict: 'SUCCESS',
+                aggregation: {
+                    protected: false,
+                    protectedReason: null,
+                    decision: 'FALLBACK_LOCAL',
+                },
                 ssl: expect.objectContaining({ daysRemaining: -4 }),
             });
+        });
+    });
+
+    describe.each([
+        { sslVerdict: 'VALID', daysRemaining: 90, failureKind: null },
+        { sslVerdict: 'EXPIRING', daysRemaining: 5, failureKind: 'ASSERTION' },
+        { sslVerdict: 'EXPIRED', daysRemaining: -4, failureKind: 'ASSERTION' },
+        {
+            sslVerdict: 'INVALID',
+            daysRemaining: null,
+            failureKind: 'TRANSPORT',
+        },
+    ])('SSL probe aggregation: $sslVerdict', (certificate) => {
+        function setup() {
+            const fixture = createService();
+            fixture.prisma.monitor.findFirst.mockResolvedValue({
+                ...monitorRow,
+                checkSsl: true,
+            });
+            bindProbes(fixture.prisma, 1);
+            const certificateFailed = certificate.sslVerdict !== 'VALID';
+            const ssl =
+                certificate.daysRemaining === null
+                    ? undefined
+                    : {
+                          expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+                          daysRemaining: certificate.daysRemaining,
+                          issuer: 'Example CA',
+                          subject: 'api.example.com',
+                      };
+            fixture.httpChecker.check.mockResolvedValue({
+                ...checkResult,
+                success: !certificateFailed,
+                serviceVerdict:
+                    certificate.sslVerdict === 'INVALID'
+                        ? 'NO_EVIDENCE'
+                        : 'SUCCESS',
+                sslVerdict: certificate.sslVerdict,
+                ssl,
+                failureKind: certificate.failureKind,
+                error: certificateFailed ? 'Local certificate failure' : null,
+            });
+            return { ...fixture, ssl, certificateFailed };
+        }
+
+        it.each([true, false])(
+            'waits for and applies a probe result with success=%s without changing the certificate verdict',
+            async (probeSuccess) => {
+                const {
+                    service,
+                    prisma,
+                    stateService,
+                    queue,
+                    rounds,
+                    ssl,
+                    certificateFailed,
+                } = setup();
+
+                const pending = await service.checkMonitorForProject(
+                    'project-1',
+                    'monitor-1',
+                    { type: 'USER', userId: 'user-1' },
+                );
+
+                expect(pending.applied).toBe(false);
+                expect(stateService.settle).not.toHaveBeenCalled();
+                expect(queue.add).toHaveBeenCalledWith(
+                    MONITOR_SETTLE_JOB,
+                    expect.anything(),
+                    expect.anything(),
+                );
+                const round = [...rounds.values()][0];
+                expect(round.appliedAt).toBeNull();
+                prisma.probeResult.findMany.mockResolvedValue([
+                    probeSample('probe-1', probeSuccess),
+                ]);
+
+                const settled = await service.ingestProbeReportForMonitor(
+                    monitorRow.id,
+                    {
+                        target: monitorRow.target,
+                        success: probeSuccess,
+                        latency: 10,
+                    },
+                );
+
+                expect(settled?.applied).toBe(true);
+                expect(round.appliedAt).not.toBeNull();
+                expect(prisma.checkLog.create).toHaveBeenCalledTimes(1);
+                expect(stateService.settle).toHaveBeenCalledTimes(1);
+                expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                    success: probeSuccess && !certificateFailed,
+                    localSuccess: !certificateFailed,
+                    localServiceVerdict:
+                        certificate.sslVerdict === 'INVALID'
+                            ? 'NO_EVIDENCE'
+                            : 'SUCCESS',
+                    serviceVerdict: probeSuccess ? 'SUCCESS' : 'FAILURE',
+                    sslVerdict: certificate.sslVerdict,
+                    ssl,
+                    error: certificateFailed
+                        ? expect.stringContaining('Local certificate failure')
+                        : probeSuccess
+                          ? null
+                          : expect.any(String),
+                    aggregation: {
+                        protected: false,
+                        protectedReason: null,
+                        expectedProbeCount: 1,
+                        effectiveProbeCount: 1,
+                        successCount: probeSuccess ? 1 : 0,
+                        decision: probeSuccess
+                            ? certificate.sslVerdict === 'INVALID'
+                                ? 'RESCUED'
+                                : 'CONFIRMED_SUCCESS'
+                            : certificate.sslVerdict === 'INVALID'
+                              ? 'CONFIRMED_FAILURE'
+                              : 'OVERTURNED',
+                    },
+                });
+            },
+        );
+
+        it('keeps the local certificate verdict when probes miss the deadline', async () => {
+            const { service, stateService, rounds, certificateFailed } =
+                setup();
+            await service.checkMonitorForProject('project-1', 'monitor-1', {
+                type: 'USER',
+                userId: 'user-1',
+            });
+            expect(stateService.settle).not.toHaveBeenCalled();
+
+            await service.settleRound(
+                monitorRow.id,
+                [...rounds.values()][0].roundId!,
+                { force: true },
+            );
+
+            expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+                success: !certificateFailed,
+                serviceVerdict:
+                    certificate.sslVerdict === 'INVALID'
+                        ? 'NO_EVIDENCE'
+                        : 'SUCCESS',
+                sslVerdict: certificate.sslVerdict,
+                aggregation: {
+                    expectedProbeCount: 1,
+                    effectiveProbeCount: 0,
+                    decision: 'FALLBACK_LOCAL',
+                },
+            });
+        });
+    });
+
+    it('does not let SSL monitoring bypass HTTP assertion protection', async () => {
+        const { service, prisma, httpChecker, stateService } = createService();
+        prisma.monitor.findFirst.mockResolvedValue({
+            ...monitorRow,
+            checkSsl: true,
+        });
+        bindProbes(prisma, 1);
+        httpChecker.check.mockResolvedValue({
+            ...checkResult,
+            success: false,
+            error: 'HTTP keyword assertion failed',
+            failureKind: 'ASSERTION',
+            sslVerdict: 'VALID',
+        });
+
+        await service.checkMonitorForProject('project-1', 'monitor-1', {
+            type: 'USER',
+            userId: 'user-1',
+        });
+
+        expect(prisma.probeResult.findMany).not.toHaveBeenCalled();
+        expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+            success: false,
+            sslVerdict: 'VALID',
+            aggregation: { protected: true, protectedReason: 'ASSERTION' },
+        });
+    });
+
+    it('includes assigned system probes when SSL monitoring is enabled', async () => {
+        const {
+            service,
+            prisma,
+            httpChecker,
+            stateService,
+            systemProbeScheduler,
+        } = createService();
+        prisma.monitor.findFirst.mockResolvedValue({
+            ...monitorRow,
+            checkSsl: true,
+        });
+        prisma.probe.findMany.mockImplementation(({ where }) =>
+            Promise.resolve(where.id ? [{ id: 'system-probe' }] : []),
+        );
+        systemProbeScheduler.getAssignedProbes.mockResolvedValue([
+            'system-probe',
+        ]);
+        httpChecker.check.mockResolvedValue({
+            ...checkResult,
+            serviceVerdict: 'SUCCESS',
+            sslVerdict: 'VALID',
+        });
+
+        const pending = await service.checkMonitorForProject(
+            'project-1',
+            'monitor-1',
+            {
+                type: 'USER',
+                userId: 'user-1',
+            },
+        );
+        expect(pending.applied).toBe(false);
+        prisma.probeResult.findMany.mockResolvedValue([
+            probeSample('system-probe', true),
+        ]);
+
+        await service.ingestProbeReportForMonitor(monitorRow.id, {
+            target: monitorRow.target,
+            success: true,
+            latency: 10,
+        });
+
+        expect(stateService.settle.mock.calls[0][2]).toMatchObject({
+            success: true,
+            sslVerdict: 'VALID',
+            aggregation: {
+                expectedProbeCount: 1,
+                effectiveProbeCount: 1,
+                tenantProbeCount: 0,
+                systemProbeCount: 1,
+            },
         });
     });
 

@@ -72,6 +72,8 @@ export class CheckRoundAggregationEntity {
             'FALLBACK_LOCAL',
         ],
         example: 'CONFIRMED_SUCCESS',
+        description:
+            'Service availability aggregation decision. The local SSL verdict is preserved independently and may still make check.success false.',
     })
     decision:
         | 'RESCUED'

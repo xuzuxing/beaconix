@@ -126,6 +126,7 @@ export interface AppliedAggregation {
     /** Display-only percentage; the decision always uses integer cross-multiplication. */
     ratio: number;
     threshold: number;
+    /** Service availability decision; an independent SSL failure still fails the check. */
     decision:
         | 'RESCUED'
         | 'OVERTURNED'
