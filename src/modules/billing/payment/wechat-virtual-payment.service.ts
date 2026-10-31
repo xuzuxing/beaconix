@@ -772,32 +772,53 @@ export class WechatVirtualPaymentService implements RefundProvider {
                 return successResult(format, false);
             }
 
-            // 本地有在途退款申请（后台或用户发起）：走统一结算，
-            // 订阅会被正常回收，与主动退款完全一致。
-            const inFlightRefund = await this.prisma.refund.findFirst({
-                where: {
-                    orderId: attempt.orderId,
-                    status: {
-                        in: [RefundStatus.PENDING, RefundStatus.PROCESSING],
-                    },
-                },
-                select: { id: true },
-            });
-
-            if (inFlightRefund) {
-                await this.refunds.markSuccess(inFlightRefund.id, {
-                    status: 'SUCCESS',
-                    channelRefundId: notify.refundId ?? undefined,
-                    refundFee: notify.refundFee ?? undefined,
-                    raw: { source: 'xpay_refund_notify' },
+            const outcome = await this.prisma.$transaction(async (tx) => {
+                await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${attempt.order.organizationId} FOR UPDATE`;
+                const currentPayment = await tx.payment.findUnique({
+                    where: { orderId: attempt.orderId },
                 });
-
-                return successResult(format, true);
-            }
-
-            await this.prisma.$transaction(async (tx) => {
+                const currentOrder = await tx.order.findUniqueOrThrow({
+                    where: { id: attempt.orderId },
+                });
+                if (
+                    currentPayment?.status === PaymentStatus.REFUNDED ||
+                    currentOrder.status === OrderStatus.REFUNDED
+                )
+                    return { handled: false };
+                // Approval and passive refunds share the tenant lock. An Apple
+                // refund cannot implicitly approve a waiting local request.
+                const inFlightRefund = await tx.refund.findFirst({
+                    where: {
+                        orderId: attempt.orderId,
+                        status: {
+                            in: [RefundStatus.PENDING, RefundStatus.PROCESSING],
+                        },
+                    },
+                });
+                if (inFlightRefund?.submittedAt)
+                    return { submittedRefundId: inFlightRefund.id };
                 // Apple 侧发起的退款没有本地申请记录，金额以推送为准。
                 const refundAmount = notify.refundFee ?? attempt.amount;
+                if (
+                    !Number.isSafeInteger(refundAmount) ||
+                    refundAmount <= 0 ||
+                    refundAmount >
+                        currentOrder.amount - currentOrder.refundedAmount ||
+                    !currentPayment ||
+                    refundAmount >
+                        currentPayment.amount - currentPayment.refundedAmount
+                ) {
+                    throw new Error('Refund exceeds the remaining paid amount');
+                }
+                if (inFlightRefund)
+                    await tx.refund.update({
+                        where: { id: inFlightRefund.id },
+                        data: {
+                            status: RefundStatus.CLOSED,
+                            failureReason:
+                                'Superseded by an external refund; subscription requires manual review',
+                        },
+                    });
 
                 if (payment) {
                     await tx.payment.update({
@@ -876,7 +897,19 @@ export class WechatVirtualPaymentService implements RefundProvider {
                     },
                     tx,
                 );
+                return { handled: true };
             });
+
+            if (outcome.submittedRefundId) {
+                await this.refunds.markSuccess(outcome.submittedRefundId, {
+                    status: 'SUCCESS',
+                    channelRefundId: notify.refundId ?? undefined,
+                    refundFee: notify.refundFee ?? undefined,
+                    raw: { source: 'xpay_refund_notify' },
+                });
+                return successResult(format, true);
+            }
+            if (!outcome.handled) return successResult(format, false);
 
             this.logger.log(
                 `Refund recorded for ${notify.outTradeNo} (${notify.refundFee ?? 'unknown'} 分)`,
@@ -1204,5 +1237,17 @@ function mapVirtualRefundStatus(
         return { status: 'SUCCESS', raw: remote };
     }
 
-    return { status: 'PROCESSING', raw: remote };
+    // Normal paid/delivery states contain no refund yet. A lost submission
+    // response can be recovered with the SAME refund_order_id; the channel's
+    // idempotency also covers a refund accepted after this query snapshot.
+    const notFound = [
+        VIRTUAL_PAY_ORDER_STATUS.PAID,
+        VIRTUAL_PAY_ORDER_STATUS.DELIVERING,
+        VIRTUAL_PAY_ORDER_STATUS.DELIVERED,
+    ].some((status) => status === remote.status);
+    return {
+        status: 'PROCESSING',
+        ...(notFound ? { notFound: true } : {}),
+        raw: remote,
+    };
 }

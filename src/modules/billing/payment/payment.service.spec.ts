@@ -118,6 +118,7 @@ function legacyTransaction(
     tx.order.findUniqueOrThrow ??= prisma.order.findUniqueOrThrow;
     tx.payment.findUnique ??= prisma.payment.findUnique;
     tx.paymentAttempt ??= prisma.paymentAttempt;
+    tx.subscriptionEntitlement ??= { create: jest.fn() };
     return tx;
 }
 

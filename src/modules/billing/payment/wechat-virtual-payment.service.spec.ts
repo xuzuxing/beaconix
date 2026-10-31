@@ -16,6 +16,7 @@ const order = {
     planId: 'plan-pro',
     userId: 'user-1',
     amount: 2900,
+    refundedAmount: 0,
     durationDays: 30,
     termId: 'term-1',
     cycle: 'MONTHLY',
@@ -107,7 +108,12 @@ function createHarness(options?: {
         plan: {
             findUniqueOrThrow: jest.fn().mockResolvedValue({ sortOrder: 1 }),
         },
-        refund: { create: jest.fn() },
+        refund: {
+            create: jest.fn(),
+            findFirst: jest.fn().mockResolvedValue(null),
+            update: jest.fn(),
+        },
+        subscriptionEntitlement: { create: jest.fn() },
         $queryRaw: jest.fn().mockResolvedValue([]),
     };
 
@@ -759,8 +765,91 @@ describe('WechatVirtualPaymentService', () => {
     });
 
     describe('refund notify', () => {
+        it('records an external refund while closing an unsubmitted request without approving it', async () => {
+            const h = createHarness();
+            h.tx.payment.findUnique.mockResolvedValue({
+                id: 'payment-1',
+                status: PaymentStatus.SUCCESS,
+                amount: 2900,
+                refundedAmount: 0,
+            });
+            h.tx.refund.findFirst.mockResolvedValue({
+                id: 'pending-refund',
+                status: 'PENDING',
+                submittedAt: null,
+            });
+            const result = await h.service.handleNotify({
+                rawBody: JSON.stringify({
+                    Event: 'xpay_refund_notify',
+                    OutTradeNo: 'VABC123456789',
+                    WeChatPayInfo: { RefundFee: 2900, RefundId: 'external' },
+                }),
+                query: {},
+            });
+            expect(result.handled).toBe(true);
+            expect(h.refunds.markSuccess).not.toHaveBeenCalled();
+            expect(h.tx.refund.update).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    where: { id: 'pending-refund' },
+                    data: expect.objectContaining({ status: 'CLOSED' }),
+                }),
+            );
+            expect(h.tx.refund.create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    data: expect.objectContaining({
+                        status: 'SUCCESS',
+                        amount: 2900,
+                    }),
+                }),
+            );
+            expect(h.tx.subscription.update).not.toHaveBeenCalled();
+        });
+
+        it('does not book an external refund twice after another callback settles it', async () => {
+            const h = createHarness();
+            h.tx.payment.findUnique.mockResolvedValue({
+                status: PaymentStatus.REFUNDED,
+            });
+            const result = await h.service.handleNotify({
+                rawBody: JSON.stringify({
+                    Event: 'xpay_refund_notify',
+                    OutTradeNo: 'VABC123456789',
+                    WeChatPayInfo: { RefundFee: 2900 },
+                }),
+                query: {},
+            });
+            expect(result.handled).toBe(false);
+            expect(h.tx.refund.create).not.toHaveBeenCalled();
+            expect(h.tx.payment.update).not.toHaveBeenCalled();
+        });
+
+        it('rejects external amounts exceeding either remaining balance', async () => {
+            const h = createHarness();
+            h.tx.payment.findUnique.mockResolvedValue({
+                status: PaymentStatus.SUCCESS,
+                amount: 2900,
+                refundedAmount: 1,
+            });
+            const result = await h.service.handleNotify({
+                rawBody: JSON.stringify({
+                    Event: 'xpay_refund_notify',
+                    OutTradeNo: 'VABC123456789',
+                    WeChatPayInfo: { RefundFee: 2900 },
+                }),
+                query: {},
+            });
+            expect(JSON.parse(result.reply).ErrCode).toBe(-1);
+            expect(h.tx.refund.create).not.toHaveBeenCalled();
+        });
+
         it('marks the order and payment as refunded without touching the subscription', async () => {
             const harness = createHarness();
+            harness.tx.payment.findUnique.mockResolvedValue({
+                id: 'payment-1',
+                status: PaymentStatus.SUCCESS,
+                amount: 2900,
+                refundedAmount: 0,
+            });
             harness.prisma.payment.findUnique.mockResolvedValue({
                 id: 'payment-1',
                 orderId: order.id,
@@ -812,8 +901,9 @@ describe('WechatVirtualPaymentService', () => {
                 channel: PaymentChannel.WECHAT_VIRTUAL,
                 outTradeNo: 'VABC123456789',
             });
-            harness.prisma.refund.findFirst.mockResolvedValue({
+            harness.tx.refund.findFirst.mockResolvedValue({
                 id: 'refund-1',
+                submittedAt: new Date(),
             });
 
             const result = await harness.service.handleNotify({
@@ -847,6 +937,34 @@ describe('WechatVirtualPaymentService', () => {
 });
 
 describe('WechatVirtualPaymentService (JSON pushes)', () => {
+    it.each([2, 3, 4])(
+        'allows original-key recovery when query_order reports ordinary paid status %s',
+        async (queryStatus) => {
+            const h = createHarness({ queryStatus });
+            expect(
+                await h.service.queryRefund({
+                    orderId: order.id,
+                    outTradeNo: 'VABC123456789',
+                    refundNo: 'RF1',
+                }),
+            ).toMatchObject({ status: 'PROCESSING', notFound: true });
+        },
+    );
+
+    it.each([0, 1, 6, 9, 10])(
+        'does not infer refund absence from unrelated order status %s',
+        async (queryStatus) => {
+            const h = createHarness({ queryStatus });
+            expect(
+                await h.service.queryRefund({
+                    orderId: order.id,
+                    outTradeNo: 'VABC123456789',
+                    refundNo: 'RF1',
+                }),
+            ).not.toHaveProperty('notFound');
+        },
+    );
+
     it('settles a JSON goods-deliver push and replies in JSON', async () => {
         const harness = createHarness();
 
@@ -891,6 +1009,12 @@ describe('WechatVirtualPaymentService (JSON pushes)', () => {
 
     it('settles a JSON refund push', async () => {
         const harness = createHarness();
+        harness.tx.payment.findUnique.mockResolvedValue({
+            id: 'payment-1',
+            status: PaymentStatus.SUCCESS,
+            amount: 2900,
+            refundedAmount: 0,
+        });
         harness.prisma.payment.findUnique.mockResolvedValue({
             id: 'payment-1',
             orderId: order.id,

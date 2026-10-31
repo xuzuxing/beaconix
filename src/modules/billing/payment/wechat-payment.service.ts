@@ -5,6 +5,7 @@ import {
     type WechatPayRefund,
 } from '../../../infra/wechat/pay';
 import { WechatRuntimeConfigService } from '../../../infra/wechat/wechat-runtime-config.service';
+import { WechatApiError } from '../../../infra/wechat/wechat.types';
 import type {
     PaymentCallbackHeaders,
     PaymentProvider,
@@ -131,9 +132,19 @@ export class WechatPaymentService implements PaymentProvider {
             return { status: 'SUCCESS', raw: { mock: true } };
         }
 
-        return mapWechatRefund(
-            await this.payClient.queryRefund(input.refundNo),
-        );
+        try {
+            return mapWechatRefund(
+                await this.payClient.queryRefund(input.refundNo),
+            );
+        } catch (error) {
+            if (
+                error instanceof WechatApiError &&
+                error.code === 'RESOURCE_NOT_EXISTS'
+            ) {
+                return { status: 'PROCESSING', notFound: true };
+            }
+            throw error;
+        }
     }
 
     /**

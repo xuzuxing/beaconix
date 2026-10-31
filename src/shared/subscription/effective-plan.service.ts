@@ -4,6 +4,10 @@ import { SubscriptionStatus } from '../../generated/prisma/enums';
 import type { PlanModel } from '../../generated/prisma/models';
 import type { Prisma } from '../../generated/prisma/client';
 import { MonitorCapacityService } from './monitor-capacity.service';
+import {
+    resumeEntitlements,
+    trackSubscriptionEntitlements,
+} from './subscription-entitlements';
 
 export interface SubscriptionStackEntry {
     id: string;
@@ -144,9 +148,9 @@ export class EffectivePlanService {
      *
      * - a higher (or equal) ACTIVE plan still covers it → stay paused;
      * - the same plan already has an active subscription (e.g. a queued
-     *   downgrade that just started) → add the frozen days to it and retire the
-     *   paused row;
-     * - otherwise resume: `expiresAt = now + pausedRemainingDays`.
+     *   downgrade that just started) → merge only when both service ledgers are
+     *   complete; otherwise keep the source paused until that carrier ends;
+     * - otherwise resume using exact ledger duration, or legacy remaining days.
      *
      * One entry per call keeps the decision unambiguous; the next read (or the
      * hourly sweep) handles the next layer.
@@ -209,32 +213,67 @@ export class EffectivePlanService {
         });
 
         if (samePlanActive) {
-            await tx.subscription.update({
-                where: { id: samePlanActive.id },
-                data: {
-                    expiresAt: new Date(
-                        samePlanActive.expiresAt.getTime() +
-                            remainingDays * DAY_MS,
-                    ),
-                },
-            });
-            await tx.subscription.update({
-                where: { id: paused.id },
-                data: {
-                    status: SubscriptionStatus.EXPIRED,
-                    pausedAt: null,
-                    pausedRemainingDays: 0,
-                },
-            });
+            const sourceTracked = await trackSubscriptionEntitlements(
+                tx,
+                paused,
+            );
+            const targetTracked = await trackSubscriptionEntitlements(
+                tx,
+                samePlanActive,
+            );
+            if (sourceTracked && targetTracked) {
+                const exactExpiry = await resumeEntitlements(
+                    tx,
+                    { ...paused, entitlementsTracked: true },
+                    samePlanActive.id,
+                    samePlanActive.expiresAt,
+                );
+                await tx.subscription.update({
+                    where: { id: samePlanActive.id },
+                    data: {
+                        expiresAt:
+                            exactExpiry ??
+                            new Date(
+                                samePlanActive.expiresAt.getTime() +
+                                    remainingDays * DAY_MS,
+                            ),
+                        entitlementsTracked: true,
+                    },
+                });
+                await tx.subscription.update({
+                    where: { id: paused.id },
+                    data: {
+                        status: SubscriptionStatus.EXPIRED,
+                        pausedAt: null,
+                        pausedRemainingDays: 0,
+                    },
+                });
+                return;
+            }
+            // Keep ownership provable. Downgrading a tracked carrier during a
+            // mixed legacy merge would strand refunds already at the channel.
+            // Remain frozen until that carrier ends. Separate queued active
+            // rows would require propagating refunds across unknown history.
             return;
         }
 
+        const tracked = await trackSubscriptionEntitlements(tx, paused);
+        const exactExpiry = tracked
+            ? await resumeEntitlements(
+                  tx,
+                  { ...paused, entitlementsTracked: true },
+                  paused.id,
+                  now,
+              )
+            : null;
         await tx.subscription.update({
             where: { id: paused.id },
             data: {
                 status: SubscriptionStatus.ACTIVE,
                 startsAt: now,
-                expiresAt: new Date(now.getTime() + remainingDays * DAY_MS),
+                expiresAt:
+                    exactExpiry ??
+                    new Date(now.getTime() + remainingDays * DAY_MS),
                 pausedAt: null,
                 pausedRemainingDays: null,
             },

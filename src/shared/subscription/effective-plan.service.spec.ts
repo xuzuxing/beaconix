@@ -150,7 +150,7 @@ describe('EffectivePlanService', () => {
         expect(prisma.subscription.update).not.toHaveBeenCalled();
     });
 
-    it('merges the frozen days into an already-active same plan', async () => {
+    it('keeps untracked service frozen until the same-plan carrier ends', async () => {
         const { service, prisma } = createService();
         prisma.subscription.count.mockResolvedValue(1);
         const queuedExpiry = new Date(Date.now() + 10 * DAY_MS);
@@ -176,16 +176,7 @@ describe('EffectivePlanService', () => {
 
         await service.getEffectivePlan('org-1');
 
-        expect(prisma.subscription.update).toHaveBeenCalledWith({
-            where: { id: 'sub-pro-queued' },
-            data: {
-                expiresAt: new Date(queuedExpiry.getTime() + 100 * DAY_MS),
-            },
-        });
-        expect(prisma.subscription.update).toHaveBeenCalledWith({
-            where: { id: 'sub-pro-paused' },
-            data: expect.objectContaining({ status: 'EXPIRED' }),
-        });
+        expect(prisma.subscription.update).not.toHaveBeenCalled();
     });
 
     it('builds the subscription stack and marks the effective plan', async () => {

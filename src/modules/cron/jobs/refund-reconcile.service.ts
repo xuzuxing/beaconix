@@ -46,9 +46,8 @@ export class RefundReconcileService implements OnModuleInit {
     }> {
         const stale = await this.prisma.refund.findMany({
             where: {
-                status: {
-                    in: [RefundStatus.PENDING, RefundStatus.PROCESSING],
-                },
+                status: RefundStatus.PROCESSING,
+                submittedAt: { not: null },
                 updatedAt: { lt: new Date(Date.now() - STALE_AFTER_MS) },
             },
             select: { id: true },

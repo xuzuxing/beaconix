@@ -1,6 +1,7 @@
 import type { WechatPayClient } from '../../../infra/wechat/pay';
 import type { WechatRuntimeConfigService } from '../../../infra/wechat/wechat-runtime-config.service';
 import { WechatPaymentService } from './wechat-payment.service';
+import { WechatApiError } from '../../../infra/wechat/wechat.types';
 
 function createService(mock: boolean) {
     const payClient = {
@@ -26,6 +27,24 @@ function createService(mock: boolean) {
 }
 
 describe('WechatPaymentService', () => {
+    it('distinguishes a missing channel refund from an unavailable query', async () => {
+        const { service, payClient } = createService(false);
+        payClient.queryRefund.mockRejectedValueOnce(
+            new WechatApiError({
+                platform: 'pay',
+                endpoint: 'refunds/RF1',
+                code: 'RESOURCE_NOT_EXISTS',
+                httpStatus: 404,
+            }),
+        );
+        await expect(
+            service.queryRefund({ refundNo: 'RF1' }),
+        ).resolves.toMatchObject({ status: 'PROCESSING', notFound: true });
+        payClient.queryRefund.mockRejectedValueOnce(new Error('network down'));
+        await expect(service.queryRefund({ refundNo: 'RF1' })).rejects.toThrow(
+            'network down',
+        );
+    });
     it('queries and closes through the authenticated V3 client', async () => {
         const { service, payClient } = createService(false);
         const result = {

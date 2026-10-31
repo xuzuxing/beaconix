@@ -44,10 +44,8 @@ describe('RefundReconcileService', () => {
 
         const where = prisma.refund.findMany.mock.calls[0][0].where;
 
-        expect(where.status.in).toEqual([
-            RefundStatus.PENDING,
-            RefundStatus.PROCESSING,
-        ]);
+        expect(where.status).toBe(RefundStatus.PROCESSING);
+        expect(where.submittedAt).toEqual({ not: null });
         expect(where.updatedAt.lt).toBeInstanceOf(Date);
     });
 

@@ -155,11 +155,15 @@ export class AdminRefundsController {
     @HttpCode(HttpStatus.OK)
     @AuditLog({ entity: 'Refund', action: 'UPDATE' })
     @ApiOperation({
-        summary: 'Close a refund that cannot complete',
-        description: 'For rejected, unreachable or withdrawn refunds.',
+        summary: 'Close an unsubmitted refund awaiting approval',
+        description:
+            'Reject or withdraw a PENDING request. Submitted refunds must be reconciled with the channel.',
     })
     @ApiParam({ name: 'id', description: 'Refund CUID' })
     @ApiOkResponse({ description: 'Closed refund' })
+    @ApiBadRequestResponse({
+        description: 'Only an unsubmitted PENDING refund can be closed',
+    })
     async close(
         @Param('id') id: string,
         @Body() dto: CloseAdminRefundDto,

@@ -61,6 +61,8 @@ export interface RefundableOrder {
 }
 
 export interface RefundQuote {
+    /** Historical service allocation cannot be proved; do not submit automatically. */
+    requiresManualReview?: boolean;
     eligible: boolean;
     policyCode: RefundPolicyCode;
     /** 可退全额的按 `FULL`，折算按 `PRORATED`；不可退时是「本应走哪条」 */

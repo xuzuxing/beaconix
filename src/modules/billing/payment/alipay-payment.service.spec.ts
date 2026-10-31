@@ -504,7 +504,7 @@ describe('AlipayPaymentService', () => {
             });
         });
 
-        it('throws AlipayApiError when Alipay rejects the refund', async () => {
+        it('returns a definite failure when Alipay explicitly rejects the refund', async () => {
             const { service, client } = createService({ mock: false });
             client.refund.mockResolvedValue({
                 code: '40004',
@@ -513,11 +513,10 @@ describe('AlipayPaymentService', () => {
                 subMsg: 'seller balance is not enough',
             });
 
-            const error = await service.refund(refundInput).catch((e) => e);
-
-            expect(error).toBeInstanceOf(AlipayApiError);
-            expect(error.subCode).toBe('ACQ.SELLER_BALANCE_NOT_ENOUGH');
-            expect(error.message).toContain('seller balance is not enough');
+            await expect(service.refund(refundInput)).resolves.toMatchObject({
+                status: 'FAILED',
+                failureReason: 'seller balance is not enough',
+            });
         });
 
         it('reads the refund state back for the reconcile job', async () => {
@@ -553,7 +552,7 @@ describe('AlipayPaymentService', () => {
                     refundNo: 'RF1',
                     outTradeNo: 'BWABC123',
                 }),
-            ).resolves.toMatchObject({ status: 'PROCESSING' });
+            ).resolves.toMatchObject({ status: 'PROCESSING', notFound: true });
         });
     });
 });

@@ -43,7 +43,7 @@ export class CreateAdminRefundDto {
     reason?: string;
 }
 
-/** 关闭一条无法继续的退款（被拒、无法原路退回、用户撤回）。 */
+/** 拒绝或撤回尚未提交渠道的待审批退款。 */
 export class CloseAdminRefundDto {
     @ApiPropertyOptional({ description: 'Why the refund was closed' })
     @IsOptional()

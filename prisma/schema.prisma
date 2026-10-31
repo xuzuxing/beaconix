@@ -1643,6 +1643,8 @@ model Subscription {
   pausedAt DateTime?
   /// 冻结时结算的剩余天数。恢复时 `expiresAt = 恢复时刻 + pausedRemainingDays`。
   pausedRemainingDays Int?
+  /// True only when every paid service interval is represented in the ledger.
+  entitlementsTracked Boolean @default(false)
 
   orderId String? @unique
 
@@ -1652,6 +1654,7 @@ model Subscription {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   plan         Plan         @relation(fields: [planId], references: [id])
   order        Order?       @relation(fields: [orderId], references: [id])
+  entitlements SubscriptionEntitlement[]
 
   @@index([organizationId, status])
   @@index([expiresAt])
@@ -1729,6 +1732,7 @@ model Order {
   payment      Payment?
   paymentAttempts PaymentAttempt[]
   subscription Subscription?
+  entitlement SubscriptionEntitlement?
   refunds      Refund[]
 
   @@index([organizationId])
@@ -1798,6 +1802,8 @@ model Refund {
   failureReason   String?
   rawResponse     Json?
   refundedAt      DateTime?
+  /// First durable authorization to submit to the channel; null means never submitted.
+  submittedAt     DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1808,6 +1814,22 @@ model Refund {
   @@index([status, updatedAt])
   @@index([organizationId])
   @@map("refunds")
+}
+
+/// Live per-order service accounting, independent of immutable financial snapshots.
+/// startsAt/endsAt delimit the remaining schedule; consumedMs survives pause/reorder.
+model SubscriptionEntitlement {
+  orderId        String @id
+  subscriptionId String
+  startsAt       DateTime
+  endsAt         DateTime
+  consumedMs     BigInt @default(0)
+
+  order        Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, startsAt])
+  @@map("subscription_entitlements")
 }
 
 // 支付尝试（每次「发起支付」一条）

@@ -320,6 +320,22 @@ export function mapAlipayRefundResult(
     result: AlipayRefundApiResult,
 ): PaymentProviderRefundResult {
     if (result.code !== '10000') {
+        // These business responses explicitly reject this refund. Transport
+        // errors and unrecognized/system codes remain uncertain to the caller.
+        if (
+            result.code === '40004' &&
+            [
+                'ACQ.SELLER_BALANCE_NOT_ENOUGH',
+                'ACQ.TRADE_NOT_EXIST',
+                'ACQ.TRADE_STATUS_ERROR',
+                'ACQ.REFUND_AMT_NOT_EQUAL_TOTAL',
+            ].includes(result.subCode ?? '')
+        )
+            return {
+                status: 'FAILED',
+                failureReason: result.subMsg ?? result.msg ?? result.subCode,
+                raw: result,
+            };
         throw new AlipayApiError(
             `Alipay refund failed: ${result.subMsg ?? result.msg ?? 'unknown error'}`,
             result.code,
@@ -340,7 +356,15 @@ export function mapAlipayRefundQuery(
     result: AlipayRefundApiResult,
 ): PaymentProviderRefundResult {
     if (result.code !== '10000') {
-        return { status: 'PROCESSING', raw: result };
+        return {
+            status: 'PROCESSING',
+            raw: result,
+            ...(['ACQ.TRADE_NOT_EXIST', 'ACQ.REFUND_NOT_EXIST'].includes(
+                result.subCode ?? '',
+            )
+                ? { notFound: true }
+                : {}),
+        };
     }
 
     return {

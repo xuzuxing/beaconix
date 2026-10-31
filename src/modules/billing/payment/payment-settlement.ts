@@ -7,6 +7,10 @@ import type { Prisma } from '../../../generated/prisma/client';
 import type { OrderModel } from '../../../generated/prisma/models';
 import type { NotificationsService } from '../../notifications/notifications.service';
 import { ADMIN_ROLES } from '../../notifications/notification-event';
+import {
+    checkpointEntitlements,
+    trackSubscriptionEntitlements,
+} from '../../../shared/subscription/subscription-entitlements';
 
 type OrderForSettlement = Pick<
     OrderModel,
@@ -21,6 +25,7 @@ export interface SettlementResult {
 
 /** 结算时同时算出「这笔订单买到的时段」，用于退款折算与回收。 */
 interface SubscriptionActivation extends SettlementResult {
+    entitlementsTracked: boolean;
     serviceStartsAt: Date;
     serviceEndsAt: Date;
 }
@@ -70,6 +75,16 @@ export async function settlePaidOrder(
             serviceEndsAt: activation.serviceEndsAt,
         },
     });
+    if (activation.entitlementsTracked) {
+        await tx.subscriptionEntitlement.create({
+            data: {
+                orderId: order.id,
+                subscriptionId: activation.id,
+                startsAt: activation.serviceStartsAt,
+                endsAt: activation.serviceEndsAt,
+            },
+        });
+    }
 
     const recipients = [
         order.userId,
@@ -149,9 +164,14 @@ async function activateSubscription(
             status: SubscriptionStatus.ACTIVE,
             expiresAt: { gt: now },
         },
+        orderBy: { expiresAt: 'desc' },
     });
 
     if (existing) {
+        const entitlementsTracked = await trackSubscriptionEntitlements(
+            tx,
+            existing,
+        );
         const startsAt = existing.expiresAt;
         const expiresAt = new Date(
             existing.expiresAt.getTime() + order.durationDays * dayMs,
@@ -164,6 +184,7 @@ async function activateSubscription(
             id: existing.id,
             expiresAt,
             renewed: true,
+            entitlementsTracked,
             // 续费的时段是「原到期时刻 → 延长后的到期时刻」。
             serviceStartsAt: startsAt,
             serviceEndsAt: expiresAt,
@@ -212,12 +233,14 @@ async function activateSubscription(
             startsAt,
             expiresAt,
             orderId: order.id,
+            entitlementsTracked: true,
         },
     });
     return {
         id: subscription.id,
         expiresAt,
         renewed: false,
+        entitlementsTracked: true,
         serviceStartsAt: startsAt,
         serviceEndsAt: expiresAt,
     };
@@ -243,10 +266,12 @@ async function pauseLowerSubscriptions(
             expiresAt: { gt: now },
             plan: { sortOrder: { lt: sortOrder } },
         },
-        select: { id: true, expiresAt: true },
     });
 
     for (const subscription of lower) {
+        if (await trackSubscriptionEntitlements(tx, subscription)) {
+            await checkpointEntitlements(tx, subscription.id, now);
+        }
         const pausedRemainingDays = Math.max(
             1,
             Math.ceil(

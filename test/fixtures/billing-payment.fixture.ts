@@ -10,6 +10,7 @@ export function billingPaymentFixture() {
         payment: [],
         paymentAttempt: [],
         subscription: [],
+        subscriptionEntitlement: [],
         refund: [],
         plan: [
             {
@@ -34,6 +35,7 @@ export function billingPaymentFixture() {
     const copy = <T>(value: T): T => structuredClone(value);
     function matches(row: any, where: any = {}): boolean {
         return Object.entries(where).every(([key, expected]: [string, any]) => {
+            if (expected === undefined) return true;
             if (key === 'OR')
                 return expected.some((clause) => matches(row, clause));
             if (key === 'AND')
@@ -43,7 +45,14 @@ export function billingPaymentFixture() {
                     tables.order.find((o) => o.id === row.orderId),
                     expected,
                 );
+            if (key === 'plan')
+                return matches(
+                    tables.plan.find((p) => p.id === row.planId),
+                    expected,
+                );
             const actual = row?.[key] ?? null;
+            if (expected instanceof Date)
+                return actual instanceof Date && +actual === +expected;
             if (
                 expected === null ||
                 typeof expected !== 'object' ||
@@ -71,6 +80,7 @@ export function billingPaymentFixture() {
                     ? Number(row[key] ?? 0) + Number(value.increment)
                     : copy(value);
         }
+        row.updatedAt = new Date();
         return row;
     }
     const prisma: any = { $queryRaw: jest.fn().mockResolvedValue([]) };
@@ -82,7 +92,19 @@ export function billingPaymentFixture() {
                 result.order = copy(
                     tables.order.find((o) => o.id === row.orderId),
                 );
-            if (args.include?.plan) result.plan = copy(tables.plan[0]);
+            if (args.include?.plan)
+                result.plan = copy(
+                    tables.plan.find((p) => p.id === row.planId),
+                );
+            if (args.include?.subscription) {
+                result.subscription = copy(
+                    tables.subscription.find((s) =>
+                        name === 'subscriptionEntitlement'
+                            ? s.id === row.subscriptionId
+                            : s.orderId === row.id,
+                    ) ?? null,
+                );
+            }
             return result;
         }
         const delegate: any = {};
@@ -94,8 +116,9 @@ export function billingPaymentFixture() {
                 ),
             ),
         );
-        delegate.findFirst = jest.fn((args) =>
-            Promise.resolve().then(() => delegate.findUnique(args)),
+        delegate.findFirst = jest.fn(
+            async (args) =>
+                (await delegate.findMany({ ...args, take: 1 }))[0] ?? null,
         );
         delegate.findUniqueOrThrow = jest.fn(async (args) => {
             const row = await delegate.findUnique(args);
@@ -103,12 +126,35 @@ export function billingPaymentFixture() {
             return row;
         });
         delegate.findMany = jest.fn((args = {}) =>
-            Promise.resolve().then(() =>
-                tables[name]
-                    .filter((row) => matches(row, args.where))
+            Promise.resolve().then(() => {
+                const rows = tables[name].filter((row) =>
+                    matches(row, args.where),
+                );
+                const ordering = args.orderBy
+                    ? Array.isArray(args.orderBy)
+                        ? args.orderBy
+                        : [args.orderBy]
+                    : [];
+                rows.sort((a, b) => {
+                    for (const clause of ordering) {
+                        const [key, direction] = Object.entries(clause)[0] as [
+                            string,
+                            string,
+                        ];
+                        if (a[key] < b[key])
+                            return direction === 'asc' ? -1 : 1;
+                        if (a[key] > b[key])
+                            return direction === 'asc' ? 1 : -1;
+                    }
+                    return 0;
+                });
+                return rows
                     .slice(0, args.take ?? Infinity)
-                    .map((row) => decorate(row, args)),
-            ),
+                    .map((row) => decorate(row, args));
+            }),
+        );
+        delegate.count = jest.fn(
+            async (args = {}) => (await delegate.findMany(args)).length,
         );
         delegate.create = jest.fn((args) =>
             Promise.resolve().then(() => {
@@ -122,6 +168,13 @@ export function billingPaymentFixture() {
                     lastCheckedAt: null,
                     reconcileLeaseToken: null,
                     reconcileLeaseUntil: null,
+                    submittedAt: null,
+                    ...(name === 'subscriptionEntitlement'
+                        ? { consumedMs: 0n }
+                        : {}),
+                    pausedAt: null,
+                    pausedRemainingDays: null,
+                    entitlementsTracked: false,
                     ...copy(args.data),
                 };
                 tables[name].push(row);
@@ -256,6 +309,7 @@ export function billingPaymentFixture() {
         payments,
         orders,
         refunds,
+        config,
         rows: (name: string) => tables[name],
         newOrder: () =>
             orders.create('org', 'buyer', {

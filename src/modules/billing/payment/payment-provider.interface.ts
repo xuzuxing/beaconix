@@ -57,6 +57,8 @@ export type PaymentProviderRefundStatus = 'SUCCESS' | 'PROCESSING' | 'FAILED';
 
 export interface PaymentProviderRefundResult {
     status: PaymentProviderRefundStatus;
+    /** Authoritative query-only absence; transport/configuration failures are not absence. */
+    notFound?: boolean;
     /** 渠道退款单号（微信 `refund_id`）。 */
     channelRefundId?: string;
     failureReason?: string;

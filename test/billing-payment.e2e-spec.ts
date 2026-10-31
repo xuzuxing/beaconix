@@ -136,6 +136,63 @@ describe('Billing payment HTTP chain (offline)', () => {
         expect(f.rows('order')[0].status).toBe('REFUNDED');
     });
 
+    it('keeps a user refund pending until approval, including automatic reconciliation', async () => {
+        f.config.config.mockResolvedValue({
+            ...(await f.config.config()),
+            autoApproveLimit: 0,
+        });
+        const { orderId, merchant } = await buy();
+        await request(app.getHttpServer())
+            .post('/api/payment/wechat/callback')
+            .send(f.paid(merchant))
+            .expect(200);
+        const response = await request(app.getHttpServer())
+            .post(`/api/orders/${orderId}/refunds`)
+            .auth(token, { type: 'bearer' })
+            .send({})
+            .expect(200);
+        expect(response.body.data.status).toBe('PENDING');
+        await f.refunds.syncFromChannel(response.body.data.id);
+        expect(f.provider.refund).not.toHaveBeenCalled();
+        expect(f.provider.queryRefund).not.toHaveBeenCalled();
+        await f.refunds.approve(response.body.data.id, 'admin');
+        await f.refunds.syncFromChannel(response.body.data.id);
+        expect(f.rows('order')[0].status).toBe('REFUNDED');
+    });
+
+    it('retains a renewal when the first purchase is refunded through HTTP', async () => {
+        const first = await buy();
+        await request(app.getHttpServer())
+            .post('/api/payment/wechat/callback')
+            .send(f.paid(first.merchant))
+            .expect(200);
+        const second = await buy();
+        await request(app.getHttpServer())
+            .post('/api/payment/wechat/callback')
+            .send(f.paid(second.merchant))
+            .expect(200);
+        const snapshots = structuredClone(f.rows('order'));
+        const response = await request(app.getHttpServer())
+            .post(`/api/orders/${first.orderId}/refunds`)
+            .auth(token, { type: 'bearer' })
+            .send({})
+            .expect(200);
+        await f.refunds.syncFromChannel(response.body.data.id);
+        expect(f.rows('subscription')[0].status).toBe('ACTIVE');
+        expect(
+            +f.rows('subscription')[0].expiresAt - Date.now(),
+        ).toBeGreaterThan(29 * 86_400_000);
+        expect(f.rows('order')[1].status).toBe('PAID');
+        for (let i = 0; i < 2; i++) {
+            expect(f.rows('order')[i].serviceStartsAt).toEqual(
+                snapshots[i].serviceStartsAt,
+            );
+            expect(f.rows('order')[i].serviceEndsAt).toEqual(
+                snapshots[i].serviceEndsAt,
+            );
+        }
+    });
+
     it('requires authentication and rejects a non-member before creating a checkout', async () => {
         const { orderId } = await buy();
         await request(app.getHttpServer())

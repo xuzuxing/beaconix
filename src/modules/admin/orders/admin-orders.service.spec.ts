@@ -33,6 +33,7 @@ function createService() {
             update: jest.fn().mockResolvedValue({}),
         },
         plan: { findUniqueOrThrow: jest.fn() },
+        subscriptionEntitlement: { create: jest.fn() },
         subscription: {
             findFirst: jest.fn().mockResolvedValue(null),
             create: jest.fn(),
