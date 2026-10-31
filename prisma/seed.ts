@@ -85,6 +85,9 @@ async function main() {
     const adapter = new PrismaPg(pool);
     const prisma = new PrismaClient({ adapter });
 
+    // 默认商业套餐：金额单位为分，周期按 30 / 90 / 365 天计算。
+    // maxProbesPerMonitor 是每个监控的平台系统探针数，maxProbes 是自建探针数。
+    // 下列价格尚未绑定已核价的微信虚拟支付商品；发布商品后通过管理端配置。
     const plans = [
         {
             code: 'FREE',
@@ -94,17 +97,17 @@ async function main() {
                 MonitorType.PING,
             ],
             name: '免费版',
-            description: 'For trying out Beacon monitoring',
+            description: '体验基础监控、故障通知与状态页',
             price: 0,
             sortOrder: 1,
             durationDays: 36500,
-            maxMonitors: 10,
+            maxMonitors: 3,
             maxProbes: 0,
             maxProbesPerMonitor: 0,
-            maxApiKeys: 3,
-            maxMembers: 5,
+            maxApiKeys: 1,
+            maxMembers: 1,
             maxChannels: 1,
-            minInterval: 60,
+            minInterval: 300,
             allowTenantProbe: false,
             allowStatusPage: true,
             // FREE 不过期：一条「永久」档位，仅作为无订阅组织的兜底。
@@ -120,17 +123,17 @@ async function main() {
             code: 'PRO',
             allowedMonitorTypes: Object.values(MonitorType),
             name: '专业版',
-            description: 'For small teams',
-            price: 2900,
+            description: '适合个人开发者的生产服务监控',
+            price: 3900,
             sortOrder: 2,
             durationDays: 30,
-            maxMonitors: 50,
-            maxProbes: 10,
-            maxProbesPerMonitor: 10,
-            maxApiKeys: 10,
-            maxMembers: 10,
-            maxChannels: 5,
-            minInterval: 30,
+            maxMonitors: 20,
+            maxProbes: 2,
+            maxProbesPerMonitor: 1,
+            maxApiKeys: 3,
+            maxMembers: 3,
+            maxChannels: 3,
+            minInterval: 60,
             allowTenantProbe: true,
             allowStatusPage: true,
             // 月 / 季 / 年三档，季付与年付带折扣。
@@ -138,28 +141,22 @@ async function main() {
                 {
                     cycle: PlanCycle.MONTHLY,
                     durationDays: 30,
-                    price: 2900,
-                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
-                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
-                    wechatProductId: 'beacon_pro_month',
+                    price: 3900,
+                    wechatProductId: null,
                     sortOrder: 1,
                 },
                 {
                     cycle: PlanCycle.QUARTERLY,
                     durationDays: 90,
-                    price: 7900,
-                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
-                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
-                    wechatProductId: 'beacon_pro_quarter',
+                    price: 10900,
+                    wechatProductId: null,
                     sortOrder: 2,
                 },
                 {
                     cycle: PlanCycle.YEARLY,
                     durationDays: 365,
-                    price: 29000,
-                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
-                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
-                    wechatProductId: 'beacon_pro_year',
+                    price: 39000,
+                    wechatProductId: null,
                     sortOrder: 3,
                 },
             ],
@@ -168,45 +165,80 @@ async function main() {
             code: 'TEAM',
             allowedMonitorTypes: Object.values(MonitorType),
             name: '团队版',
-            description: 'For growing businesses',
-            price: 9900,
+            description: '适合中小团队的协作与多节点监控',
+            price: 12900,
             sortOrder: 3,
             durationDays: 30,
-            maxMonitors: 200,
-            maxProbes: 50,
-            maxProbesPerMonitor: 50,
-            maxApiKeys: 50,
-            maxMembers: 999,
-            maxChannels: 99,
-            minInterval: 10,
+            maxMonitors: 60,
+            maxProbes: 5,
+            maxProbesPerMonitor: 2,
+            maxApiKeys: 10,
+            maxMembers: 10,
+            maxChannels: 8,
+            minInterval: 60,
             allowTenantProbe: true,
             allowStatusPage: true,
             terms: [
                 {
                     cycle: PlanCycle.MONTHLY,
                     durationDays: 30,
-                    price: 9900,
-                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
-                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
-                    wechatProductId: 'beacon_team_month',
+                    price: 12900,
+                    wechatProductId: null,
                     sortOrder: 1,
                 },
                 {
                     cycle: PlanCycle.QUARTERLY,
                     durationDays: 90,
-                    price: 26900,
-                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
-                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
-                    wechatProductId: 'beacon_team_quarter',
+                    price: 35900,
+                    wechatProductId: null,
                     sortOrder: 2,
                 },
                 {
                     cycle: PlanCycle.YEARLY,
                     durationDays: 365,
-                    price: 99000,
-                    // 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】里
-                    // 发布到现网的道具）。价格必须与道具价一致，否则下单报 -15013。
-                    wechatProductId: 'beacon_team_year',
+                    price: 129000,
+                    wechatProductId: null,
+                    sortOrder: 3,
+                },
+            ],
+        },
+        {
+            code: 'BUSINESS',
+            allowedMonitorTypes: Object.values(MonitorType),
+            name: '商业版',
+            description: '适合多项目规模化运维的高容量监控',
+            price: 39900,
+            sortOrder: 4,
+            durationDays: 30,
+            maxMonitors: 150,
+            maxProbes: 15,
+            maxProbesPerMonitor: 3,
+            maxApiKeys: 20,
+            maxMembers: 30,
+            maxChannels: 15,
+            minInterval: 30,
+            allowTenantProbe: true,
+            allowStatusPage: true,
+            terms: [
+                {
+                    cycle: PlanCycle.MONTHLY,
+                    durationDays: 30,
+                    price: 39900,
+                    wechatProductId: null,
+                    sortOrder: 1,
+                },
+                {
+                    cycle: PlanCycle.QUARTERLY,
+                    durationDays: 90,
+                    price: 109900,
+                    wechatProductId: null,
+                    sortOrder: 2,
+                },
+                {
+                    cycle: PlanCycle.YEARLY,
+                    durationDays: 365,
+                    price: 399000,
+                    wechatProductId: null,
                     sortOrder: 3,
                 },
             ],
@@ -235,6 +267,7 @@ async function main() {
         console.log('settings: nothing to add');
     }
 
+    // 显式应用默认目录：重跑会更新同编码套餐的价格、权益与商品映射。
     for (const { terms, ...plan } of plans) {
         const saved = await prisma.plan.upsert({
             where: { code: plan.code },

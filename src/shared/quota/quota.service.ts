@@ -23,18 +23,18 @@ const FEATURE_LABELS: Record<QuotaFeature, string> = {
 };
 
 const FREE_FALLBACK = {
-    maxMonitors: 5,
+    maxMonitors: 3,
     maxProbes: 0,
     maxProbesPerMonitor: 0,
-    maxMembers: 3,
+    maxMembers: 1,
     maxChannels: 1,
-    maxApiKeys: 5,
+    maxApiKeys: 1,
     minInterval: 300,
     allowTenantProbe: false,
-    allowStatusPage: false,
+    allowStatusPage: true,
     allowedMonitorTypes: [MonitorType.HTTP, MonitorType.TCP, MonitorType.PING],
     code: 'FREE',
-    name: 'Free',
+    name: '免费版',
     price: 0,
 };
 

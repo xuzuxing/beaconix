@@ -144,15 +144,15 @@ describe('QuotaService', () => {
         effectivePlanService.getEffectivePlanInTransaction.mockResolvedValue(
             null,
         );
-        const tx = { membership: { count: jest.fn().mockResolvedValue(3) } };
+        const tx = { membership: { count: jest.fn().mockResolvedValue(1) } };
         await expect(
             service.assertCanAddMember('org-1', tx as never),
         ).rejects.toMatchObject({
             response: {
                 code: 'QUOTA_EXCEEDED',
                 resource: 'members',
-                current: 3,
-                limit: 3,
+                current: 1,
+                limit: 1,
             },
         });
     });
