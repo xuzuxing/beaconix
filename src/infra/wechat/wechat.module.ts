@@ -1,18 +1,8 @@
-import { Global, Logger, Module } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import type { WechatConfig } from '../../config';
-import { SettingsModule } from '../../modules/settings';
-import { CacheModule } from '../cache/cache.module';
-import {
-    WECHAT_MP_BASE_URL,
-    WechatHttpClient,
-    WechatTokenService,
-} from './clients';
+import { Global, Module } from '@nestjs/common';
 import { WechatPayCertificateService, WechatPayClient } from './pay';
-import { MiniprogramClient } from './miniprogram';
 import { OfficialAccountClient } from './official-account';
 import { WechatVirtualPayClient } from './virtual-pay';
-import { WechatRuntimeConfigService } from './wechat-runtime-config.service';
+import { WechatCoreModule } from './wechat-core.module';
 import { WorkClient } from './work';
 
 /**
@@ -32,55 +22,17 @@ import { WorkClient } from './work';
  */
 @Global()
 @Module({
-    imports: [CacheModule, SettingsModule],
+    imports: [WechatCoreModule],
     providers: [
-        WechatRuntimeConfigService,
-        {
-            provide: WechatHttpClient,
-            useFactory: async (
-                configService: ConfigService,
-                runtimeConfig: WechatRuntimeConfigService,
-            ) => {
-                const env = configService.get<WechatConfig>('wechat');
-
-                // 客户端是单例，超时/重试只在这里读一次：管理页改动需重启生效。
-                // 读取失败（例如启动早期 DB 还不可用）不能让应用起不来，回退 env。
-                let http = env?.http;
-                try {
-                    http = await runtimeConfig.http();
-                } catch (error) {
-                    new Logger(WechatModule.name).warn(
-                        `Falling back to env for wechat.http settings: ${
-                            error instanceof Error
-                                ? error.message
-                                : String(error)
-                        }`,
-                    );
-                }
-
-                return new WechatHttpClient({
-                    platform: 'mp',
-                    baseUrl: WECHAT_MP_BASE_URL,
-                    timeoutMs: http?.timeoutMs,
-                    maxRetries: http?.maxRetries,
-                });
-            },
-            inject: [ConfigService, WechatRuntimeConfigService],
-        },
-        WechatTokenService,
         WechatPayCertificateService,
         WechatPayClient,
-        MiniprogramClient,
         OfficialAccountClient,
         WechatVirtualPayClient,
         WorkClient,
     ],
     exports: [
-        WechatRuntimeConfigService,
-        WechatHttpClient,
-        WechatTokenService,
+        WechatCoreModule,
         WechatPayClient,
-        MiniprogramClient,
         OfficialAccountClient,
         WechatVirtualPayClient,
         WorkClient,

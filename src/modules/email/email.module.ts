@@ -3,9 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 import { EmailService } from './email.service';
 import type { AppConfig, ResendConfig } from '../../config';
+import { SettingsCoreModule } from '../settings/settings-core.module';
 
 @Global()
 @Module({
+    imports: [SettingsCoreModule],
     providers: [
         {
             provide: 'RESEND_CLIENT',
