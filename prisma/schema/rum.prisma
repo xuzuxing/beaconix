@@ -1,0 +1,53 @@
+enum RumAppPlatform {
+  WEB
+}
+
+model RumApp {
+  id             String         @id @default(cuid())
+  organizationId String
+  projectId      String
+  name           String
+  platform       RumAppPlatform @default(WEB)
+  publicKey      String         @unique
+  enabled        Boolean        @default(true)
+  createdById    String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project         @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdBy    User?           @relation("RumAppCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  errorGroups  RumErrorGroup[]
+
+  @@index([organizationId])
+  @@index([projectId, deletedAt])
+  @@index([projectId, enabled])
+  @@index([createdById])
+  @@map("rum_apps")
+}
+
+model RumErrorGroup {
+  id                 String    @id @default(cuid())
+  appId              String
+  fingerprint        String
+  fingerprintVersion Int       @default(1)
+  type               String
+  message            String
+  stack              String?
+  page               String?
+  count              Int       @default(1)
+  firstSeenAt        DateTime  @default(now())
+  lastSeenAt         DateTime  @default(now())
+  firstOccurredAt    DateTime?
+  lastOccurredAt     DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  app RumApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, fingerprintVersion, fingerprint])
+  @@index([appId, lastSeenAt])
+  @@index([appId, count])
+  @@map("rum_error_groups")
+}

@@ -1,0 +1,130 @@
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum InvitationIssuerType {
+  LEGACY
+  ORGANIZATION
+  PLATFORM
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  REVOKED
+}
+
+// ORGANIZATION
+model Organization {
+  id          String  @id @default(cuid())
+  name        String
+  slug        String  @unique
+  description String?
+  logoUrl     String?
+  website     String?
+  ownerId     String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Settings stored as JSON for flexibility
+  settings Json? @default("{}")
+
+  // Cursor for effective monitor-capacity transitions (not subscription rows).
+  monitorCapacityPlanId     String?
+  monitorCapacityLimit      Int?
+  monitorCapacityObservedAt DateTime?
+
+  // Relations
+  owner       User         @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  memberships Membership[]
+  projects    Project[]
+  invitations Invitation[]
+  labels      Label[]
+  auditLogs   AuditLog[]
+  tasks       Task[]
+
+  // Monitors
+  monitors      Monitor[]
+  rumApps       RumApp[]
+  probes        Probe[]
+  channels      NotificationChannel[]
+  statusPages   StatusPage[]
+  subscriptions Subscription[]
+  orders        Order[]
+  apiKeys       ApiKey[]
+  monitorCapacityCycles MonitorCapacityCycle[]
+
+  // 规则引擎
+  ruleGroups RuleGroup[]
+
+  // 平台工单（仅作为提交人所属组织的快照，不参与权限）
+  tickets Ticket[]
+
+  @@index([ownerId])
+  @@index([createdAt])
+  @@index([deletedAt])
+  @@map("organizations")
+}
+
+// MEMBERSHIP (Pivot: User <-> Organization)
+model Membership {
+  id             String         @id @default(cuid())
+  userId         String
+  organizationId String
+  role           MembershipRole @default(MEMBER)
+  projectPermissionsVersion Int @default(0)
+  joinedAt       DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  // Tracks who invited this member
+  invitedById String?
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  projectMemberships ProjectMembership[]
+
+  @@unique([id, organizationId])
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([role])
+  @@map("memberships")
+}
+
+// INVITATION
+model Invitation {
+  id             String           @id @default(cuid())
+  email          String
+  organizationId String
+  role           MembershipRole   @default(MEMBER)
+  status         InvitationStatus @default(PENDING)
+  token          String           @unique @default(cuid())
+  expiresAt      DateTime
+  sentById       String
+  acceptedAt     DateTime?
+  issuerType InvitationIssuerType @default(LEGACY)
+  issuerMembershipId String?
+  issuerAuthorityVersion Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sentBy       User         @relation("InvitationSender", fields: [sentById], references: [id], onDelete: Cascade)
+  projectGrants InvitationProjectGrant[]
+
+  @@unique([id, organizationId])
+  @@unique([email, organizationId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("invitations")
+}

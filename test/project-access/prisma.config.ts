@@ -15,7 +15,7 @@ const database = validateProjectAccessDatabase(
 );
 
 export default defineConfig({
-    schema: '../../prisma/schema.prisma',
+    schema: '../../prisma/schema',
     migrations: { path: env('PROJECT_ACCESS_TEST_MIGRATIONS_DIR') },
     datasource: { url: database.connectionString },
 });

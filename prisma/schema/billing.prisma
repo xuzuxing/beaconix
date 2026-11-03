@@ -1,0 +1,379 @@
+enum SubscriptionStatus {
+  ACTIVE
+  /// 被更高等级的订阅压住：剩余天数冻结，等高端订阅结束后自动恢复。
+  PAUSED
+  EXPIRED
+  CANCELLED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentChannel {
+  WECHAT
+  WECHAT_VIRTUAL
+  ALIPAY
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+/// 退款的来源与算法：客服解释「为什么退这么多」时按它对照政策。
+enum RefundType {
+  /// 未生效或冷静期内：全额
+  FULL
+  /// 超过冷静期：按未使用天数折算
+  PRORATED
+  /// 后台人工指定金额
+  MANUAL
+}
+
+enum RefundStatus {
+  /// 已申请，待审批或待提交渠道
+  PENDING
+  /// 已提交渠道，等终态（微信回调 / 支付宝轮询）
+  PROCESSING
+  SUCCESS
+  FAILED
+  /// 被拒或人工关闭
+  CLOSED
+}
+
+// ==================== BILLING ====================
+
+// 套餐定义
+model Plan {
+  id           String  @id @default(cuid())
+  code         String  @unique
+  name         String
+  description  String?
+  /// 最便宜「启用档位」价格（分）的镜像，真源是 PlanTerm.price。
+  /// 由 AdminPlansService 在写档位时同步，不要单独改。
+  price        Int     @default(0)
+  /// 最便宜「启用档位」天数的镜像，真源是 PlanTerm.durationDays。
+  /// 由 AdminPlansService 在写档位时同步，不要单独改。
+  durationDays Int     @default(30)
+  sortOrder    Int     @default(0)
+
+  maxMonitors Int @default(5)
+  maxProbes   Int @default(0)
+  /// 每个监控自动分配的系统探针数量（按负载均衡从在线系统探针池里挑）；
+  /// 0 表示不分配系统探针。与租户探针的绑定数量无关——租户探针只受 maxProbes 约束。
+  maxProbesPerMonitor Int @default(0)
+  maxApiKeys  Int @default(5)
+  maxMembers  Int @default(3)
+  maxChannels Int @default(1)
+  minInterval Int @default(300)
+
+  allowTenantProbe Boolean @default(false)
+  allowStatusPage  Boolean @default(false)
+  allowedMonitorTypes MonitorType[] @default([HTTP, TCP, PING])
+
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions Subscription[]
+  orders        Order[]
+  terms         PlanTerm[]
+
+  @@index([code])
+  @@map("plans")
+}
+
+/// 计费周期。时长以 PlanTerm.durationDays 为准（按 30/90/365 天近似）。
+enum PlanCycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+/// 套餐的计费周期档位：一个套餐可以同时卖月付 / 季付 / 年付，各自定价。
+/// `(planId, cycle)` 唯一，因此一个周期在套餐内只有一个价格。
+/// 停用（enabled = false）而不是删除，才能保住历史订单的引用。
+model PlanTerm {
+  id           String    @id @default(cuid())
+  planId       String
+  cycle        PlanCycle
+  durationDays Int
+  /// 该周期档位的价格（分）。
+  price        Int
+  /// 小程序虚拟支付道具 ID（MP 后台【虚拟支付 → 道具管理】发布到现网的道具）。
+  /// 空 = 该档位尚未映射，不能用虚拟支付下单；道具单价必须与 `price` 一致。
+  wechatProductId String?
+  enabled      Boolean   @default(true)
+  sortOrder    Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plan   Plan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@unique([planId, cycle])
+  @@index([planId, enabled, sortOrder])
+  @@map("plan_terms")
+}
+
+// 订阅栈
+model Subscription {
+  id             String @id @default(cuid())
+  organizationId String
+  planId         String
+
+  status    SubscriptionStatus @default(ACTIVE)
+  startsAt  DateTime
+  expiresAt DateTime
+  autoRenew Boolean            @default(false)
+
+  /// 进入 PAUSED 的时刻；恢复时清空。
+  pausedAt DateTime?
+  /// 冻结时结算的剩余天数。恢复时 `expiresAt = 恢复时刻 + pausedRemainingDays`。
+  pausedRemainingDays Int?
+  /// True only when every paid service interval is represented in the ledger.
+  entitlementsTracked Boolean @default(false)
+
+  orderId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         Plan         @relation(fields: [planId], references: [id])
+  order        Order?       @relation(fields: [orderId], references: [id])
+  entitlements SubscriptionEntitlement[]
+
+  @@index([organizationId, status])
+  @@index([expiresAt])
+  @@map("subscriptions")
+}
+
+// 套餐降级监控数量宽限周期
+model MonitorCapacityCycle {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  sourceKey            String    @unique
+  sourceSubscriptionId String?
+  purchaserId          String?
+  fromPlanId           String
+  fromLimit            Int
+  toPlanId             String
+  limit                Int
+  startsAt             DateTime
+  graceEndsAt          DateTime
+  /// GRACE / LIMITED / RESOLVED. Closed rows are retained as tombstones.
+  status               String    @default("GRACE")
+  selectedMonitorIds   String[]  @default([])
+  retainedMonitorIds   String[]  @default([])
+  restrictedMonitorIds String[]  @default([])
+  announcedAt          DateTime?
+  warnedAt             DateTime?
+  resolvedAt           DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([status, graceEndsAt])
+  @@map("monitor_capacity_cycles")
+}
+
+// 订单
+model Order {
+  id             String @id @default(cuid())
+  orderNo        String @unique
+  organizationId String
+  planId         String
+  userId         String
+
+  amount       Int
+  currency     String @default("CNY")
+  /// 下单时从所选档位（PlanTerm.durationDays）抄下来的快照。
+  durationDays Int
+  /// 下单所选周期档位的快照；引入档位之前的历史订单为空。
+  cycle        PlanCycle?
+  termId       String?
+
+  status      OrderStatus @default(PENDING)
+  paidAt      DateTime?
+  cancelledAt DateTime?
+  expiresAt   DateTime
+
+  /// 本单覆盖的服务期快照（结算时写入）：退款按天折算与订阅回收都靠它定位
+  /// 「这笔订单买到了哪段时间」。续费订单不会写 `Subscription.orderId`，
+  /// 没有快照就查不出自己的时段；历史订单为空。
+  serviceStartsAt DateTime?
+  serviceEndsAt   DateTime?
+
+  /// 累计已退金额（分）。一单一退（P0/P1），保留累加是为了对账与并发超退校验。
+  refundedAmount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  plan         Plan          @relation(fields: [planId], references: [id])
+  term         PlanTerm?     @relation(fields: [termId], references: [id])
+  user         User          @relation(fields: [userId], references: [id])
+  payment      Payment?
+  paymentAttempts PaymentAttempt[]
+  subscription Subscription?
+  entitlement SubscriptionEntitlement?
+  refunds      Refund[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([termId])
+  @@map("orders")
+}
+
+// 支付记录
+model Payment {
+  id             String         @id @default(cuid())
+  orderId        String         @unique
+  channel        PaymentChannel
+  /// 平台侧唯一单号：微信支付 V3 是 `transaction_id`，虚拟支付是 `wx_order_id`
+  /// （发货推送里的 `WeChatPayInfo.MchOrderNo`）。幂等去重以此为准。
+  transactionId  String?        @unique
+  prepayId       String?
+  /// 最终结算的商户支付尝试单号；历史记录为空时回退到 Order.orderNo。
+  outTradeNo     String?
+  amount         Int
+  /// 累计已退金额（分），与 `Order.refundedAmount` 同步累加。
+  refundedAmount Int            @default(0)
+  status         PaymentStatus  @default(PENDING)
+  paidAt         DateTime?
+  rawCallback    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([transactionId])
+  @@map("payments")
+}
+
+// 退款记录（一单一退：同一订单在途/成功的记录最多一条，见 §3.5）
+// 独立成表的原因：`Payment.orderId` 是唯一键（一单一条支付记录），部分退款
+// 与对账需要按次累积，不能挤在支付记录上。
+model Refund {
+  id             String         @id @default(cuid())
+  /// 渠道幂等键：微信 `out_refund_no`、支付宝 `out_request_no`、虚拟支付 `MchOrderNo`
+  refundNo       String         @unique
+  orderId        String
+  organizationId String
+  channel        PaymentChannel
+
+  type   RefundType
+  status RefundStatus @default(PENDING)
+
+  /// 申请退款金额（分）
+  amount        Int
+  /// 渠道实际退款金额（分），部分退款/手续费场景下可能小于 `amount`
+  settledAmount Int?
+
+  /// 政策快照：COOLING_OFF / NOT_STARTED / PRORATED / MANUAL
+  policyCode    String?
+  /// 折算快照（天），免去事后重算时因时间流逝得出不同结果
+  usedDays      Int?
+  remainingDays Int?
+
+  reason          String?
+  requestedBy     String?
+  approvedBy      String?
+  channelRefundId String?
+  failureReason   String?
+  rawResponse     Json?
+  refundedAt      DateTime?
+  /// First durable authorization to submit to the channel; null means never submitted.
+  submittedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status, updatedAt])
+  @@index([organizationId])
+  @@map("refunds")
+}
+
+/// Live per-order service accounting, independent of immutable financial snapshots.
+/// startsAt/endsAt delimit the remaining schedule; consumedMs survives pause/reorder.
+model SubscriptionEntitlement {
+  orderId        String @id
+  subscriptionId String
+  startsAt       DateTime
+  endsAt         DateTime
+  consumedMs     BigInt @default(0)
+
+  order        Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, startsAt])
+  @@map("subscription_entitlements")
+}
+
+// 支付尝试（每次「发起支付」一条）
+// 微信虚拟支付要求 `outTradeNo` 每次下单重新生成、不可复用（复用报 -15002），
+// 而 `Payment.orderId` 是唯一键（一单只能有一条结算记录）。把「下单尝试」
+// 与「最终结算」拆开：用户重复点击支付会产生多条 attempt，旧单号成功回调
+// 仍能按 `outTradeNo` 找回对应的订单，不会因为覆盖而丢货。
+enum PaymentAttemptStatus {
+  PENDING
+  PAID
+  CLOSED
+  FAILED
+}
+
+model PaymentAttempt {
+  id                  String               @id @default(cuid())
+  orderId             String
+  channel             PaymentChannel
+  /// 商家业务单号：8-32 位、不以 `_` 开头、每次下单重新生成。
+  outTradeNo          String               @unique
+  /// 下单用的用户 openid（虚拟支付按 openid + 单号查单）。
+  openid              String
+  /// 虚拟支付道具 ID；V3 通道为空。
+  productId           String?
+  /// 金额（分），下单时从订单抄下来，回调用它核对实付金额。
+  amount              Int
+  /// 0 = 现网，1 = 沙箱。
+  env                 Int                  @default(0)
+  status              PaymentAttemptStatus @default(PENDING)
+  /// 渠道交易号（虚拟支付 wx_order_id、V3 transaction_id、支付宝 trade_no），幂等键。
+  wxOrderId           String?              @unique
+  paidAt              DateTime?
+  /// 回调原文（虚拟支付是 XML 字符串，包装成 `{ xml }`）。
+  rawNotify           Json?
+  prepayId            String?
+  lastCheckedAt       DateTime?
+  lastError           String?
+  closePending        Boolean              @default(false)
+  reconcileLeaseToken String?
+  reconcileLeaseUntil DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([channel, status, lastCheckedAt])
+  @@map("payment_attempts")
+}

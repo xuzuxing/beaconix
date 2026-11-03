@@ -1,0 +1,160 @@
+enum NotificationChannelType {
+  FEISHU
+  WECOM
+  DINGTALK
+  WECHAT_SUBSCRIBE
+  EMAIL
+}
+
+enum NotificationStatus {
+  SUCCESS
+  FAILED
+}
+
+// ==================== 规则引擎（嵌套规则） ====================
+
+// 规则组：一棵逻辑树（LogicNode | ConditionNode 的 JSON）
+model RuleGroup {
+  id             String   @id @default(cuid())
+  organizationId String
+  projectId      String? // null = 组织级，非空 = 项目级
+  name           String
+  description    String?
+  // 整棵逻辑树：LogicNode | ConditionNode 的 JSON
+  tree           Json
+  // 冗余：树里用到的字段名，便于按字段反查规则
+  fieldsUsed     String[] @default([])
+  enabled        Boolean  @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  bindings     MonitorRuleBinding[]
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([enabled])
+  @@index([deletedAt])
+  @@map("rule_groups")
+}
+
+// monitor 与规则组的绑定
+model MonitorRuleBinding {
+  id          String  @id @default(cuid())
+  monitorId   String
+  ruleGroupId String
+  // 同一个 monitor 绑定多个规则组时的优先级，数字越大越先求值
+  priority    Int     @default(0)
+  enabled     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  monitor   Monitor   @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  ruleGroup RuleGroup @relation(fields: [ruleGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([monitorId, ruleGroupId])
+  @@index([monitorId])
+  @@index([ruleGroupId])
+  @@map("monitor_rule_bindings")
+}
+
+// 通知渠道配置
+model NotificationChannel {
+  id             String                  @id @default(cuid())
+  organizationId String
+  type           NotificationChannelType
+  name           String
+  config         Json                    @default("{}")
+  enabled        Boolean                 @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  logs         NotificationLog[]
+  monitors     MonitorNotificationChannel[]
+
+  @@index([organizationId])
+  @@index([enabled])
+  @@map("notification_channels")
+}
+
+// 通知日志
+model NotificationLog {
+  id        String             @id @default(cuid())
+  monitorId String
+  channelId String
+  channelRefId String?
+  eventId String?
+  deliveryId String?
+  phase String?
+  attempt Int?
+  status    NotificationStatus
+  error     String?
+  sentAt    DateTime           @default(now())
+
+  channel NotificationChannel? @relation(fields: [channelRefId], references: [id], onDelete: SetNull)
+
+  @@index([monitorId, sentAt])
+  @@index([channelId, sentAt])
+  @@index([eventId, sentAt])
+  @@map("notification_logs")
+}
+
+model AlertEvent {
+  id String @id @default(cuid())
+  monitorId String
+  organizationId String
+  projectId String
+  monitorName String
+  target String
+  kind String
+  level String
+  status String @default("ongoing")
+  suppressedReason String?
+  reason String
+  threshold Float?
+  actual Float?
+  unit String?
+  message String?
+  origin String @default("OBSERVED")
+  latestEvidence Json @default("{}")
+  lifecycleRevision Int @default(1)
+  startedAt DateTime @default(now())
+  resolvedAt DateTime?
+  durationSeconds Int?
+  firstNotifiedAt DateTime?
+  updatedAt DateTime @updatedAt
+  deliveries AlertDelivery[]
+
+  @@index([projectId, updatedAt, id])
+  @@index([projectId, status])
+  @@map("alert_events")
+}
+
+model AlertDelivery {
+  id String @id @default(cuid())
+  eventId String
+  eventRevision Int
+  phase String
+  channelId String
+  payload Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  leaseUntil DateTime?
+  leaseToken String?
+  deliveredAt DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  event AlertEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  @@unique([eventId, eventRevision, phase, channelId])
+  @@index([status, nextAttemptAt])
+  @@index([status, createdAt, id])
+  @@map("alert_deliveries")
+}

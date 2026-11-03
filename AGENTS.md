@@ -66,7 +66,7 @@ Each feature is a standard Nest module (`*.module.ts` / `*.controller.ts` / `*.s
 - **`organizations`**: tenant CRUD, plus the onboarding bootstrap. `OrganizationsService.provisionForUser` creates a starter organization (user as `OWNER`, plus the matching `Membership`) and its first project. It is idempotent (skips users who already belong to any org) and is called from `AuthService.verifyEmail` inside the same transaction that flips `emailVerified`, so a verified user always ends up with a usable organization.
 
 ### Data layer
-- Prisma schema: `prisma/schema.prisma` (18 models). Connects to PostgreSQL via the `@prisma/adapter-pg` driver adapter. Prisma config lives in `prisma.config.ts`, not `package.json`.
+- Prisma schema: `prisma/schema/*.prisma` (domain files; `schema/schema.prisma` holds the generator and datasource). Connects to PostgreSQL via the `@prisma/adapter-pg` driver adapter. Prisma config lives in `prisma.config.ts`, not `package.json`.
 - **Historical note**: the first two migrations form a duplicate init pair (`20260301210328_init` creates a minimal `User` table; `20260303224956_init` drops it and rebuilds the full schema). This is expected — do NOT rewrite or squash applied migration history.
 - **The generated client is NOT committed.** It is generated to `src/generated/prisma/` via `pnpm prisma:generate` and ignored by Git (output redirected there). Import enums from `src/generated/prisma/enums` and models from `src/generated/prisma/models`. **Re-run `pnpm prisma:generate` after any schema change** or the build/types will be stale. This is required for local development, CI, and builds.
 - `PrismaService` (`src/database/`) is the injectable client; inject it into services.

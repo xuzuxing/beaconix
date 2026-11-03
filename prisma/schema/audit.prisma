@@ -1,0 +1,44 @@
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  ARCHIVE
+  INVITE
+  JOIN
+  LEAVE
+  ASSIGN
+  UNASSIGN
+  ENABLE_2FA
+  DISABLE_2FA
+  REGENERATE_RECOVERY_CODES
+  USE_RECOVERY_CODE
+}
+
+// AUDIT LOG (Immutable log of all important actions across the platform)
+model AuditLog {
+  id             String      @id @default(cuid())
+  actorId        String?
+  organizationId String?
+  projectId      String?
+  action         AuditAction
+  entity         String // Model name: "Task", "Project", "Membership", etc.
+  entityId       String // UUID of affected entity
+  before         Json? // Snapshot before change
+  after          Json? // Snapshot after change
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+
+  actor        User?         @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([entity, entityId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

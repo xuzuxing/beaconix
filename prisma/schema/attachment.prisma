@@ -1,0 +1,61 @@
+enum AttachmentVisibility {
+  UNKNOWN
+  PRIVATE
+  EXTERNAL
+  PUBLIC
+}
+
+enum AttachmentSource {
+  UPLOAD
+  GOOGLE_DRIVE
+  DROPBOX
+  URL
+}
+
+enum AttachmentStorageProvider {
+  LOCAL
+  OSS
+  EXTERNAL
+}
+
+// ATTACHMENT
+model Attachment {
+  id           String           @id @default(cuid())
+  filename     String
+  mimeType     String
+  size         Int // bytes
+  url          String
+  fileKey      String? // Storage object key — used for object deletion
+  storageProvider AttachmentStorageProvider @default(LOCAL)
+  bucket       String?
+  checksum     String?
+  source       AttachmentSource @default(UPLOAD)
+  visibility AttachmentVisibility @default(UNKNOWN)
+
+  // At most one host may claim an attachment — a task, a ticket or a ticket
+  // reply. General uploads land with all three empty until a business flow
+  // claims them by fileKey.
+  taskId        String?
+  ticketId      String?
+  ticketReplyId String?
+  uploadedById  String?
+
+  /// When a business flow persisted this object's URL without a task/ticket
+  /// host — an avatar on a user, a logo on an organization, a brand image in
+  /// settings. Those rows have no host column to point at them, so this
+  /// timestamp is what keeps the orphan cleanup from deleting a live file.
+  claimedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  task        Task?        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  ticket      Ticket?      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticketReply TicketReply? @relation(fields: [ticketReplyId], references: [id], onDelete: Cascade)
+  uploadedBy  User?        @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([ticketId])
+  @@index([ticketReplyId])
+  @@index([fileKey])
+  @@map("attachments")
+}

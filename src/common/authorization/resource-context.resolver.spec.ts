@@ -16,6 +16,7 @@ function setup() {
         task: { findFirst: jest.fn().mockResolvedValue(task) },
         sprint: { findUnique: jest.fn().mockResolvedValue(resource) },
         monitor: { findFirst: jest.fn().mockResolvedValue(resource) },
+        rumApp: { findFirst: jest.fn().mockResolvedValue(resource) },
         label: { findUnique: jest.fn().mockResolvedValue(resource) },
         ruleGroup: { findFirst: jest.fn().mockResolvedValue(resource) },
         alertEvent: { findUnique: jest.fn().mockResolvedValue(resource) },
@@ -32,6 +33,7 @@ describe('Explicit project resource resolution', () => {
     it.each([
         ['TASK', 'task', 'findFirst'],
         ['MONITOR', 'monitor', 'findFirst'],
+        ['RUM_APP', 'rumApp', 'findFirst'],
         ['LABEL', 'label', 'findUnique'],
         ['RULE_GROUP', 'ruleGroup', 'findFirst'],
         ['ALERT_EVENT', 'alertEvent', 'findUnique'],
@@ -78,6 +80,7 @@ describe('Explicit project resource resolution', () => {
         'TASK',
         'SPRINT',
         'MONITOR',
+        'RUM_APP',
         'LABEL',
         'RULE_GROUP',
         'ALERT_EVENT',

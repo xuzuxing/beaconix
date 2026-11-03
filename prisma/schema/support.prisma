@@ -1,0 +1,127 @@
+// ── 平台工单（Support Ticket）─────────────────────────────────────────────
+// 平台级资源：已登录用户向平台运营方（SUPER_ADMIN）提交问题，不属于任何 Project。
+
+enum TicketStatus {
+  OPEN
+  PROCESSING
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TicketAuthorType {
+  USER
+  STAFF
+}
+
+// 时间轴事件类型（回复不进本枚举，由 TicketReply 承载）
+enum TicketActivityType {
+  CREATED
+  STATUS_CHANGED
+  PRIORITY_CHANGED
+  CATEGORY_CHANGED
+  ASSIGNED
+  UNASSIGNED
+}
+
+model Ticket {
+  id             String         @id @default(cuid())
+  number         Int            @unique
+  subject        String
+  content        String
+  status         TicketStatus   @default(OPEN)
+  priority       TicketPriority @default(MEDIUM)
+  categoryId     String?
+
+  authorId       String
+  organizationId String?
+  assigneeId     String?
+
+  firstRespondedAt DateTime?
+  resolvedAt       DateTime?
+  closedAt         DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  author       User            @relation("TicketAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  assignee     User?           @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  organization Organization?   @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  category     TicketCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  replies      TicketReply[]
+  activities   TicketActivity[]
+  attachments  Attachment[]
+
+  @@index([authorId, createdAt])
+  @@index([status, createdAt])
+  @@index([priority])
+  @@index([categoryId])
+  @@index([assigneeId])
+  @@index([deletedAt])
+  @@map("tickets")
+}
+
+// 回复（用户帖 / 平台帖 / 平台内部备注共用一张表）
+model TicketReply {
+  id             String           @id @default(cuid())
+  ticketId       String
+  authorId       String
+  authorType     TicketAuthorType
+  body           String
+  isInternalNote Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User   @relation("TicketReplyAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  attachments Attachment[]
+
+  @@index([ticketId, createdAt])
+  @@index([authorId])
+  @@map("ticket_replies")
+}
+
+// 时间轴事件（只记"动作"，不记回复正文）
+model TicketActivity {
+  id        String             @id @default(cuid())
+  ticketId  String
+  actorId   String?
+  actorType TicketAuthorType
+  type      TicketActivityType
+  field     String?
+  oldValue  String?
+  newValue  String?
+  meta      Json               @default("{}")
+  createdAt DateTime           @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actor  User?  @relation("TicketActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@index([actorId])
+  @@map("ticket_activities")
+}
+
+// 分类（平台级字典，全局共享）
+model TicketCategory {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tickets Ticket[]
+
+  @@index([isActive, sortOrder])
+  @@map("ticket_categories")
+}

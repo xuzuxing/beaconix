@@ -14,6 +14,7 @@ import helmet from 'helmet';
 import { resolve } from 'node:path';
 import { AppModule } from './app.module';
 import { AppConfig, PUBLIC_STATIC_PREFIX, StorageConfig } from './config';
+import { httpPath } from './config/http-path';
 import { TransformInterceptor } from './common/interceptors';
 
 async function bootstrap() {
@@ -39,6 +40,26 @@ async function bootstrap() {
 
     // Global prefix
     app.setGlobalPrefix(appConfig.globalPrefix);
+
+    // Browser RUM is a public, credential-free write-only endpoint. It needs
+    // cross-origin POST/preflight support independently from the authenticated
+    // management API allowlist; no credential header is exposed or accepted.
+    const rumPath = httpPath(appConfig.globalPrefix, '/rum');
+    app.use(rumPath, (request, response, next) => {
+        const origin = request.headers.origin;
+        if (origin) {
+            response.setHeader('Access-Control-Allow-Origin', origin);
+            response.setHeader('Vary', 'Origin');
+            response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+            response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+            response.setHeader('Access-Control-Max-Age', '600');
+        }
+        if (request.method === 'OPTIONS') {
+            response.sendStatus(204);
+            return;
+        }
+        next();
+    });
 
     app.enableCors({
         origin:

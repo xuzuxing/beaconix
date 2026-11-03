@@ -55,6 +55,7 @@ export type ProjectResourceType =
     | 'COMMENT'
     | 'ATTACHMENT'
     | 'MONITOR'
+    | 'RUM_APP'
     | 'LABEL'
     | 'RULE_GROUP'
     | 'ALERT_EVENT';

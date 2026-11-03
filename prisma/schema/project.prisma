@@ -1,0 +1,84 @@
+enum ProjectRole {
+  VIEWER
+  MEMBER
+  ADMIN
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+// PROJECT
+model Project {
+  id             String        @id @default(cuid())
+  name           String
+  description    String?
+  status         ProjectStatus @default(ACTIVE)
+  key            String // Short code e.g. "PROJ" used in task identifiers like PROJ-42
+  organizationId String
+  createdById    String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  sprints      Sprint[]
+  tasks        Task[]
+  labels       Label[]
+  auditLogs    AuditLog[]
+  monitors     Monitor[]
+  rumApps      RumApp[]
+  ruleGroups   RuleGroup[]
+  memberships ProjectMembership[]
+  invitationGrants InvitationProjectGrant[]
+
+  @@unique([id, organizationId])
+  // Enforce unique project key per organization (e.g. no two "PROJ" in same org)
+  @@unique([organizationId, key])
+  @@index([organizationId])
+  @@index([status])
+  @@index([organizationId, status])
+  @@index([createdById])
+  @@index([deletedAt])
+  @@map("projects")
+}
+
+model ProjectMembership {
+  id String @id @default(cuid())
+  organizationId String
+  membershipId String
+  projectId String
+  role ProjectRole
+  grantedById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  membership Membership @relation(fields: [membershipId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  grantedBy User? @relation("ProjectGrantActor", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@unique([membershipId, projectId])
+  @@index([projectId, role])
+  @@index([membershipId, organizationId])
+  @@map("project_memberships")
+}
+
+model InvitationProjectGrant {
+  id String @id @default(cuid())
+  invitationId String
+  organizationId String
+  projectId String
+  role ProjectRole
+  createdAt DateTime @default(now())
+
+  invitation Invitation @relation(fields: [invitationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  project Project @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@unique([invitationId, projectId])
+  @@index([projectId])
+  @@map("invitation_project_grants")
+}

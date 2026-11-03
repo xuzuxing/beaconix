@@ -17,6 +17,7 @@ import {
     monitorConfig,
     probeConfig,
     redisConfig,
+    rumConfig,
     resendConfig,
     schedulerConfig,
     storageConfig,
@@ -69,6 +70,7 @@ import { CacheModule } from './infra/cache/cache.module';
 import { LoggerModule } from './infra/logging/logger.module';
 import { HealthModule, MetricsModule } from './infra/observability';
 import { HealthController } from './health.controller';
+import { RumModule } from './modules/rum/rum.module';
 
 @Module({
     imports: [
@@ -84,6 +86,7 @@ import { HealthController } from './health.controller';
                 monitorConfig,
                 probeConfig,
                 redisConfig,
+                rumConfig,
                 resendConfig,
                 schedulerConfig,
                 storageConfig,
@@ -181,6 +184,7 @@ import { HealthController } from './health.controller';
         DeveloperApiModule,
         QuotaModule,
         AdminModule,
+        RumModule,
     ],
     controllers: [AppController, HealthController],
     providers: [
