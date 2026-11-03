@@ -93,17 +93,20 @@ check, and ESLint. Fix the reported problems rather than bypassing the hook.
 
 ## Database Changes
 
-`prisma/schema.prisma` is the single source of truth, and the generated client is
-committed under `src/generated/prisma/`.
+The `prisma/schema/*.prisma` files together are the schema source of truth.
+`prisma/schema/schema.prisma` contains the generator and datasource, while the other files
+group models and enums by domain. Prisma reads all of them through the `prisma/schema/`
+directory configured in `prisma.config.ts`. The generated client is written to
+`src/generated/prisma/` and is not committed.
 
 ```bash
-# after editing prisma/schema.prisma
+# after editing a prisma/schema/*.prisma file
 pnpm prisma:generate        # required — otherwise types/build are stale
 pnpm prisma:migrate         # creates prisma/migrations/<timestamp>_<name>
 ```
 
-Commit the schema change, the migration, and the regenerated client together in
-one commit.
+Commit schema changes and their migration together when the database structure
+changes. Regenerate the client locally after schema edits.
 
 ## Tests
 

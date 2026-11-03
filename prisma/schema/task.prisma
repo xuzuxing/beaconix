@@ -1,0 +1,232 @@
+enum SprintStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+  CANCELLED
+}
+
+enum CommentType {
+  TEXT
+  SYSTEM
+}
+
+// SPRINT
+model Sprint {
+  id        String       @id @default(cuid())
+  name      String
+  goal      String?
+  startDate DateTime?
+  endDate   DateTime?
+  status    SprintStatus @default(PLANNED)
+  projectId String
+  order     Int          @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks   Task[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([projectId, status])
+  @@map("sprints")
+}
+
+// TASK
+model Task {
+  id                String       @id @default(cuid())
+  number            Int // Auto-incremented task number per project (e.g., PROJ-42)
+  title             String
+  description       String?
+  priority          TaskPriority @default(MEDIUM)
+  status            TaskStatus   @default(TODO)
+  storyPoints       Int? // Agile story points estimation
+  dueDate           DateTime?
+  completedAt       DateTime?
+  // 提醒去重标记：置位后同一轮提醒不会重复发送（改 dueDate 时重置）
+  dueSoonNotifiedAt DateTime?
+  overdueNotifiedAt DateTime?
+
+  // Multi-tenant isolation fields
+  organizationId String
+  projectId      String
+  sprintId       String? // Nullable: tasks can exist in backlog (no sprint)
+  createdById    String?
+  assignedToId   String?
+
+  // Self-referencing for subtasks
+  parentTaskId String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sprint       Sprint?      @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+  createdBy    User?        @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedTo   User?        @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  parentTask   Task?        @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  subTasks     Task[]       @relation("SubTasks")
+
+  comments     Comment[]
+  attachments  Attachment[]
+  labels       TaskLabel[]
+  watchers     TaskWatcher[]
+  activities   TaskActivity[]
+  dependencies TaskDependency[] @relation("DependentTask")
+  dependents   TaskDependency[] @relation("DependencyTask")
+
+  @@unique([projectId, number])
+  @@index([status])
+  @@index([priority])
+  @@index([projectId])
+  @@index([organizationId])
+  @@index([sprintId])
+  @@index([assignedToId])
+  @@index([createdById])
+  @@index([dueDate])
+  @@index([deletedAt])
+  @@index([organizationId, status])
+  @@index([projectId, sprintId])
+  @@index([projectId, status])
+  @@map("tasks")
+}
+
+// TASK DEPENDENCY (Task blocks another Task)
+model TaskDependency {
+  id               String   @id @default(cuid())
+  dependentTaskId  String // The task that is blocked
+  dependencyTaskId String // The task that blocks it
+  createdAt        DateTime @default(now())
+
+  dependentTask  Task @relation("DependentTask", fields: [dependentTaskId], references: [id], onDelete: Cascade)
+  dependencyTask Task @relation("DependencyTask", fields: [dependencyTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([dependentTaskId, dependencyTaskId])
+  @@index([dependentTaskId])
+  @@index([dependencyTaskId])
+  @@map("task_dependencies")
+}
+
+// TASK WATCHER (Users watching a task for notifications)
+model TaskWatcher {
+  id        String   @id @default(cuid())
+  taskId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@index([taskId])
+  @@index([userId])
+  @@map("task_watchers")
+}
+
+// TASK ACTIVITY LOG (Timeline of all task events)
+model TaskActivity {
+  id        String   @id @default(cuid())
+  taskId    String
+  actorId   String?
+  action    String // e.g. "changed status from TODO to IN_PROGRESS"
+  field     String? // Which field changed
+  oldValue  String?
+  newValue  String?
+  meta      Json?    @default("{}")
+  createdAt DateTime @default(now())
+
+  task  Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor User? @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("task_activities")
+}
+
+// COMMENT
+model Comment {
+  id        String      @id @default(cuid())
+  body      String
+  type      CommentType @default(TEXT)
+  taskId    String
+  authorId  String?
+  isEdited  Boolean     @default(false)
+  deletedAt DateTime?
+
+  // Self-referencing for threaded replies
+  parentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  task    Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author  User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  parent  Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies Comment[] @relation("CommentReplies")
+
+  @@index([taskId])
+  @@index([authorId])
+  @@index([parentId])
+  @@index([deletedAt])
+  @@map("comments")
+}
+
+// LABEL
+model Label {
+  id             String  @id @default(cuid())
+  name           String
+  color          String // Hex color e.g. #FF5733
+  organizationId String
+  projectId      String? // Optional: org-wide labels have no projectId
+  createdById    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("LabelCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  tasks        TaskLabel[]
+
+  @@unique([name, organizationId, projectId])
+  @@index([organizationId])
+  @@index([projectId])
+  @@map("labels")
+}
+
+// TASK LABEL (Pivot: Task <-> Label)
+model TaskLabel {
+  taskId    String
+  labelId   String
+  createdAt DateTime @default(now())
+
+  task  Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  label Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, labelId])
+  @@index([taskId])
+  @@index([labelId])
+  @@map("task_labels")
+}

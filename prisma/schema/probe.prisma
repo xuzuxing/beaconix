@@ -1,0 +1,212 @@
+enum ProbeScope {
+  SYSTEM
+  TENANT
+}
+
+enum ProbeProvider {
+  TENCENT
+  ALIYUN
+  CUSTOM
+}
+
+enum ProbeStatus {
+  ONLINE
+  OFFLINE
+}
+
+enum CheckSource {
+  LOCAL
+  PROBE
+}
+
+enum ExecutionTrigger {
+  SCHEDULED
+  MANUAL
+  CALLBACK
+}
+
+enum ExecutionStatus {
+  SUCCESS
+  FAILED
+  TIMEOUT
+  SKIPPED
+}
+
+// 探针
+model Probe {
+  id                       String        @id @default(cuid())
+  scope                    ProbeScope    @default(TENANT)
+  organizationId           String?
+  name                     String
+  provider                 ProbeProvider
+  region                   String
+  callbackUrl              String
+  enabled                  Boolean       @default(true)
+  lastHeartbeat            DateTime?
+  // 探针最近一次上报的心跳周期（秒）；离线阈值按它的倍数推导，null = 未上报过
+  heartbeatIntervalSeconds Int?
+  status                   ProbeStatus   @default(OFFLINE)
+  maxTenants               Int?          @default(0)
+  priority                 Int           @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  monitors     MonitorProbe[]
+  results      ProbeResult[]
+  executions   ProbeExecution[]
+  secrets      ProbeSecret[]
+
+  @@index([scope])
+  @@index([organizationId])
+  @@index([enabled])
+  @@map("probes")
+}
+
+// 探针凭据：哈希存储（sha256），支持平滑轮换——同一探针在一次轮换期间
+// 新旧 secret 并存，旧的在宽限期后由 expiresAt 自动失效。
+model ProbeSecret {
+  id           String    @id @default(cuid())
+  probeId      String
+  secretHash   String    @unique // sha256 hex of the raw secret
+  secretPrefix String // e.g. tnt_1a2b3c4d — for display only
+  // 宽限期截止：null = 不过期（当前有效）；轮换后的旧 secret 在此刻失效
+  expiresAt    DateTime?
+  revokedAt    DateTime?
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  probe Probe @relation(fields: [probeId], references: [id], onDelete: Cascade)
+
+  @@index([probeId])
+  @@index([revokedAt])
+  @@index([expiresAt])
+  @@map("probe_secrets")
+}
+
+// 监控-探针多对多
+model MonitorProbe {
+  monitorId String
+  probeId   String
+  createdAt DateTime @default(now())
+
+  monitor Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  probe   Probe   @relation(fields: [probeId], references: [id], onDelete: Cascade)
+
+  @@id([monitorId, probeId])
+  @@index([monitorId])
+  @@index([probeId])
+  @@map("monitor_probes")
+}
+
+// 探针检测结果
+model ProbeResult {
+  id        String   @id @default(cuid())
+  probeId   String
+  probeRefId String?
+  monitorId String?
+  organizationId String?
+  projectId String?
+  monitorType MonitorType?
+  configRevision Int?
+  reportId String?
+  payloadHash String?
+  receivedAt DateTime @default(now())
+  appliedAt DateTime?
+  /// 该结果归属的批次标识；未归属到任何批次时保留 null。
+  roundId   String?
+  target    String
+  success   Boolean
+  error     String?
+  // 探针观测到的实际 HTTP 状态码（可选）
+  statusCode Int?
+  latency   Int
+  checkedAt DateTime @default(now())
+
+  probe Probe? @relation(fields: [probeRefId], references: [id], onDelete: SetNull)
+
+  @@unique([probeId, reportId])
+  @@index([projectId, monitorId, checkedAt])
+  @@index([projectId, probeId, checkedAt])
+  @@index([target, checkedAt])
+  @@index([probeId, checkedAt])
+  @@index([checkedAt])
+  @@index([monitorId, roundId, checkedAt])
+  @@index([projectId, monitorId, roundId])
+  @@map("probe_results")
+}
+
+// 探针和检测执行日志
+model ProbeExecution {
+  id           String           @id @default(cuid())
+  probeId      String?
+  monitorId    String?
+  target       String
+  trigger      ExecutionTrigger
+  status       ExecutionStatus
+  success      Boolean
+  latency      Int?
+  error        String?
+  requestMeta  Json?            @default("{}")
+  responseMeta Json?            @default("{}")
+  executedAt   DateTime         @default(now())
+
+  probe   Probe?   @relation(fields: [probeId], references: [id], onDelete: SetNull)
+  monitor Monitor? @relation(fields: [monitorId], references: [id], onDelete: SetNull)
+
+  @@index([probeId, executedAt])
+  @@index([monitorId, executedAt])
+  @@index([status])
+  @@index([executedAt])
+  @@map("probe_executions")
+}
+
+// 检测历史
+model CheckLog {
+  id             String      @id @default(cuid())
+  monitorId      String
+  monitorRefId   String?
+  organizationId String?
+  projectId      String?
+  monitorType    MonitorType?
+  observationId  String? @unique
+  configRevision Int?
+  serviceVerdict String?
+  localServiceVerdict String?
+  sslVerdict String?
+  // 最终判定结论（本地结果与探针结果聚合后）
+  success        Boolean
+  // 本地探测的原始结果；探针回调写入时记录本地最近一次结果，本地检测时等于 success
+  localSuccess   Boolean?
+  // 本地失败但探针成功时置真，便于区分"探针救回"的判定
+  rescuedByProbe Boolean     @default(false)
+  latency        Int
+  error          String?
+  // 实际 HTTP 状态码（服务器有响应时），供规则与历史使用
+  statusCode     Int?
+  // 规则校验结论：本轮规则树是否命中（命中=异常）；无绑定规则组时回退为 !success
+  ruleMatched    Boolean     @default(false)
+  // 命中的规则组 ID，便于追溯「为什么触发」
+  ruleGroupIds   String[]    @default([])
+  source         CheckSource @default(LOCAL)
+  revision       Int         @default(1)
+  evaluated      Boolean     @default(true)
+  failureKind    String?
+  meta           Json        @default("{}")
+  checkedAt      DateTime    @default(now())
+  /// 批次标识：由一次本地检查锚定的一轮聚合；旧数据为 null。
+  roundId        String?
+  /// 批次结论已写入状态与告警的时间；null 表示该批次尚未结算。
+  appliedAt      DateTime?
+
+  monitor Monitor? @relation(fields: [monitorRefId], references: [id], onDelete: SetNull)
+
+  @@unique([monitorId, roundId])
+  @@index([projectId, source, checkedAt])
+  @@index([projectId, source, monitorType, checkedAt])
+  @@index([monitorId, checkedAt])
+  @@index([monitorId, appliedAt])
+  @@index([checkedAt])
+  @@map("check_logs")
+}
