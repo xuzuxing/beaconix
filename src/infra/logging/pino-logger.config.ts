@@ -321,6 +321,12 @@ function createTransport(
 
     const targets: TransportTargetOptions[] = [];
     if (toConsole && prettyPrint) targets.push(prettyTarget);
+    else if (toConsole)
+        targets.push({
+            target: 'pino/file',
+            level,
+            options: { destination: 1 },
+        });
     if (toFile) targets.push(fileTarget);
     if (loki && hasLoki) {
         targets.push({
