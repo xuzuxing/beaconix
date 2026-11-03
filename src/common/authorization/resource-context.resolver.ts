@@ -51,6 +51,15 @@ export class ResourceContextResolver {
                 resourceOrganizationId = monitor?.organizationId ?? null;
                 break;
             }
+            case 'RUM_APP': {
+                const app = await db.rumApp.findFirst({
+                    where: { id, ...active },
+                    select: { projectId: true, organizationId: true },
+                });
+                projectId = app?.projectId ?? null;
+                resourceOrganizationId = app?.organizationId ?? null;
+                break;
+            }
             case 'LABEL': {
                 const label = await db.label.findUnique({
                     where: { id },

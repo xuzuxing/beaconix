@@ -424,6 +424,9 @@ export class ProjectAccessService {
             'monitor.manage': 'monitors:write',
             'monitor.restore': 'monitors:write',
             'monitor.test-alert': 'monitors:write',
+            'app.read': 'monitoring:read',
+            'app.manage': 'monitors:write',
+            'rum.read': 'monitoring:read',
             'rule.manage': 'monitors:write',
             'alert.retry': 'monitors:write',
         }[action] as string | undefined;

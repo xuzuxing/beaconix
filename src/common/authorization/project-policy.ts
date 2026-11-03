@@ -21,6 +21,9 @@ export const PROJECT_ACTIONS = {
     'monitor.manage': { role: 'ADMIN', archived: false },
     'monitor.restore': { role: 'ADMIN', archived: false },
     'monitor.test-alert': { role: 'ADMIN', archived: false },
+    'app.read': { role: 'VIEWER', archived: true },
+    'app.manage': { role: 'ADMIN', archived: false },
+    'rum.read': { role: 'VIEWER', archived: true },
     'rule.manage': { role: 'ADMIN', archived: false },
     'alert.retry': { role: 'ADMIN', archived: false },
 } as const;

@@ -31,6 +31,7 @@ model Project {
   labels       Label[]
   auditLogs    AuditLog[]
   monitors     Monitor[]
+  rumApps      RumApp[]
   ruleGroups   RuleGroup[]
   memberships ProjectMembership[]
   invitationGrants InvitationProjectGrant[]

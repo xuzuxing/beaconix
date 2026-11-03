@@ -52,6 +52,7 @@ model Organization {
 
   // Monitors
   monitors      Monitor[]
+  rumApps       RumApp[]
   probes        Probe[]
   channels      NotificationChannel[]
   statusPages   StatusPage[]

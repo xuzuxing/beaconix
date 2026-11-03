@@ -8,6 +8,7 @@ export * from './monitor.config';
 export * from './probe.config';
 export * from './resend.config';
 export * from './redis.config';
+export * from './rum.config';
 export * from './scheduler.config';
 export * from './storage.config';
 export * from './throttler.config';
