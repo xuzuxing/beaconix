@@ -30,6 +30,12 @@ export class QueryRumErrorsDto {
     @MaxLength(100)
     type?: string;
 
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    @MaxLength(100)
+    release?: string;
+
     @ApiPropertyOptional({ example: 'profile' })
     @IsOptional()
     @IsString()

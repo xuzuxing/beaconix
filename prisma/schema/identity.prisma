@@ -39,6 +39,8 @@ model User {
   grantedProjectMemberships ProjectMembership[] @relation("ProjectGrantActor")
   createdProjects      Project[]             @relation("ProjectCreator")
   createdRumApps       RumApp[]              @relation("RumAppCreator")
+  uploadedRumSourceMaps RumSourceMap[]        @relation("RumSourceMapUploader")
+  createdRumAlertRules RumAlertRule[]         @relation("RumAlertRuleCreator")
   createdTasks         Task[]                @relation("TaskCreator")
   assignedTasks        Task[]                @relation("TaskAssignee")
   comments             Comment[]

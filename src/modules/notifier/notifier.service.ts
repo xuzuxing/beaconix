@@ -29,6 +29,7 @@ import type {
     AvailabilityAlertState,
     NotificationChannelSender,
     NotificationPayload,
+    RumAlertInfo,
 } from './notifier.types';
 import {
     MONITOR_AVAILABILITY_JOB,
@@ -496,6 +497,42 @@ export class NotifierService {
         );
     }
 
+    /** Enqueues an App-level RUM alert without mutating monitor state. */
+    async notifyRumAlert(alert: RumAlertInfo): Promise<NotificationResult> {
+        const channels = await this.prisma.notificationChannel.findMany({
+            where: {
+                organizationId: alert.organizationId,
+                enabled: true,
+                ...(alert.channelIds?.length
+                    ? { id: { in: alert.channelIds } }
+                    : {}),
+            },
+            orderBy: { createdAt: 'asc' },
+        });
+        if (!channels.length) return { skipped: true, sent: 0, failed: 0 };
+        const payload: NotificationPayload = {
+            idempotencyKey: alert.idempotencyKey,
+            monitorId: alert.appId,
+            monitorName: alert.appName,
+            monitorType: 'RUM',
+            target: alert.metricLabel,
+            organizationId: alert.organizationId,
+            previousStatus: alert.active ? 'NORMAL' : 'ALERTING',
+            status: alert.active ? 'ALERTING' : 'NORMAL',
+            event: alert.active ? 'RUM_ALERT' : 'RUM_RECOVERED',
+            failCount: 0,
+            latency: null,
+            error: `${alert.value} events in ${alert.windowMinutes} minute(s); threshold ${alert.threshold}`,
+            checkedAt: alert.occurredAt,
+        };
+        return this.enqueuePayload(
+            channels,
+            payload,
+            MonitorStatus.DEGRADED,
+            alert.idempotencyKey,
+        );
+    }
+
     private async enqueueAvailability(
         monitor: MonitorModel,
         state: AvailabilityAlertState,
@@ -537,6 +574,7 @@ export class NotifierService {
         channels: NotificationChannelModel[],
         payload: NotificationPayload,
         transitionStatus: MonitorStatus,
+        jobKey?: string,
     ): Promise<NotificationResult> {
         const deliveries = await Promise.allSettled(
             channels.map((channel) =>
@@ -549,9 +587,16 @@ export class NotifierService {
                         sslAlert: false,
                     },
                     {
+                        ...(jobKey
+                            ? {
+                                  jobId: `${jobKey.replace(/[^A-Za-z0-9_-]/g, '_')}-${channel.id}`,
+                              }
+                            : {}),
                         attempts: 3,
                         backoff: { type: 'exponential', delay: 5000 },
-                        removeOnComplete: true,
+                        removeOnComplete: jobKey
+                            ? { age: 7 * 24 * 60 * 60, count: 10_000 }
+                            : true,
                         removeOnFail: 100,
                     },
                 ),

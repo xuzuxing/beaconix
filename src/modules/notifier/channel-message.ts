@@ -9,6 +9,10 @@ export function renderTitle(payload: NotificationPayload): string {
         return `${prefix}[NO DATA] ${payload.monitorName}`;
     if (payload.event === 'NO_DATA_RECOVERED')
         return `${prefix}[OBSERVATIONS RESUMED] ${payload.monitorName}`;
+    if (payload.event === 'RUM_ALERT')
+        return `${prefix}[RUM ALERT] ${payload.monitorName}`;
+    if (payload.event === 'RUM_RECOVERED')
+        return `${prefix}[RUM RECOVERED] ${payload.monitorName}`;
 
     if (payload.event === 'AVAILABILITY_RECOVERED') {
         return `${prefix}[AVAILABILITY RECOVERED] ${payload.monitorName}`;
@@ -34,6 +38,8 @@ function isNoDataEvent(payload: NotificationPayload): boolean {
 }
 
 function timeLabel(payload: NotificationPayload): string {
+    if (payload.event === 'RUM_ALERT' || payload.event === 'RUM_RECOVERED')
+        return 'Evaluated at';
     return payload.event === 'NO_DATA'
         ? 'Detected at'
         : payload.event === 'NO_DATA_RECOVERED'
@@ -56,7 +62,9 @@ function availabilityLine(payload: NotificationPayload): string | null {
 function detailLines(payload: NotificationPayload): string[] {
     const lines = [`Target: ${payload.target}`];
 
-    if (isNoDataEvent(payload)) {
+    if (payload.event === 'RUM_ALERT' || payload.event === 'RUM_RECOVERED') {
+        lines.push(`State: ${payload.status}`);
+    } else if (isNoDataEvent(payload)) {
         lines.push(`Status: ${payload.status}`);
     } else if (isAvailabilityEvent(payload)) {
         const availability = availabilityLine(payload);
@@ -93,7 +101,9 @@ export function renderMarkdown(payload: NotificationPayload): string {
         `**Target:** ${payload.target}`,
     ];
 
-    if (isNoDataEvent(payload)) {
+    if (payload.event === 'RUM_ALERT' || payload.event === 'RUM_RECOVERED') {
+        lines.push(`**State:** **${payload.status}**`);
+    } else if (isNoDataEvent(payload)) {
         lines.push(`**Status:** **${payload.status}**`);
     } else if (isAvailabilityEvent(payload)) {
         const availability = availabilityLine(payload);

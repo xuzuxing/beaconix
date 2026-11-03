@@ -24,7 +24,9 @@ export class EmailSender implements NotificationChannelSender {
 
         if (
             payload.event === 'NO_DATA' ||
-            payload.event === 'NO_DATA_RECOVERED'
+            payload.event === 'NO_DATA_RECOVERED' ||
+            payload.event === 'RUM_ALERT' ||
+            payload.event === 'RUM_RECOVERED'
         ) {
             await Promise.all(
                 config.to.map((to) =>

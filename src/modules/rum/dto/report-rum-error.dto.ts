@@ -38,6 +38,18 @@ export class ReportRumErrorDto {
     @MaxLength(2048)
     page?: string;
 
+    @ApiPropertyOptional({ example: 'web-2026.11.03.1' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(100)
+    release?: string;
+
+    @ApiPropertyOptional({ description: 'Related replay session ID' })
+    @IsOptional()
+    @IsString()
+    @MaxLength(100)
+    sessionId?: string;
+
     @ApiPropertyOptional({ example: '2026-11-03T08:00:00.000Z' })
     @IsOptional()
     @IsDateString()

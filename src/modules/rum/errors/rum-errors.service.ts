@@ -38,6 +38,7 @@ export class RumErrorsService {
         const where: Prisma.RumErrorGroupWhereInput = {
             appId,
             ...(query.type ? { type: query.type } : {}),
+            ...(query.release ? { release: query.release } : {}),
             ...(query.search
                 ? {
                       OR: [

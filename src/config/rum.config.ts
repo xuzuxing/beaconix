@@ -6,6 +6,10 @@ export interface RumConfig {
     appRequestsPerMinute: number;
     sourceRequestsPerMinute: number;
     errorRetentionDays: number;
+    eventRetentionDays: number;
+    replayRetentionDays: number;
+    replayMaxPayloadBytes: number;
+    sourceMapMaxBytes: number;
 }
 
 function positiveInteger(key: string, fallback: string): number {
@@ -24,4 +28,11 @@ export const rumConfig = registerAs('rum', (): RumConfig => ({
         '120',
     ),
     errorRetentionDays: positiveInteger('RUM_ERROR_RETENTION_DAYS', '90'),
+    eventRetentionDays: positiveInteger('RUM_EVENT_RETENTION_DAYS', '90'),
+    replayRetentionDays: positiveInteger('RUM_REPLAY_RETENTION_DAYS', '30'),
+    replayMaxPayloadBytes: positiveInteger(
+        'RUM_REPLAY_MAX_PAYLOAD_BYTES',
+        '65536',
+    ),
+    sourceMapMaxBytes: positiveInteger('RUM_SOURCE_MAP_MAX_BYTES', '5242880'),
 }));

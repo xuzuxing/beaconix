@@ -23,7 +23,19 @@ export class RumErrorGroupEntity {
     stack: string | null;
 
     @ApiPropertyOptional({ nullable: true })
+    resolvedStack: string | null;
+
+    @ApiPropertyOptional({ nullable: true })
     page: string | null;
+
+    @ApiPropertyOptional({ nullable: true })
+    release: string | null;
+
+    @ApiPropertyOptional({ nullable: true })
+    replaySessionId: string | null;
+
+    @ApiProperty()
+    sourceMapApplied: boolean;
 
     @ApiProperty()
     count: number;

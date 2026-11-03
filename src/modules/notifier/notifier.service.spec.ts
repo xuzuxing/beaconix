@@ -536,6 +536,48 @@ describe('NotifierService', () => {
         });
     });
 
+    describe('notifyRumAlert', () => {
+        it('uses stable queue and provider idempotency keys', async () => {
+            const { service, prisma, queue } = createService();
+            prisma.notificationChannel.findMany.mockResolvedValue([channelRow]);
+            queue.add.mockResolvedValue({ id: 'job-1' });
+
+            await expect(
+                service.notifyRumAlert({
+                    appId: 'app-1',
+                    appName: 'Web App',
+                    organizationId: 'org-1',
+                    metricLabel: 'error count',
+                    value: 10,
+                    threshold: 5,
+                    windowMinutes: 5,
+                    active: true,
+                    occurredAt: new Date('2026-11-03T12:00:00.000Z'),
+                    idempotencyKey: 'rum-alert:incident-1:OPEN',
+                }),
+            ).resolves.toEqual({ skipped: false, sent: 1, failed: 0 });
+
+            expect(queue.add).toHaveBeenCalledWith(
+                MONITOR_AVAILABILITY_JOB,
+                expect.objectContaining({
+                    channelId: 'channel-1',
+                    payload: expect.objectContaining({
+                        idempotencyKey: 'rum-alert:incident-1:OPEN',
+                        monitorId: 'app-1',
+                        event: 'RUM_ALERT',
+                    }),
+                }),
+                expect.objectContaining({
+                    jobId: 'rum-alert_incident-1_OPEN-channel-1',
+                    removeOnComplete: {
+                        age: 7 * 24 * 60 * 60,
+                        count: 10_000,
+                    },
+                }),
+            );
+        });
+    });
+
     describe('deliver', () => {
         it('skips stale or paused monitor notification jobs before channel delivery', async () => {
             const { service, prisma, senders } = createService();

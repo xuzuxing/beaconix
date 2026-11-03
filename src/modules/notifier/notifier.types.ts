@@ -9,7 +9,23 @@ export type MonitorEvent =
     | 'AVAILABILITY_ALERT'
     | 'AVAILABILITY_RECOVERED'
     | 'NO_DATA'
-    | 'NO_DATA_RECOVERED';
+    | 'NO_DATA_RECOVERED'
+    | 'RUM_ALERT'
+    | 'RUM_RECOVERED';
+
+export interface RumAlertInfo {
+    appId: string;
+    appName: string;
+    organizationId: string;
+    metricLabel: string;
+    value: number;
+    threshold: number;
+    windowMinutes: number;
+    active: boolean;
+    channelIds?: string[];
+    occurredAt: Date;
+    idempotencyKey: string;
+}
 
 export interface NotificationPayload {
     idempotencyKey?: string;

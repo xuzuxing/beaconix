@@ -2,6 +2,21 @@ enum RumAppPlatform {
   WEB
 }
 
+enum RumMetricKind {
+  ERROR
+  EVENT
+}
+
+enum RumAlertMetric {
+  ERROR_COUNT
+  EVENT_COUNT
+}
+
+enum RumAlertIncidentStatus {
+  OPEN
+  RESOLVED
+}
+
 model RumApp {
   id             String         @id @default(cuid())
   organizationId String
@@ -19,6 +34,12 @@ model RumApp {
   project      Project         @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Cascade)
   createdBy    User?           @relation("RumAppCreator", fields: [createdById], references: [id], onDelete: SetNull)
   errorGroups  RumErrorGroup[]
+  events       RumEvent[]
+  metricBuckets RumMetricBucket[]
+  replaySessions RumReplaySession[]
+  sourceMaps   RumSourceMap[]
+  alertRules   RumAlertRule[]
+  alertIncidents RumAlertIncident[]
 
   @@index([organizationId])
   @@index([projectId, deletedAt])
@@ -35,7 +56,11 @@ model RumErrorGroup {
   type               String
   message            String
   stack              String?
+  resolvedStack      String?
   page               String?
+  release            String?
+  replaySessionId    String?
+  sourceMapApplied   Boolean   @default(false)
   count              Int       @default(1)
   firstSeenAt        DateTime  @default(now())
   lastSeenAt         DateTime  @default(now())
@@ -49,5 +74,154 @@ model RumErrorGroup {
   @@unique([appId, fingerprintVersion, fingerprint])
   @@index([appId, lastSeenAt])
   @@index([appId, count])
+  @@index([appId, release])
   @@map("rum_error_groups")
+}
+
+model RumEvent {
+  id          String   @id @default(cuid())
+  appId       String
+  eventName   String
+  endUserId   String?
+  anonymousId String?
+  sessionId   String?
+  release     String?
+  page        String?
+  properties  Json     @default("{}")
+  occurredAt  DateTime?
+  receivedAt  DateTime @default(now())
+
+  app RumApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId, receivedAt])
+  @@index([appId, eventName, receivedAt])
+  @@index([appId, sessionId])
+  @@map("rum_events")
+}
+
+model RumMetricBucket {
+  id          String        @id @default(cuid())
+  appId       String
+  kind        RumMetricKind
+  name        String
+  bucketStart DateTime
+  count       Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  app RumApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, kind, name, bucketStart])
+  @@index([appId, kind, bucketStart])
+  @@map("rum_metric_buckets")
+}
+
+model RumReplaySession {
+  id          String   @id @default(cuid())
+  appId       String
+  sessionKey  String
+  release     String?
+  page        String?
+  startedAt   DateTime
+  lastSeenAt  DateTime
+  chunkCount  Int      @default(0)
+  eventCount  Int      @default(0)
+  sizeBytes   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  app    RumApp           @relation(fields: [appId], references: [id], onDelete: Cascade)
+  chunks RumReplayChunk[]
+
+  @@unique([appId, sessionKey])
+  @@index([appId, lastSeenAt])
+  @@map("rum_replay_sessions")
+}
+
+model RumReplayChunk {
+  id          String   @id @default(cuid())
+  sessionId   String
+  sequence    Int
+  events      Json
+  eventCount  Int
+  sizeBytes   Int
+  occurredAt  DateTime
+  createdAt   DateTime @default(now())
+
+  session RumReplaySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, sequence])
+  @@index([sessionId, sequence])
+  @@map("rum_replay_chunks")
+}
+
+model RumSourceMap {
+  id           String   @id @default(cuid())
+  appId        String
+  release      String
+  artifactPath String
+  content      String
+  checksum     String
+  sizeBytes    Int
+  uploadedById String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  app        RumApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+  uploadedBy User?  @relation("RumSourceMapUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@unique([appId, release, artifactPath])
+  @@index([appId, release])
+  @@index([uploadedById])
+  @@map("rum_source_maps")
+}
+
+model RumAlertRule {
+  id            String         @id @default(cuid())
+  appId         String
+  name          String
+  metric        RumAlertMetric
+  eventName     String?
+  threshold     Int
+  windowMinutes Int
+  channelIds    String[]       @default([])
+  enabled       Boolean        @default(true)
+  active        Boolean        @default(false)
+  lastValue     Int            @default(0)
+  lastEvaluatedAt DateTime?
+  createdById   String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  deletedAt     DateTime?
+
+  app       RumApp             @relation(fields: [appId], references: [id], onDelete: Cascade)
+  createdBy User?              @relation("RumAlertRuleCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  incidents RumAlertIncident[]
+
+  @@index([appId, deletedAt])
+  @@index([enabled, deletedAt])
+  @@index([createdById])
+  @@map("rum_alert_rules")
+}
+
+model RumAlertIncident {
+  id                 String                 @id @default(cuid())
+  ruleId             String
+  appId              String
+  status             RumAlertIncidentStatus @default(OPEN)
+  value              Int
+  threshold          Int
+  startedAt          DateTime               @default(now())
+  resolvedAt         DateTime?
+  openedNotifiedAt   DateTime?
+  resolvedNotifiedAt DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  rule RumAlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  app  RumApp       @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId, status])
+  @@index([appId, startedAt])
+  @@map("rum_alert_incidents")
 }

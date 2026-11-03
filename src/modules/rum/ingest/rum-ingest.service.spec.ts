@@ -1,17 +1,28 @@
 import { NotFoundException } from '@nestjs/common';
 import { RumIngestService } from './rum-ingest.service';
+import { RumPublicIngestService } from './rum-public-ingest.service';
 
 describe('RumIngestService', () => {
     function setup(active = true) {
         const tx = {
             $queryRaw: jest.fn().mockResolvedValue([]),
             rumApp: {
-                findFirst: jest
-                    .fn()
-                    .mockResolvedValue(active ? { id: 'app-1' } : null),
+                findFirst: jest.fn().mockResolvedValue(
+                    active
+                        ? {
+                              id: 'app-1',
+                              organizationId: 'org-1',
+                              projectId: 'project-1',
+                              name: 'Portal',
+                          }
+                        : null,
+                ),
             },
             rumErrorGroup: {
                 upsert: jest.fn().mockResolvedValue({ id: 'error-1' }),
+            },
+            rumMetricBucket: {
+                upsert: jest.fn().mockResolvedValue({ id: 'metric-1' }),
             },
         };
         const prisma = {
@@ -20,13 +31,21 @@ describe('RumIngestService', () => {
                     id: 'app-1',
                     organizationId: 'org-1',
                     projectId: 'project-1',
+                    name: 'Portal',
                 }),
             },
             $transaction: jest.fn((work) => work(tx)),
         };
         const rateLimit = { consume: jest.fn().mockResolvedValue(undefined) };
+        const publicIngest = new RumPublicIngestService(
+            prisma as never,
+            rateLimit as never,
+        );
         return {
-            service: new RumIngestService(prisma as never, rateLimit as never),
+            service: new RumIngestService(publicIngest, {
+                symbolicate: (_appId, _release, stack) =>
+                    Promise.resolve({ stack: stack ?? '', applied: false }),
+            } as never),
             prisma,
             rateLimit,
             tx,
