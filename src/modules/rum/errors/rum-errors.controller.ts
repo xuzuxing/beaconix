@@ -11,8 +11,12 @@ import type { AccessPrincipal } from '../../../common/authorization/access.types
 import { CurrentPrincipal } from '../../../common/authorization/current-principal.decorator';
 import { ProjectAccessGuard } from '../../../common/authorization/project-access.guard';
 import { ProjectPermission } from '../../../common/authorization/project-permission.decorator';
-import { QueryRumErrorsDto } from '../dto';
-import { RumErrorGroupEntity, RumErrorGroupListEntity } from '../entities';
+import { QueryRumErrorOccurrencesDto, QueryRumErrorsDto } from '../dto';
+import {
+    RumErrorGroupEntity,
+    RumErrorGroupListEntity,
+    RumErrorOccurrenceListEntity,
+} from '../entities';
 import { RumErrorsService } from './rum-errors.service';
 
 @ApiTags('RUM Errors')
@@ -50,5 +54,26 @@ export class RumErrorsController {
         @CurrentPrincipal() principal: AccessPrincipal,
     ) {
         return this.errors.findOne(projectId, appId, errorId, principal);
+    }
+
+    @Get(':errorId/occurrences')
+    @ApiOperation({ summary: 'List occurrences for an aggregated RUM error' })
+    @ApiParam({ name: 'errorId', description: 'RUM error group CUID' })
+    @ApiOkResponse({ type: RumErrorOccurrenceListEntity })
+    @ApiNotFoundResponse({ description: 'RUM error not found' })
+    findOccurrences(
+        @Param('projectId') projectId: string,
+        @Param('appId') appId: string,
+        @Param('errorId') errorId: string,
+        @Query() query: QueryRumErrorOccurrencesDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.errors.findOccurrences(
+            projectId,
+            appId,
+            errorId,
+            query,
+            principal,
+        );
     }
 }

@@ -28,6 +28,8 @@
     "test:project-access:postgres": "tsx --test --test-concurrency=1 test/project-access/database.integration-spec.ts",
     "test:project-access:http": "tsx --test --test-concurrency=1 test/project-access/http.integration-spec.ts",
     "test:rum:postgres": "tsx --test --test-concurrency=1 test/rum-postgres/database.integration-spec.ts",
+    "test:rum:sdk": "tsx --test sdk/tests/*.test.ts",
+    "type-check:rum:sdk": "tsc -p sdk/tsconfig.json --noEmit",
     "prepare": "husky",
     "prisma:studio": "pnpm exec prisma studio",
     "prisma:generate": "pnpm exec prisma generate",

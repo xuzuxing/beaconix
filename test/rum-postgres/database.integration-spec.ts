@@ -124,8 +124,28 @@ void test(
             };
 
             await Promise.all(
-                Array.from({ length: 24 }, () =>
-                    ingest.reportError(payload, '127.0.0.1'),
+                Array.from({ length: 24 }, (_, index) =>
+                    ingest.reportError(
+                        {
+                            ...payload,
+                            clientEventId: `integration-event-${index}`,
+                            category: 'JAVASCRIPT',
+                            breadcrumbs: [
+                                {
+                                    type: 'navigation',
+                                    occurredAt: '2026-11-04T08:00:00.000Z',
+                                    data: {
+                                        url: 'https://example.invalid/profile?token=secret',
+                                    },
+                                },
+                            ],
+                            sdk: {
+                                name: '@beaconix/rum-browser',
+                                version: '0.2.0',
+                            },
+                        },
+                        '127.0.0.1',
+                    ),
                 ),
             );
             await ingest.reportError(
@@ -150,6 +170,48 @@ void test(
             assert.match(
                 firstGroups[0].resolvedStack ?? '',
                 /src\/main.ts:1:1/,
+            );
+            const occurrences = await prisma.rumErrorOccurrence.findMany({
+                where: { appId: app.id, groupId: firstGroups[0].id },
+                orderBy: { clientEventId: 'asc' },
+            });
+            assert.equal(occurrences.length, 24);
+            assert.equal(occurrences[0].sourceMapApplied, true);
+            assert.match(
+                occurrences[0].resolvedStack ?? '',
+                /src\/main.ts:1:1/,
+            );
+            assert.deepEqual(occurrences[0].sdk, {
+                name: '@beaconix/rum-browser',
+                version: '0.2.0',
+            });
+            assert.deepEqual(occurrences[0].breadcrumbs, [
+                {
+                    type: 'navigation',
+                    occurredAt: '2026-11-04T08:00:00.000Z',
+                    data: { url: 'https://example.invalid/profile' },
+                },
+            ]);
+
+            const duplicatePayload = {
+                ...payload,
+                clientEventId: 'integration-duplicate-event',
+            };
+            await ingest.reportError(duplicatePayload, '127.0.0.1');
+            await ingest.reportError(duplicatePayload, '127.0.0.1');
+            assert.equal(
+                (
+                    await prisma.rumErrorGroup.findFirstOrThrow({
+                        where: { appId: app.id },
+                    })
+                ).count,
+                25,
+            );
+            assert.equal(
+                await prisma.rumErrorOccurrence.count({
+                    where: { appId: app.id },
+                }),
+                25,
             );
             assert.equal(
                 await prisma.rumErrorGroup.count({
@@ -229,6 +291,12 @@ void test(
             await retention.handleCleanup();
             assert.equal(
                 await prisma.rumErrorGroup.count({
+                    where: { appId: secondApp.id },
+                }),
+                0,
+            );
+            assert.equal(
+                await prisma.rumErrorOccurrence.count({
                     where: { appId: secondApp.id },
                 }),
                 0,

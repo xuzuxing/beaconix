@@ -1,4 +1,4 @@
-import type { ReportRumErrorDto } from '../dto';
+import type { ReportRumErrorDto, RumErrorCategoryValue } from '../dto';
 
 const SECRET_ASSIGNMENT =
     /((?:password|passwd|token|access[_-]?token|refresh[_-]?token|authorization|cookie|secret|api[_-]?key)\s*[:=]\s*)[^\s,;]+/gi;
@@ -19,7 +19,7 @@ function removeControlCharacters(value: string): string {
         .join('');
 }
 
-function sanitizeText(value: string, maxLength: number): string {
+export function sanitizeRumText(value: string, maxLength: number): string {
     return removeControlCharacters(value)
         .replace(BEARER_TOKEN, 'Bearer [REDACTED]')
         .replace(JWT_TOKEN, '[REDACTED_JWT]')
@@ -30,7 +30,7 @@ function sanitizeText(value: string, maxLength: number): string {
 
 export function sanitizeRumPage(value?: string): string | null {
     if (!value) return null;
-    const clean = sanitizeText(value, 2048);
+    const clean = sanitizeRumText(value, 2048);
     try {
         const absolute = new URL(clean);
         return `${absolute.origin}${absolute.pathname}`.slice(0, 2048);
@@ -50,7 +50,7 @@ export function sanitizeRumJson(
     if (depth > 6) return '[TRUNCATED]';
     if (value === null || typeof value === 'boolean') return value;
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    if (typeof value === 'string') return sanitizeText(value, 2000);
+    if (typeof value === 'string') return sanitizeRumText(value, 2000);
     if (Array.isArray(value))
         return value
             .slice(0, 100)
@@ -58,7 +58,7 @@ export function sanitizeRumJson(
     if (typeof value !== 'object') return null;
     const result: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value).slice(0, 50)) {
-        const cleanKey = sanitizeText(key, 100);
+        const cleanKey = sanitizeRumText(key, 100);
         if (!cleanKey) continue;
         if (SENSITIVE_KEY.test(cleanKey)) {
             result[cleanKey] = '[REDACTED]';
@@ -77,11 +77,137 @@ export function sanitizeRumJson(
 }
 
 export function sanitizeRumError(dto: ReportRumErrorDto) {
+    const category = inferRumErrorCategory(dto.category, dto.type);
+    const level = dto.level ?? 'ERROR';
+    const requestId = dto.requestId
+        ? sanitizeRumText(dto.requestId, 200)
+        : dto.http?.requestId
+          ? sanitizeRumText(dto.http.requestId, 200)
+          : null;
     return {
-        type: sanitizeText(dto.type, 100),
-        message: sanitizeText(dto.message, 2000),
-        stack: dto.stack ? sanitizeText(dto.stack, 16000) : null,
+        schemaVersion: dto.schemaVersion ?? 1,
+        clientEventId: dto.clientEventId
+            ? sanitizeRumText(dto.clientEventId, 100)
+            : null,
+        category,
+        level,
+        type: sanitizeRumText(dto.type, 100),
+        message: sanitizeRumText(dto.message, 2000),
+        stack: dto.stack ? sanitizeRumText(dto.stack, 16000) : null,
         page: sanitizeRumPage(dto.page),
+        release: dto.release ? sanitizeRumText(dto.release, 100) : null,
+        sessionId: dto.sessionId ? sanitizeRumText(dto.sessionId, 100) : null,
+        endUserId: dto.userId ? sanitizeRumText(dto.userId, 200) : null,
+        anonymousId: dto.anonymousId
+            ? sanitizeRumText(dto.anonymousId, 200)
+            : null,
+        requestId,
+        http: dto.http
+            ? {
+                  ...(dto.http.method
+                      ? {
+                            method: sanitizeRumText(
+                                dto.http.method.toUpperCase(),
+                                20,
+                            ),
+                        }
+                      : {}),
+                  ...(dto.http.url
+                      ? { url: sanitizeRumPage(dto.http.url) }
+                      : {}),
+                  ...(dto.http.status !== undefined
+                      ? { status: dto.http.status }
+                      : {}),
+                  ...(dto.http.durationMs !== undefined
+                      ? { durationMs: dto.http.durationMs }
+                      : {}),
+                  ...(requestId ? { requestId } : {}),
+                  ...(dto.http.failureKind
+                      ? {
+                            failureKind: sanitizeRumText(
+                                dto.http.failureKind,
+                                50,
+                            ),
+                        }
+                      : {}),
+              }
+            : null,
+        resource: dto.resource
+            ? {
+                  ...(dto.resource.tagName
+                      ? {
+                            tagName: sanitizeRumText(
+                                dto.resource.tagName.toLowerCase(),
+                                50,
+                            ),
+                        }
+                      : {}),
+                  ...(dto.resource.url
+                      ? { url: sanitizeRumPage(dto.resource.url) }
+                      : {}),
+              }
+            : null,
+        vue: dto.vue
+            ? {
+                  ...(dto.vue.componentName
+                      ? {
+                            componentName: sanitizeRumText(
+                                dto.vue.componentName,
+                                200,
+                            ),
+                        }
+                      : {}),
+                  ...(dto.vue.info
+                      ? { info: sanitizeRumText(dto.vue.info, 500) }
+                      : {}),
+              }
+            : null,
+        breadcrumbs: (dto.breadcrumbs ?? []).map((breadcrumb) => ({
+            type: sanitizeRumText(breadcrumb.type, 50),
+            ...(breadcrumb.category
+                ? {
+                      category: sanitizeRumText(breadcrumb.category, 50),
+                  }
+                : {}),
+            ...(breadcrumb.level ? { level: breadcrumb.level } : {}),
+            occurredAt: new Date(breadcrumb.occurredAt).toISOString(),
+            ...(breadcrumb.data
+                ? { data: sanitizeRumJson(breadcrumb.data) }
+                : {}),
+        })),
+        sdk: dto.sdk
+            ? {
+                  ...(dto.sdk.name
+                      ? { name: sanitizeRumText(dto.sdk.name, 100) }
+                      : {}),
+                  ...(dto.sdk.version
+                      ? { version: sanitizeRumText(dto.sdk.version, 50) }
+                      : {}),
+              }
+            : null,
         occurredAt: dto.occurredAt ? new Date(dto.occurredAt) : null,
     };
+}
+
+function inferRumErrorCategory(
+    category: RumErrorCategoryValue | undefined,
+    type: string,
+): RumErrorCategoryValue {
+    if (category) return category;
+    return /unhandledrejection|promise/i.test(type) ? 'PROMISE' : 'JAVASCRIPT';
+}
+
+export function rumErrorContextSize(
+    error: ReturnType<typeof sanitizeRumError>,
+): number {
+    return Buffer.byteLength(
+        JSON.stringify({
+            http: error.http,
+            resource: error.resource,
+            vue: error.vue,
+            breadcrumbs: error.breadcrumbs,
+            sdk: error.sdk,
+        }),
+        'utf8',
+    );
 }

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Beaconix RUM Example</title>
+    </head>
+    <body>
+        <main class="shell">
+            <header class="hero">
+                <p class="eyebrow">Beaconix / RUM SDK Example</p>
+                <h1>前端采集验证页</h1>
+                <p>
+                    手动输入采集端点与 App Public Key，然后依次触发
+                    JavaScript、Promise、资源、HTTP、Vue
+                    和手动错误。页面不会保存真实密钥。
+                </p>
+            </header>
+
+            <section class="panel config-panel">
+                <label>
+                    <span>Endpoint</span>
+                    <input
+                        id="endpoint"
+                        value="http://localhost:9000/api/rum"
+                        autocomplete="off"
+                    />
+                </label>
+                <label>
+                    <span>Public Key</span>
+                    <input
+                        id="public-key"
+                        placeholder="rum_..."
+                        autocomplete="off"
+                    />
+                </label>
+                <label>
+                    <span>Release</span>
+                    <input
+                        id="release"
+                        value="rum-example-0.1.0"
+                        autocomplete="off"
+                    />
+                </label>
+                <button id="start" class="primary">初始化 SDK</button>
+                <p id="status" class="status">尚未初始化</p>
+            </section>
+
+            <section class="panel">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">Error collectors</p>
+                        <h2>生成错误报告</h2>
+                    </div>
+                    <p>
+                        每次错误都会携带此前产生的路由、点击、控制台和 HTTP
+                        面包屑。
+                    </p>
+                </div>
+                <div class="action-grid">
+                    <button data-action="javascript" disabled>
+                        JavaScript Error
+                    </button>
+                    <button data-action="promise" disabled>
+                        Unhandled Rejection
+                    </button>
+                    <button data-action="resource" disabled>
+                        Resource Failure
+                    </button>
+                    <button data-action="http" disabled>HTTP Failure</button>
+                    <button data-action="vue" disabled>Vue Error</button>
+                    <button data-action="manual" disabled>Manual Error</button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">Breadcrumb collectors</p>
+                        <h2>生成上下文</h2>
+                    </div>
+                    <p>这些操作本身不生成错误组，只会附加到下一条错误报告。</p>
+                </div>
+                <div class="action-grid compact">
+                    <button data-action="console" disabled>
+                        Console Breadcrumb
+                    </button>
+                    <button data-action="route" disabled>
+                        Route Breadcrumb
+                    </button>
+                    <button data-action="event" disabled>Business Event</button>
+                </div>
+            </section>
+
+            <section class="notes">
+                <strong>隐私边界：</strong>示例和 SDK 不采集 HTTP
+                请求体、响应体或完整 Vue props；URL 查询参数会被移除，常见
+                token/password/authorization 字段会被脱敏，`/api/rum/**`
+                请求默认忽略以防递归上报。
+            </section>
+        </main>
+        <script type="module" src="/src/main.ts"></script>
+    </body>
+</html>

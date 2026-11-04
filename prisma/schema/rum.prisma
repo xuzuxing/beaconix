@@ -2,6 +2,22 @@ enum RumAppPlatform {
   WEB
 }
 
+enum RumErrorCategory {
+  JAVASCRIPT
+  PROMISE
+  RESOURCE
+  HTTP
+  VUE
+  MANUAL
+}
+
+enum RumErrorLevel {
+  INFO
+  WARNING
+  ERROR
+  FATAL
+}
+
 enum RumMetricKind {
   ERROR
   EVENT
@@ -34,6 +50,7 @@ model RumApp {
   project      Project         @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Cascade)
   createdBy    User?           @relation("RumAppCreator", fields: [createdById], references: [id], onDelete: SetNull)
   errorGroups  RumErrorGroup[]
+  errorOccurrences RumErrorOccurrence[]
   events       RumEvent[]
   metricBuckets RumMetricBucket[]
   replaySessions RumReplaySession[]
@@ -54,6 +71,8 @@ model RumErrorGroup {
   fingerprint        String
   fingerprintVersion Int       @default(1)
   type               String
+  category           RumErrorCategory?
+  level              RumErrorLevel?
   message            String
   stack              String?
   resolvedStack      String?
@@ -70,12 +89,50 @@ model RumErrorGroup {
   updatedAt          DateTime  @updatedAt
 
   app RumApp @relation(fields: [appId], references: [id], onDelete: Cascade)
+  occurrences RumErrorOccurrence[]
 
   @@unique([appId, fingerprintVersion, fingerprint])
   @@index([appId, lastSeenAt])
   @@index([appId, count])
   @@index([appId, release])
   @@map("rum_error_groups")
+}
+
+model RumErrorOccurrence {
+  id                 String           @id @default(cuid())
+  appId              String
+  groupId            String
+  clientEventId      String?
+  category           RumErrorCategory
+  level              RumErrorLevel
+  type               String
+  message            String
+  stack              String?
+  resolvedStack      String?
+  sourceMapApplied   Boolean          @default(false)
+  page               String?
+  release            String?
+  sessionId          String?
+  endUserId          String?
+  anonymousId        String?
+  requestId          String?
+  http               Json?
+  resource           Json?
+  vue                Json?
+  breadcrumbs        Json             @default("[]")
+  sdk                Json?
+  occurredAt         DateTime?
+  receivedAt         DateTime         @default(now())
+
+  app   RumApp        @relation(fields: [appId], references: [id], onDelete: Cascade)
+  group RumErrorGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, clientEventId])
+  @@index([groupId, receivedAt])
+  @@index([appId, receivedAt])
+  @@index([appId, category, receivedAt])
+  @@index([appId, requestId])
+  @@map("rum_error_occurrences")
 }
 
 model RumEvent {

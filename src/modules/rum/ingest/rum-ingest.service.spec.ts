@@ -6,6 +6,7 @@ describe('RumIngestService', () => {
     function setup(active = true) {
         const tx = {
             $queryRaw: jest.fn().mockResolvedValue([]),
+            $executeRaw: jest.fn().mockResolvedValue(1),
             rumApp: {
                 findFirst: jest.fn().mockResolvedValue(
                     active
@@ -20,6 +21,10 @@ describe('RumIngestService', () => {
             },
             rumErrorGroup: {
                 upsert: jest.fn().mockResolvedValue({ id: 'error-1' }),
+            },
+            rumErrorOccurrence: {
+                findUnique: jest.fn().mockResolvedValue(null),
+                create: jest.fn().mockResolvedValue({ id: 'occurrence-1' }),
             },
             rumMetricBucket: {
                 upsert: jest.fn().mockResolvedValue({ id: 'metric-1' }),
@@ -79,6 +84,48 @@ describe('RumIngestService', () => {
                 }),
             }),
         );
+        expect(tx.rumErrorOccurrence.create).toHaveBeenCalledWith({
+            data: expect.objectContaining({
+                appId: 'app-1',
+                groupId: 'error-1',
+                category: 'JAVASCRIPT',
+                level: 'ERROR',
+                message: 'token=[REDACTED] failed',
+            }),
+        });
+    });
+
+    it('accepts an already stored client event without incrementing twice', async () => {
+        const { service, tx } = setup();
+        tx.rumErrorOccurrence.findUnique.mockResolvedValue({
+            id: 'occurrence-existing',
+        });
+
+        await expect(
+            service.reportError(
+                {
+                    publicKey: 'rum-key',
+                    clientEventId: 'event_duplicate_1',
+                    type: 'Error',
+                    message: 'failed',
+                },
+                '127.0.0.1',
+            ),
+        ).resolves.toEqual({ accepted: true });
+
+        expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
+        expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+        expect(tx.rumErrorOccurrence.findUnique).toHaveBeenCalledWith({
+            where: {
+                appId_clientEventId: {
+                    appId: 'app-1',
+                    clientEventId: 'event_duplicate_1',
+                },
+            },
+            select: { id: true },
+        });
+        expect(tx.rumErrorGroup.upsert).not.toHaveBeenCalled();
+        expect(tx.rumErrorOccurrence.create).not.toHaveBeenCalled();
     });
 
     it('rejects an app disabled before the locked state check', async () => {

@@ -1,0 +1,23 @@
+{
+    "name": "@beaconix/rum-browser",
+    "version": "0.2.0",
+    "private": true,
+    "type": "module",
+    "main": "./dist/rum-browser.js",
+    "module": "./dist/rum-browser.js",
+    "types": "./dist/rum-browser.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/rum-browser.d.ts",
+            "import": "./dist/rum-browser.js"
+        }
+    },
+    "files": [
+        "dist",
+        "README.md"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "type-check": "tsc -p tsconfig.json --noEmit"
+    }
+}

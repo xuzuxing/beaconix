@@ -7,7 +7,7 @@ import type { AccessPrincipal } from '../../../common/authorization/access.types
 import { ProjectAccessService } from '../../../common/authorization/project-access.service';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../../infra/database/prisma.service';
-import type { QueryRumErrorsDto } from '../dto';
+import type { QueryRumErrorOccurrencesDto, QueryRumErrorsDto } from '../dto';
 
 @Injectable()
 export class RumErrorsService {
@@ -98,6 +98,40 @@ export class RumErrorsService {
         });
         if (!error) throw new NotFoundException('RUM error not found');
         return error;
+    }
+
+    async findOccurrences(
+        projectId: string,
+        appId: string,
+        errorId: string,
+        query: QueryRumErrorOccurrencesDto,
+        principal: AccessPrincipal,
+    ) {
+        const access = await this.access.project(
+            principal,
+            projectId,
+            'rum.read',
+        );
+        await this.ensureApp(access.organizationId, projectId, appId);
+        const group = await this.prisma.rumErrorGroup.findFirst({
+            where: { id: errorId, appId },
+            select: { id: true },
+        });
+        if (!group) throw new NotFoundException('RUM error not found');
+        const where: Prisma.RumErrorOccurrenceWhereInput = {
+            groupId: errorId,
+            appId,
+        };
+        const [items, total] = await this.prisma.$transaction([
+            this.prisma.rumErrorOccurrence.findMany({
+                where,
+                orderBy: { receivedAt: 'desc' },
+                skip: (query.page - 1) * query.limit,
+                take: query.limit,
+            }),
+            this.prisma.rumErrorOccurrence.count({ where }),
+        ]);
+        return { items, total, page: query.page, limit: query.limit };
     }
 
     private async ensureApp(
