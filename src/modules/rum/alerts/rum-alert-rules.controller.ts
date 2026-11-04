@@ -48,6 +48,18 @@ export class RumAlertRulesController {
         return this.alerts.findAll(projectId, appId, principal);
     }
 
+    @Get('channels')
+    @ApiOperation({
+        summary: 'List notification channels available to this RUM app',
+    })
+    channels(
+        @Param('projectId') projectId: string,
+        @Param('appId') appId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.alerts.channels(projectId, appId, principal);
+    }
+
     @Post()
     @ApiOperation({ summary: 'Create a RUM count threshold alert' })
     create(

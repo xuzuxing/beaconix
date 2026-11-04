@@ -77,6 +77,31 @@ export class RumAlertRulesService {
         });
     }
 
+    async channels(
+        projectId: string,
+        appId: string,
+        principal: AccessPrincipal,
+    ) {
+        return this.access.withProject(
+            principal,
+            projectId,
+            'app.manage',
+            async (tx, access) => {
+                await this.ensureApp(
+                    tx,
+                    access.organizationId,
+                    projectId,
+                    appId,
+                );
+                return tx.notificationChannel.findMany({
+                    where: { organizationId: access.organizationId },
+                    select: { id: true, name: true, enabled: true },
+                    orderBy: { name: 'asc' },
+                });
+            },
+        );
+    }
+
     async update(
         projectId: string,
         appId: string,
