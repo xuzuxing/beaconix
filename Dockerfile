@@ -10,7 +10,8 @@ ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME/bin:$PATH"
 
 ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
-    pnpm_config_registry=$NPM_REGISTRY
+    pnpm_config_registry=$NPM_REGISTRY \
+    COREPACK_DEFAULT_TO_LATEST=0
 
 RUN corepack enable
 WORKDIR /app
@@ -22,10 +23,7 @@ FROM base AS deps
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN pnpm install --frozen-lockfile \
-        --registry=$NPM_REGISTRY \
-        --network-concurrency=4 \
-        --fetch-retries=5
+RUN pnpm install --frozen-lockfile --registry=$NPM_REGISTRY
 
 # ==============================================================================
 # Stage 2: Build
@@ -47,14 +45,11 @@ RUN pnpm build
 FROM base AS prod-deps
 
 # 只拷贝锁文件，利用 Docker 层缓存加速 fetch
-COPY pnpm-lock.yaml ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN pnpm fetch --prod \
-        --registry=$NPM_REGISTRY \
-        --network-concurrency=4 \
-        --fetch-retries=5
+RUN pnpm fetch --prod --registry=$NPM_REGISTRY 
 
-COPY package.json pnpm-workspace.yaml ./
+COPY package.json ./
 
 RUN pnpm install --frozen-lockfile --prod --offline \
         --ignore-scripts \
