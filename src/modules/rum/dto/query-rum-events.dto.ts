@@ -1,4 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
     IsDateString,
     IsInt,
@@ -10,18 +11,20 @@ import {
 } from 'class-validator';
 
 export class QueryRumEventsDto {
-    @ApiPropertyOptional({ default: 1 })
+    @ApiPropertyOptional({ default: 1, minimum: 1 })
     @IsOptional()
+    @Type(() => Number)
     @IsInt()
     @Min(1)
-    page = 1;
+    page: number = 1;
 
-    @ApiPropertyOptional({ default: 20, maximum: 100 })
+    @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
     @IsOptional()
+    @Type(() => Number)
     @IsInt()
     @Min(1)
     @Max(100)
-    limit = 20;
+    limit: number = 20;
 
     @ApiPropertyOptional()
     @IsOptional()
@@ -49,10 +52,11 @@ export class QueryRumEventsDto {
 export class QueryRumEventStatsDto {
     @ApiPropertyOptional({ default: 7, minimum: 1, maximum: 90 })
     @IsOptional()
+    @Type(() => Number)
     @IsInt()
     @Min(1)
     @Max(90)
-    days = 7;
+    days: number = 7;
 
     @ApiPropertyOptional()
     @IsOptional()

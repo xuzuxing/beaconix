@@ -1,3 +1,5 @@
+import { ProjectRumController } from './project/project-rum.controller';
+import { ProjectRumService } from './project/project-rum.service';
 import { Module } from '@nestjs/common';
 import { AuthorizationModule } from '../../common/authorization/authorization.module';
 import { NotifierCoreModule } from '../notifier/notifier-core.module';
@@ -23,6 +25,7 @@ import { RumSourceMapsService } from './source-maps/rum-source-maps.service';
 @Module({
     imports: [AuthorizationModule, NotifierCoreModule],
     controllers: [
+        ProjectRumController,
         RumAppsController,
         RumErrorsController,
         RumEventsController,
@@ -32,6 +35,7 @@ import { RumSourceMapsService } from './source-maps/rum-source-maps.service';
         RumIngestController,
     ],
     providers: [
+        ProjectRumService,
         RumAppsService,
         RumErrorsService,
         RumEventsService,
