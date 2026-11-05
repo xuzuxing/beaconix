@@ -20,6 +20,8 @@ async function bootstrap() {
     // `rawBody` is required to verify WeChat Pay V3 signatures, which cover the
     // exact bytes of the callback payload.
     const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+        cors: true,
+        bufferLogs: true,
         rawBody: true,
     });
 
@@ -29,7 +31,6 @@ async function bootstrap() {
 
     const configService = app.get(ConfigService);
     const appConfig = configService.get<AppConfig>('app')!;
-    const logger = new Logger('Bootstrap');
 
     // WeChat virtual payment pushes `text/xml`, which the default JSON /
     // urlencoded parsers ignore — without a text parser `rawBody` stays empty
@@ -129,10 +130,10 @@ async function bootstrap() {
     app.enableShutdownHooks([ShutdownSignal.SIGTERM, ShutdownSignal.SIGINT]);
 
     await app.listen(appConfig.port, appConfig.host, () => {
-        logger.log(
+        Logger.log(
             `Application running on port http://${appConfig.host}:${appConfig.port} with env ${appConfig.env}`,
         );
-        logger.log(
+        Logger.log(
             `Swagger docs available at http://${appConfig.host}:${appConfig.port}${appConfig.globalPrefix}/docs`,
         );
     });
