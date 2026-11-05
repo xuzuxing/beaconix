@@ -27,8 +27,8 @@ import type {
     RumVueContext,
 } from './types.js';
 
-const SDK_VERSION = '0.2.0';
-const DEFAULT_DEDUPE_WINDOW_MS = 60_000;
+const SDK_VERSION = '0.3.0';
+export const DEFAULT_DEDUPE_WINDOW_MS = 1_000;
 const MAX_RECENT_ERRORS = 500;
 
 export class RumBrowserClient {
@@ -324,14 +324,13 @@ function normalizeReplayOptions(
     return typeof value === 'object' ? value : { enabled: value === true };
 }
 
-function normalizePerformanceOptions(
+export function normalizePerformanceOptions(
     value: boolean | RumPerformanceOptions | undefined,
 ): RumPerformanceOptions & { enabled: boolean } {
     if (typeof value === 'object') {
-        return { enabled: value.enabled ?? true, ...value };
+        return { ...value, enabled: value.enabled === true };
     }
-    // Performance collection is on by default: it is half the product value.
-    return { enabled: value !== false };
+    return { enabled: value === true };
 }
 
 function normalizeError(value: unknown): Error {

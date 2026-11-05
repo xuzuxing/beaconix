@@ -66,7 +66,10 @@ export class RumPerformanceController {
     }
 
     @Get('pages')
-    @ApiOperation({ summary: 'Page-level p75 load time and error rate' })
+    @ApiOperation({
+        summary:
+            'Page-level p75 load time and errors per 100 page-load samples',
+    })
     @ApiOkResponse({ type: RumPerformancePagesEntity })
     @ApiNotFoundResponse({ description: 'RUM app not found' })
     pages(

@@ -4,6 +4,7 @@ The dependency-free browser client reports to:
 
 - `POST /api/rum/errors`
 - `POST /api/rum/events`
+- `POST /api/rum/performance`
 - `POST /api/rum/replays`
 
 The collector follows a Mito-style plugin and breadcrumb model while retaining
@@ -21,6 +22,11 @@ const rum = initRum({
     endpoint: 'https://api.example.com/api/rum',
     publicKey: 'rum_public_key',
     release: 'web-2026.11.04.1',
+    performance: {
+        enabled: true,
+        sampleRate: 0.25,
+        reportResources: false,
+    },
     sessionReplay: false,
 });
 
@@ -38,6 +44,21 @@ app.mount('#app');
 
 `installVue` does not collect component props. It sends only the component name
 and Vue's lifecycle/error info string.
+
+## Sampling and upgrade notes
+
+- Since `0.3.0`, performance collection is opt-in. Set `performance: true` or
+  `performance: { enabled: true }` to collect Web Vitals and page-load timing.
+- `performance.sampleRate` independently samples page loads for performance
+  collection. Start below `1` on high-traffic applications and increase only
+  after checking ingest volume and retention.
+- The top-level `sampleRate` applies to error reports. Business events sent by
+  `captureEvent` are not sampled by the SDK.
+- The default duplicate-error suppression window is 1 second. Set
+  `dedupeWindowMs: 0` to keep every accepted client report or increase it when
+  the same failure can fire in a tight loop.
+- Performance samples are sent to `POST /api/rum/performance`; configure server
+  retention with `RUM_PERF_SAMPLE_RETENTION_DAYS`.
 
 ## HTTP retry integration
 
@@ -69,6 +90,8 @@ an application failure.
 - Console values are bounded and recursively sanitized.
 - `/api/rum/**` and the configured endpoint are ignored by HTTP instrumentation.
 - Replay remains opt-in and masks text/input values by default.
+- Performance remains opt-in. Resource timing is additionally controlled by
+  `performance.reportResources`; review URL dimensions before enabling it.
 
 ## Local example page
 

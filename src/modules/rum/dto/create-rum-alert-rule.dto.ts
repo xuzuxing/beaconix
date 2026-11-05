@@ -30,7 +30,7 @@ export class CreateRumAlertRuleDto {
         description:
             'ERROR_COUNT / EVENT_COUNT compare the window volume against threshold (absolute count). ' +
             'NEW_ERROR fires when a fingerprint is first seen inside the window. ' +
-            'ERROR_RATE compares error/event percentage against threshold. ' +
+            'ERROR_RATE compares the error/event ratio percentage against threshold; it is not an affected-session error rate. ' +
             'SPIKE compares the window against the previous window; threshold is the growth percentage.',
     })
     @IsEnum(RumAlertMetric)
@@ -62,7 +62,7 @@ export class CreateRumAlertRuleDto {
         minimum: 1,
         maximum: 1000000,
         description:
-            'Absolute count for ERROR_COUNT/EVENT_COUNT/NEW_ERROR, percentage for ERROR_RATE/SPIKE',
+            'Absolute count for ERROR_COUNT/EVENT_COUNT/NEW_ERROR, error/event percentage for ERROR_RATE, growth percentage for SPIKE',
     })
     @IsInt()
     @Min(1)

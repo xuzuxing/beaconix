@@ -92,7 +92,11 @@ export class RumPerformancePageEntity {
     @ApiProperty()
     errors: number;
 
-    @ApiPropertyOptional({ nullable: true })
+    @ApiPropertyOptional({
+        nullable: true,
+        description:
+            'Error occurrences per 100 PAGE_LOAD samples. This is not the percentage of affected page views and may exceed 100.',
+    })
     errorRate: number | null;
 }
 

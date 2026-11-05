@@ -27,6 +27,11 @@ start.addEventListener('click', () => {
             release: release.value.trim() || undefined,
             dedupeWindowMs: 0,
             anonymousId: 'rum-example-browser',
+            performance: {
+                enabled: true,
+                sampleRate: 1,
+                reportResources: true,
+            },
             sessionReplay: false,
         });
         actionButtons.forEach((button) => (button.disabled = false));
