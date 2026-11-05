@@ -12,3 +12,8 @@ export * from './query-rum-replays.dto';
 export * from './create-rum-alert-rule.dto';
 export * from './update-rum-alert-rule.dto';
 export * from './query-rum-alert-incidents.dto';
+export * from './update-rum-error.dto';
+export * from './rum-error-note.dto';
+export * from './create-rum-subject-deletion.dto';
+export * from './rum-performance.dto';
+export * from './query-rum-performance.dto';

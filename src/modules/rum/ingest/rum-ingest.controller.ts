@@ -21,11 +21,13 @@ import { Public } from '../../../common/decorators';
 import {
     ReportRumErrorDto,
     ReportRumEventDto,
+    ReportRumPerformanceDto,
     ReportRumReplayDto,
 } from '../dto';
 import { RumEventsService } from '../events/rum-events.service';
 import { RumReplaysService } from '../replays/rum-replays.service';
 import { RumIngestService } from './rum-ingest.service';
+import { RumPerformanceIngestService } from './rum-performance-ingest.service';
 
 @ApiTags('RUM Ingestion')
 @Controller('rum')
@@ -34,6 +36,7 @@ export class RumIngestController {
         private readonly ingest: RumIngestService,
         private readonly events: RumEventsService,
         private readonly replays: RumReplaysService,
+        private readonly performance: RumPerformanceIngestService,
     ) {}
 
     @Post('errors')
@@ -76,5 +79,27 @@ export class RumIngestController {
     @ApiServiceUnavailableResponse({ description: 'Rate limiter unavailable' })
     reportReplay(@Body() dto: ReportRumReplayDto, @Req() request: Request) {
         return this.replays.report(dto, request.ip || 'unknown');
+    }
+
+    @Post('performance')
+    @Public()
+    @SkipThrottle({ default: true })
+    @HttpCode(HttpStatus.ACCEPTED)
+    @ApiOperation({
+        summary:
+            'Report Web Vitals, page load and resource timings (batched samples)',
+    })
+    @ApiAcceptedResponse({
+        description: '{ accepted: true, samples: <accepted count> }',
+    })
+    @ApiBadRequestResponse({ description: 'Invalid payload' })
+    @ApiNotFoundResponse({ description: 'RUM app unavailable' })
+    @ApiTooManyRequestsResponse({ description: 'Rate limit exceeded' })
+    @ApiServiceUnavailableResponse({ description: 'Rate limiter unavailable' })
+    reportPerformance(
+        @Body() dto: ReportRumPerformanceDto,
+        @Req() request: Request,
+    ) {
+        return this.performance.report(dto, request.ip || 'unknown');
     }
 }

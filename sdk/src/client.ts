@@ -7,6 +7,7 @@ import { createRejectionPlugin } from './plugins/rejection.js';
 import { createResourcePlugin } from './plugins/resource.js';
 import { createRoutePlugin } from './plugins/route.js';
 import { installVueErrorHandler } from './plugins/vue.js';
+import { createWebVitalsPlugin } from './plugins/web-vitals.js';
 import { RumReplayRecorder } from './replay.js';
 import { sanitizeText, stripUrl } from './sanitizer.js';
 import { FetchRumTransport } from './transport.js';
@@ -17,6 +18,8 @@ import type {
     RumErrorCategory,
     RumErrorPayload,
     RumHttpContext,
+    RumPerfSample,
+    RumPerformanceOptions,
     RumPlugin,
     RumPluginContext,
     RumSessionReplayOptions,
@@ -227,6 +230,20 @@ export class RumBrowserClient {
         return this.replay?.flush() ?? Promise.resolve();
     }
 
+    async reportPerformance(samples: RumPerfSample[]): Promise<void> {
+        if (!samples.length) return;
+        await this.transport.send('performance', {
+            schemaVersion: 1,
+            samples: samples.map((sample) => ({
+                ...sample,
+                page: sample.page ?? this.currentPage(),
+                ...(this.release ? { release: this.release } : {}),
+                ...(this.userId ? { endUserId: this.userId } : {}),
+            })),
+            sessionId: this.sessionId,
+        });
+    }
+
     private createPlugins(options: RumBrowserOptions): RumPlugin[] {
         const collection = {
             errors: true,
@@ -251,6 +268,12 @@ export class RumBrowserClient {
                 plugins.push(createHttpPlugin(httpOptions));
             }
         }
+        const performanceOptions = normalizePerformanceOptions(
+            options.performance,
+        );
+        if (performanceOptions.enabled) {
+            plugins.push(createWebVitalsPlugin(performanceOptions));
+        }
         return plugins;
     }
 
@@ -260,6 +283,7 @@ export class RumBrowserClient {
             captureError: (error, options) => this.captureError(error, options),
             currentPage: () => this.currentPage(),
             shouldIgnoreUrl: (url) => this.shouldIgnoreUrl(url),
+            reportPerformance: (samples) => this.reportPerformance(samples),
         };
     }
 
@@ -298,6 +322,16 @@ function normalizeReplayOptions(
     value: boolean | RumSessionReplayOptions | undefined,
 ): RumSessionReplayOptions {
     return typeof value === 'object' ? value : { enabled: value === true };
+}
+
+function normalizePerformanceOptions(
+    value: boolean | RumPerformanceOptions | undefined,
+): RumPerformanceOptions & { enabled: boolean } {
+    if (typeof value === 'object') {
+        return { enabled: value.enabled ?? true, ...value };
+    }
+    // Performance collection is on by default: it is half the product value.
+    return { enabled: value !== false };
 }
 
 function normalizeError(value: unknown): Error {

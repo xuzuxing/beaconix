@@ -100,6 +100,23 @@ export class RumAppsController {
         return this.apps.update(projectId, appId, dto, principal);
     }
 
+    @Post(':appId/rotate-key')
+    @HttpCode(HttpStatus.OK)
+    @AuditLog({ entity: 'RumApp', idParam: 'appId', action: 'UPDATE' })
+    @ApiOperation({
+        summary:
+            'Rotate the public key; the previous key stops working immediately',
+    })
+    @ApiOkResponse({ type: RumAppEntity })
+    @ApiNotFoundResponse({ description: 'RUM app not found' })
+    rotateKey(
+        @Param('projectId') projectId: string,
+        @Param('appId') appId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.apps.rotateKey(projectId, appId, principal);
+    }
+
     @Post(':appId/disable')
     @HttpCode(HttpStatus.OK)
     @AuditLog({ entity: 'RumApp', idParam: 'appId', action: 'UPDATE' })

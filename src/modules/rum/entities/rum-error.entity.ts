@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { RumErrorStatus } from '../../../generated/prisma/enums';
 
 export class RumErrorGroupEntity {
     @ApiProperty()
@@ -45,6 +46,24 @@ export class RumErrorGroupEntity {
 
     @ApiProperty()
     count: number;
+
+    @ApiProperty({ enum: RumErrorStatus, default: RumErrorStatus.UNRESOLVED })
+    status: RumErrorStatus;
+
+    @ApiPropertyOptional({ nullable: true })
+    ignoredUntil: Date | null;
+
+    @ApiPropertyOptional({ nullable: true })
+    assigneeId: string | null;
+
+    @ApiPropertyOptional({ nullable: true })
+    resolvedAt: Date | null;
+
+    @ApiPropertyOptional({ nullable: true })
+    resolvedBy: string | null;
+
+    @ApiPropertyOptional({ nullable: true })
+    reopenedAt: Date | null;
 
     @ApiProperty()
     firstSeenAt: Date;
@@ -156,6 +175,57 @@ export class RumErrorOccurrenceEntity {
 export class RumErrorOccurrenceListEntity {
     @ApiProperty({ type: [RumErrorOccurrenceEntity] })
     items: RumErrorOccurrenceEntity[];
+
+    @ApiProperty()
+    total: number;
+
+    @ApiProperty()
+    page: number;
+
+    @ApiProperty()
+    limit: number;
+}
+
+export class RumErrorNoteAuthorEntity {
+    @ApiProperty()
+    id: string;
+
+    @ApiProperty()
+    name: string;
+
+    @ApiProperty()
+    email: string;
+}
+
+export class RumErrorNoteEntity {
+    @ApiProperty()
+    id: string;
+
+    @ApiProperty()
+    appId: string;
+
+    @ApiProperty()
+    groupId: string;
+
+    @ApiPropertyOptional({ nullable: true })
+    authorId: string | null;
+
+    @ApiPropertyOptional({ type: RumErrorNoteAuthorEntity, nullable: true })
+    author?: RumErrorNoteAuthorEntity | null;
+
+    @ApiProperty()
+    body: string;
+
+    @ApiProperty()
+    createdAt: Date;
+
+    @ApiProperty()
+    updatedAt: Date;
+}
+
+export class RumErrorNoteListEntity {
+    @ApiProperty({ type: [RumErrorNoteEntity] })
+    items: RumErrorNoteEntity[];
 
     @ApiProperty()
     total: number;

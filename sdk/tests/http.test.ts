@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHttpPlugin } from '../src/plugins/http.js';
-import type {
-    RumCaptureErrorOptions,
-    RumPluginContext,
-} from '../src/types.js';
+import type { RumCaptureErrorOptions, RumPluginContext } from '../src/types.js';
 
 test('HTTP plugin suppresses a recoverable 401 through shouldReportError', async () => {
     const captured: RumCaptureErrorOptions[] = [];
@@ -71,6 +68,7 @@ function context(
         },
         currentPage: () => 'https://app.example.test/',
         shouldIgnoreUrl: () => false,
+        reportPerformance: () => Promise.resolve(),
     };
 }
 

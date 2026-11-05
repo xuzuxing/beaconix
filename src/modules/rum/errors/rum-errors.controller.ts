@@ -1,6 +1,19 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+    Body,
+    Controller,
+    Delete,
+    Get,
+    HttpCode,
+    HttpStatus,
+    Param,
+    Patch,
+    Post,
+    Query,
+    UseGuards,
+} from '@nestjs/common';
 import {
     ApiBearerAuth,
+    ApiCreatedResponse,
     ApiNotFoundResponse,
     ApiOkResponse,
     ApiOperation,
@@ -11,10 +24,19 @@ import type { AccessPrincipal } from '../../../common/authorization/access.types
 import { CurrentPrincipal } from '../../../common/authorization/current-principal.decorator';
 import { ProjectAccessGuard } from '../../../common/authorization/project-access.guard';
 import { ProjectPermission } from '../../../common/authorization/project-permission.decorator';
-import { QueryRumErrorOccurrencesDto, QueryRumErrorsDto } from '../dto';
+import { AuditLog } from '../../../common/decorators';
+import {
+    CreateRumErrorNoteDto,
+    QueryRumErrorNotesDto,
+    QueryRumErrorOccurrencesDto,
+    QueryRumErrorsDto,
+    UpdateRumErrorDto,
+} from '../dto';
 import {
     RumErrorGroupEntity,
     RumErrorGroupListEntity,
+    RumErrorNoteEntity,
+    RumErrorNoteListEntity,
     RumErrorOccurrenceListEntity,
 } from '../entities';
 import { RumErrorsService } from './rum-errors.service';
@@ -56,6 +78,29 @@ export class RumErrorsController {
         return this.errors.findOne(projectId, appId, errorId, principal);
     }
 
+    @Patch(':errorId')
+    @ProjectPermission('rum.read', {
+        resourceType: 'RUM_APP',
+        idParam: 'appId',
+    })
+    @AuditLog({ entity: 'RumErrorGroup', idParam: 'errorId' })
+    @ApiOperation({
+        summary:
+            'Update error lifecycle status, ignore window or assignee (assigning another member needs app.manage)',
+    })
+    @ApiParam({ name: 'errorId', description: 'RUM error group CUID' })
+    @ApiOkResponse({ type: RumErrorGroupEntity })
+    @ApiNotFoundResponse({ description: 'RUM error not found' })
+    update(
+        @Param('projectId') projectId: string,
+        @Param('appId') appId: string,
+        @Param('errorId') errorId: string,
+        @Body() dto: UpdateRumErrorDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.errors.update(projectId, appId, errorId, dto, principal);
+    }
+
     @Get(':errorId/occurrences')
     @ApiOperation({ summary: 'List occurrences for an aggregated RUM error' })
     @ApiParam({ name: 'errorId', description: 'RUM error group CUID' })
@@ -73,6 +118,79 @@ export class RumErrorsController {
             appId,
             errorId,
             query,
+            principal,
+        );
+    }
+
+    @Get(':errorId/notes')
+    @ProjectPermission('rum.read', {
+        resourceType: 'RUM_APP',
+        idParam: 'appId',
+    })
+    @ApiOperation({ summary: 'List handling notes for a RUM error group' })
+    @ApiParam({ name: 'errorId', description: 'RUM error group CUID' })
+    @ApiOkResponse({ type: RumErrorNoteListEntity })
+    @ApiNotFoundResponse({ description: 'RUM error not found' })
+    listNotes(
+        @Param('projectId') projectId: string,
+        @Param('appId') appId: string,
+        @Param('errorId') errorId: string,
+        @Query() query: QueryRumErrorNotesDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.errors.notes(projectId, appId, errorId, query, principal);
+    }
+
+    @Post(':errorId/notes')
+    @ProjectPermission('rum.read', {
+        resourceType: 'RUM_APP',
+        idParam: 'appId',
+    })
+    @AuditLog({ entity: 'RumErrorNote' })
+    @ApiOperation({ summary: 'Add a handling note to a RUM error group' })
+    @ApiParam({ name: 'errorId', description: 'RUM error group CUID' })
+    @ApiCreatedResponse({ type: RumErrorNoteEntity })
+    addNote(
+        @Param('projectId') projectId: string,
+        @Param('appId') appId: string,
+        @Param('errorId') errorId: string,
+        @Body() dto: CreateRumErrorNoteDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.errors.createNote(
+            projectId,
+            appId,
+            errorId,
+            dto,
+            principal,
+        );
+    }
+
+    @Delete(':errorId/notes/:noteId')
+    @HttpCode(HttpStatus.NO_CONTENT)
+    @ProjectPermission('rum.read', {
+        resourceType: 'RUM_APP',
+        idParam: 'appId',
+    })
+    @AuditLog({ entity: 'RumErrorNote', idParam: 'noteId' })
+    @ApiOperation({
+        summary: 'Delete a handling note (author or app.manage only)',
+    })
+    @ApiParam({ name: 'errorId', description: 'RUM error group CUID' })
+    @ApiParam({ name: 'noteId', description: 'RUM error note CUID' })
+    @ApiNotFoundResponse({ description: 'RUM error note not found' })
+    removeNote(
+        @Param('projectId') projectId: string,
+        @Param('appId') appId: string,
+        @Param('errorId') errorId: string,
+        @Param('noteId') noteId: string,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.errors.removeNote(
+            projectId,
+            appId,
+            errorId,
+            noteId,
             principal,
         );
     }

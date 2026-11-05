@@ -1,4 +1,9 @@
-import { sanitizeStyle, stripUrl, targetSelector, utf8Size } from './sanitizer.js';
+import {
+    sanitizeStyle,
+    stripUrl,
+    targetSelector,
+    utf8Size,
+} from './sanitizer.js';
 import type { RumSessionReplayOptions } from './types.js';
 import type { RumTransport } from './transport.js';
 

@@ -3,6 +3,7 @@ import { Prisma } from '../../../generated/prisma/client';
 import {
     RumAlertIncidentStatus,
     RumAlertMetric,
+    RumAlertScope,
     RumMetricKind,
 } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../../infra/database/prisma.service';
@@ -156,8 +157,24 @@ export class RumAlertEvaluatorService implements OnModuleInit {
             });
             if (!rule) return;
             const now = new Date();
-            const value = await this.metricValue(tx, rule, now);
-            if (value >= rule.threshold) {
+            const evaluation = await this.metricValue(tx, rule, now);
+            const value = evaluation.value;
+            if (evaluation.triggered) {
+                const hits = rule.consecutiveHits + 1;
+                const requiredWindows = Math.max(1, rule.confirmWindows);
+                if (hits < requiredWindows) {
+                    // De-bounce: keep counting consecutive matches without
+                    // touching the incident state yet.
+                    await tx.rumAlertRule.update({
+                        where: { id: rule.id },
+                        data: {
+                            consecutiveHits: hits,
+                            lastValue: value,
+                            lastEvaluatedAt: now,
+                        },
+                    });
+                    return;
+                }
                 const open = await tx.rumAlertIncident.findFirst({
                     where: {
                         ruleId: rule.id,
@@ -184,6 +201,7 @@ export class RumAlertEvaluatorService implements OnModuleInit {
                     where: { id: rule.id },
                     data: {
                         active: true,
+                        consecutiveHits: hits,
                         lastValue: value,
                         lastEvaluatedAt: now,
                     },
@@ -208,6 +226,7 @@ export class RumAlertEvaluatorService implements OnModuleInit {
                 where: { id: rule.id },
                 data: {
                     active: false,
+                    consecutiveHits: 0,
                     lastValue: value,
                     lastEvaluatedAt: now,
                 },
@@ -219,30 +238,129 @@ export class RumAlertEvaluatorService implements OnModuleInit {
         tx: Prisma.TransactionClient,
         rule: AlertRule,
         now: Date,
-    ): Promise<number> {
-        const since = minuteBucket(
+    ): Promise<{ value: number; triggered: boolean }> {
+        const windowStart = minuteBucket(
             new Date(
                 now.getTime() - Math.max(0, rule.windowMinutes - 1) * 60_000,
             ),
         );
-        const kind =
-            rule.metric === RumAlertMetric.ERROR_COUNT
-                ? RumMetricKind.ERROR
-                : RumMetricKind.EVENT;
-        const name =
-            rule.metric === RumAlertMetric.EVENT_COUNT
-                ? rule.eventName || '*'
-                : '*';
+        switch (rule.metric) {
+            case RumAlertMetric.ERROR_COUNT: {
+                const value = await this.errorCount(tx, rule, windowStart);
+                return { value, triggered: value >= rule.threshold };
+            }
+            case RumAlertMetric.EVENT_COUNT: {
+                const value = await this.eventCount(tx, rule, windowStart);
+                return { value, triggered: value >= rule.threshold };
+            }
+            case RumAlertMetric.NEW_ERROR: {
+                const value = await this.newErrorCount(tx, rule, windowStart);
+                return {
+                    value,
+                    triggered: value >= Math.max(1, rule.threshold),
+                };
+            }
+            case RumAlertMetric.ERROR_RATE: {
+                const errors = await this.errorCount(tx, rule, windowStart);
+                const events = await this.eventCount(tx, rule, windowStart);
+                // Without a denominator the rate is undefined; never fire.
+                if (events === 0) return { value: 0, triggered: false };
+                const value = Math.round((errors * 100) / events);
+                return { value, triggered: value >= rule.threshold };
+            }
+            case RumAlertMetric.SPIKE: {
+                const previousStart = new Date(
+                    windowStart.getTime() - rule.windowMinutes * 60_000,
+                );
+                const current = await this.errorCount(tx, rule, windowStart);
+                const previous = await this.errorCount(
+                    tx,
+                    rule,
+                    previousStart,
+                    windowStart,
+                );
+                // threshold is the growth percentage over the previous window.
+                const required = Math.ceil(
+                    previous * (1 + rule.threshold / 100),
+                );
+                return {
+                    value: current,
+                    triggered: previous > 0 && current >= required,
+                };
+            }
+            default:
+                return { value: 0, triggered: false };
+        }
+    }
+
+    private async errorCount(
+        tx: Prisma.TransactionClient,
+        rule: AlertRule,
+        since: Date,
+        before?: Date,
+    ): Promise<number> {
+        const range = {
+            gte: since,
+            ...(before ? { lt: before } : {}),
+        };
+        if (rule.scope === RumAlertScope.ERROR_GROUP && rule.groupId) {
+            return tx.rumErrorOccurrence.count({
+                where: {
+                    appId: rule.appId,
+                    groupId: rule.groupId,
+                    receivedAt: range,
+                },
+            });
+        }
         const result = await tx.rumMetricBucket.aggregate({
             where: {
                 appId: rule.appId,
-                kind,
-                name,
-                bucketStart: { gte: since },
+                kind: RumMetricKind.ERROR,
+                name: '*',
+                bucketStart: range,
             },
             _sum: { count: true },
         });
         return result._sum.count ?? 0;
+    }
+
+    private async eventCount(
+        tx: Prisma.TransactionClient,
+        rule: AlertRule,
+        since: Date,
+        before?: Date,
+    ): Promise<number> {
+        const range = {
+            gte: since,
+            ...(before ? { lt: before } : {}),
+        };
+        const result = await tx.rumMetricBucket.aggregate({
+            where: {
+                appId: rule.appId,
+                kind: RumMetricKind.EVENT,
+                name: rule.eventName || '*',
+                bucketStart: range,
+            },
+            _sum: { count: true },
+        });
+        return result._sum.count ?? 0;
+    }
+
+    private async newErrorCount(
+        tx: Prisma.TransactionClient,
+        rule: AlertRule,
+        since: Date,
+    ): Promise<number> {
+        if (rule.scope === RumAlertScope.ERROR_GROUP && rule.groupId) {
+            const group = await tx.rumErrorGroup.findFirst({
+                where: { id: rule.groupId, appId: rule.appId },
+                select: { firstSeenAt: true },
+            });
+            return group && group.firstSeenAt >= since ? 1 : 0;
+        }
+        return tx.rumErrorGroup.count({
+            where: { appId: rule.appId, firstSeenAt: { gte: since } },
+        });
     }
 
     private async deliverPendingNotifications(): Promise<void> {
@@ -267,6 +385,25 @@ export class RumAlertEvaluatorService implements OnModuleInit {
             const active = incident.status === RumAlertIncidentStatus.OPEN;
             const phase = active ? 'OPEN' : 'RECOVERY';
             const metricLabel = this.metricLabel(incident.rule);
+            if (
+                incident.rule.silenceUntil &&
+                incident.rule.silenceUntil.getTime() > Date.now()
+            ) {
+                // Silence window: the incident is still recorded, but the
+                // notification is suppressed and never back-filled later.
+                await this.prisma.rumAlertIncident.updateMany({
+                    where: {
+                        id: incident.id,
+                        ...(active
+                            ? { openedNotifiedAt: null }
+                            : { resolvedNotifiedAt: null }),
+                    },
+                    data: active
+                        ? { openedNotifiedAt: new Date() }
+                        : { resolvedNotifiedAt: new Date() },
+                });
+                continue;
+            }
             try {
                 const recipients = await this.notifications.projectRecipients(
                     incident.app.projectId,
@@ -332,9 +469,24 @@ export class RumAlertEvaluatorService implements OnModuleInit {
     }
 
     private metricLabel(rule: AlertRule): string {
-        if (rule.metric === RumAlertMetric.ERROR_COUNT) return 'error count';
-        return rule.eventName && rule.eventName !== '*'
-            ? `event ${rule.eventName}`
-            : 'event count';
+        const suffix =
+            rule.scope === RumAlertScope.ERROR_GROUP ? ' (error group)' : '';
+        switch (rule.metric) {
+            case RumAlertMetric.EVENT_COUNT:
+                return (
+                    (rule.eventName && rule.eventName !== '*'
+                        ? `event ${rule.eventName}`
+                        : 'event count') + suffix
+                );
+            case RumAlertMetric.NEW_ERROR:
+                return `new errors${suffix}`;
+            case RumAlertMetric.ERROR_RATE:
+                return `error rate %${suffix}`;
+            case RumAlertMetric.SPIKE:
+                return `error volume spike${suffix}`;
+            case RumAlertMetric.ERROR_COUNT:
+            default:
+                return `error count${suffix}`;
+        }
     }
 }

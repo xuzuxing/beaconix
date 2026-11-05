@@ -41,6 +41,10 @@ model User {
   createdRumApps       RumApp[]              @relation("RumAppCreator")
   uploadedRumSourceMaps RumSourceMap[]        @relation("RumSourceMapUploader")
   createdRumAlertRules RumAlertRule[]         @relation("RumAlertRuleCreator")
+  assignedRumErrors    RumErrorGroup[]        @relation("RumErrorAssignee")
+  resolvedRumErrors    RumErrorGroup[]        @relation("RumErrorResolver")
+  rumErrorNotes        RumErrorNote[]
+  requestedRumMaintenanceJobs RumMaintenanceJob[] @relation("RumMaintenanceRequester")
   createdTasks         Task[]                @relation("TaskCreator")
   assignedTasks        Task[]                @relation("TaskAssignee")
   comments             Comment[]

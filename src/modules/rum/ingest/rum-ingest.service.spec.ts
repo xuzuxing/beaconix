@@ -21,6 +21,7 @@ describe('RumIngestService', () => {
             },
             rumErrorGroup: {
                 upsert: jest.fn().mockResolvedValue({ id: 'error-1' }),
+                updateMany: jest.fn().mockResolvedValue({ count: 1 }),
             },
             rumErrorOccurrence: {
                 findUnique: jest.fn().mockResolvedValue(null),
@@ -141,5 +142,31 @@ describe('RumIngestService', () => {
             ),
         ).rejects.toBeInstanceOf(NotFoundException);
         expect(tx.rumErrorGroup.upsert).not.toHaveBeenCalled();
+    });
+
+    it('reopens an ignored group only once its ignore window elapsed', async () => {
+        const { service, tx } = setup();
+
+        await service.reportError(
+            {
+                publicKey: 'rum-key',
+                type: 'Error',
+                message: 'failed again',
+            },
+            '127.0.0.1',
+        );
+
+        expect(tx.rumErrorGroup.updateMany).toHaveBeenCalledWith({
+            where: {
+                id: 'error-1',
+                status: 'IGNORED',
+                ignoredUntil: { lte: expect.any(Date) },
+            },
+            data: {
+                status: 'UNRESOLVED',
+                ignoredUntil: null,
+                reopenedAt: expect.any(Date),
+            },
+        });
     });
 });

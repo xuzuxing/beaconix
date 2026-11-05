@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
-import { RumMetricKind } from '../../../generated/prisma/enums';
+import { RumErrorStatus, RumMetricKind } from '../../../generated/prisma/enums';
 import type { ReportRumErrorDto } from '../dto';
 import {
     createRumErrorFingerprint,
@@ -106,6 +106,21 @@ export class RumIngestService {
                             : {}),
                     },
                     select: { id: true },
+                });
+                // An ignore window that has elapsed reopens the group once:
+                // the conditional update means concurrent ingest requests
+                // cannot produce more than one reopen event.
+                await tx.rumErrorGroup.updateMany({
+                    where: {
+                        id: group.id,
+                        status: RumErrorStatus.IGNORED,
+                        ignoredUntil: { lte: now },
+                    },
+                    data: {
+                        status: RumErrorStatus.UNRESOLVED,
+                        ignoredUntil: null,
+                        reopenedAt: now,
+                    },
                 });
                 await tx.rumErrorOccurrence.create({
                     data: {

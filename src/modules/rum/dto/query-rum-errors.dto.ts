@@ -9,6 +9,16 @@ import {
     MaxLength,
     Min,
 } from 'class-validator';
+import { RumErrorStatus } from '../../../generated/prisma/enums';
+
+export const RUM_ERROR_STATUS_FILTERS = [
+    'ALL',
+    RumErrorStatus.UNRESOLVED,
+    RumErrorStatus.RESOLVED,
+    RumErrorStatus.IGNORED,
+] as const;
+
+export type RumErrorStatusFilter = (typeof RUM_ERROR_STATUS_FILTERS)[number];
 
 export class QueryRumErrorsDto {
     @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -29,6 +39,16 @@ export class QueryRumErrorsDto {
     @IsString()
     @MaxLength(100)
     type?: string;
+
+    @ApiPropertyOptional({
+        enum: RUM_ERROR_STATUS_FILTERS,
+        default: RumErrorStatus.UNRESOLVED,
+        description:
+            'Filter by lifecycle status. ALL returns every group; the default keeps the pre-existing "what needs work" view.',
+    })
+    @IsOptional()
+    @IsIn(RUM_ERROR_STATUS_FILTERS)
+    status: RumErrorStatusFilter = RumErrorStatus.UNRESOLVED;
 
     @ApiPropertyOptional()
     @IsOptional()

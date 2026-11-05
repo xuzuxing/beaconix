@@ -6,7 +6,7 @@ import {
 import type { AccessPrincipal } from '../../../common/authorization/access.types';
 import { ProjectAccessService } from '../../../common/authorization/project-access.service';
 import type { Prisma } from '../../../generated/prisma/client';
-import { RumAlertMetric } from '../../../generated/prisma/enums';
+import { RumAlertMetric, RumAlertScope } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../../infra/database/prisma.service';
 import type {
     CreateRumAlertRuleDto,
@@ -27,7 +27,8 @@ export class RumAlertRulesService {
         dto: CreateRumAlertRuleDto,
         principal: AccessPrincipal,
     ) {
-        this.validateMetric(dto.metric, dto.eventName);
+        const scope = dto.scope ?? RumAlertScope.APP;
+        this.validateMetric(dto.metric, dto.eventName, scope, dto.groupId);
         return this.access.withProject(
             principal,
             projectId,
@@ -44,17 +45,28 @@ export class RumAlertRulesService {
                     access.organizationId,
                     dto.channelIds ?? [],
                 );
+                if (scope === RumAlertScope.ERROR_GROUP)
+                    await this.validateGroup(tx, appId, dto.groupId!);
                 return tx.rumAlertRule.create({
                     data: {
                         appId,
                         name: dto.name.trim(),
                         metric: dto.metric,
+                        scope,
+                        groupId:
+                            scope === RumAlertScope.ERROR_GROUP
+                                ? dto.groupId
+                                : null,
                         eventName:
                             dto.metric === RumAlertMetric.EVENT_COUNT
                                 ? dto.eventName?.trim() || '*'
                                 : null,
                         threshold: dto.threshold,
                         windowMinutes: dto.windowMinutes,
+                        confirmWindows: dto.confirmWindows ?? 1,
+                        silenceUntil: dto.silenceUntil
+                            ? new Date(dto.silenceUntil)
+                            : null,
                         channelIds: dto.channelIds ?? [],
                         enabled: dto.enabled ?? true,
                         createdById:
@@ -130,13 +142,18 @@ export class RumAlertRulesService {
                     dto.eventName !== undefined
                         ? dto.eventName
                         : (current.eventName ?? undefined);
-                this.validateMetric(metric, eventName);
+                const scope = dto.scope ?? current.scope;
+                const groupId =
+                    dto.groupId !== undefined ? dto.groupId : current.groupId;
+                this.validateMetric(metric, eventName, scope, groupId);
                 if (dto.channelIds)
                     await this.validateChannels(
                         tx,
                         access.organizationId,
                         dto.channelIds,
                     );
+                if (scope === RumAlertScope.ERROR_GROUP)
+                    await this.validateGroup(tx, appId, groupId!);
                 if (dto.enabled === false && current.active)
                     await this.resolveActiveIncident(tx, current.id);
                 return tx.rumAlertRule.update({
@@ -157,11 +174,35 @@ export class RumAlertRulesService {
                                           : null,
                               }
                             : {}),
+                        ...(dto.scope !== undefined
+                            ? { scope: dto.scope }
+                            : {}),
+                        ...(dto.scope !== undefined || dto.groupId !== undefined
+                            ? {
+                                  groupId:
+                                      scope === RumAlertScope.ERROR_GROUP
+                                          ? groupId
+                                          : null,
+                              }
+                            : {}),
                         ...(dto.threshold !== undefined
                             ? { threshold: dto.threshold }
                             : {}),
                         ...(dto.windowMinutes !== undefined
                             ? { windowMinutes: dto.windowMinutes }
+                            : {}),
+                        ...(dto.confirmWindows !== undefined
+                            ? {
+                                  confirmWindows: dto.confirmWindows,
+                                  consecutiveHits: 0,
+                              }
+                            : {}),
+                        ...(dto.silenceUntil !== undefined
+                            ? {
+                                  silenceUntil: dto.silenceUntil
+                                      ? new Date(dto.silenceUntil)
+                                      : null,
+                              }
                             : {}),
                         ...(dto.channelIds !== undefined
                             ? { channelIds: dto.channelIds }
@@ -245,7 +286,12 @@ export class RumAlertRulesService {
         return { items, total, page: query.page, limit: query.limit };
     }
 
-    private validateMetric(metric: RumAlertMetric, eventName?: string | null) {
+    private validateMetric(
+        metric: RumAlertMetric,
+        eventName: string | null | undefined,
+        scope: RumAlertScope,
+        groupId: string | null | undefined,
+    ) {
         if (
             metric === RumAlertMetric.EVENT_COUNT &&
             eventName !== undefined &&
@@ -253,6 +299,31 @@ export class RumAlertRulesService {
             !eventName.trim()
         )
             throw new BadRequestException('eventName must not be blank');
+        if (scope === RumAlertScope.ERROR_GROUP) {
+            if (metric === RumAlertMetric.EVENT_COUNT)
+                throw new BadRequestException(
+                    'EVENT_COUNT cannot be scoped to a single error group',
+                );
+            if (!groupId)
+                throw new BadRequestException(
+                    'groupId is required when scope is ERROR_GROUP',
+                );
+        }
+    }
+
+    private async validateGroup(
+        tx: Prisma.TransactionClient,
+        appId: string,
+        groupId: string,
+    ) {
+        const group = await tx.rumErrorGroup.findFirst({
+            where: { id: groupId, appId },
+            select: { id: true },
+        });
+        if (!group)
+            throw new BadRequestException(
+                'RUM error group does not belong to this app',
+            );
     }
 
     private async validateChannels(

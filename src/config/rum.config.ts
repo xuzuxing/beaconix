@@ -8,6 +8,7 @@ export interface RumConfig {
     errorRetentionDays: number;
     eventRetentionDays: number;
     replayRetentionDays: number;
+    perfSampleRetentionDays: number;
     replayMaxPayloadBytes: number;
     sourceMapMaxBytes: number;
 }
@@ -30,6 +31,10 @@ export const rumConfig = registerAs('rum', (): RumConfig => ({
     errorRetentionDays: positiveInteger('RUM_ERROR_RETENTION_DAYS', '90'),
     eventRetentionDays: positiveInteger('RUM_EVENT_RETENTION_DAYS', '90'),
     replayRetentionDays: positiveInteger('RUM_REPLAY_RETENTION_DAYS', '30'),
+    perfSampleRetentionDays: positiveInteger(
+        'RUM_PERF_SAMPLE_RETENTION_DAYS',
+        '7',
+    ),
     replayMaxPayloadBytes: positiveInteger(
         'RUM_REPLAY_MAX_PAYLOAD_BYTES',
         '65536',

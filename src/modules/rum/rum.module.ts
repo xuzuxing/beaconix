@@ -13,9 +13,16 @@ import { RumEventsService } from './events/rum-events.service';
 import { RumErrorsController } from './errors/rum-errors.controller';
 import { RumErrorsService } from './errors/rum-errors.service';
 import { RumIngestController } from './ingest/rum-ingest.controller';
+import { RumMaintenanceController } from './maintenance/rum-maintenance.controller';
+import { RumPerformanceController } from './performance/rum-performance.controller';
+import { RumPerformanceService } from './performance/rum-performance.service';
+import { RumMaintenanceService } from './maintenance/rum-maintenance.service';
 import { RumIngestService } from './ingest/rum-ingest.service';
+import { RumPerformanceIngestService } from './ingest/rum-performance-ingest.service';
 import { RumPublicIngestService } from './ingest/rum-public-ingest.service';
 import { RumRateLimitService } from './ingest/rum-rate-limit.service';
+import { RumReleasesController } from './releases/rum-releases.controller';
+import { RumReleasesService } from './releases/rum-releases.service';
 import { RumReplaysController } from './replays/rum-replays.controller';
 import { RumReplaysService } from './replays/rum-replays.service';
 import { RumRetentionService } from './retention/rum-retention.service';
@@ -30,9 +37,12 @@ import { RumSourceMapsService } from './source-maps/rum-source-maps.service';
         RumErrorsController,
         RumEventsController,
         RumReplaysController,
+        RumReleasesController,
         RumSourceMapsController,
         RumAlertRulesController,
         RumIngestController,
+        RumMaintenanceController,
+        RumPerformanceController,
     ],
     providers: [
         ProjectRumService,
@@ -40,6 +50,7 @@ import { RumSourceMapsService } from './source-maps/rum-source-maps.service';
         RumErrorsService,
         RumEventsService,
         RumReplaysService,
+        RumReleasesService,
         RumSourceMapsService,
         RumAlertRulesService,
         RumAlertEvaluatorService,
@@ -47,6 +58,9 @@ import { RumSourceMapsService } from './source-maps/rum-source-maps.service';
         RumPublicIngestService,
         RumRateLimitService,
         RumRetentionService,
+        RumMaintenanceService,
+        RumPerformanceService,
+        RumPerformanceIngestService,
     ],
     exports: [RumAppsService, RumErrorsService, RumEventsService],
 })

@@ -1,5 +1,6 @@
 export { RumBrowserClient } from './src/client.js';
 export { BreadcrumbBuffer } from './src/breadcrumbs.js';
+export { createWebVitalsPlugin } from './src/plugins/web-vitals.js';
 export { sanitizeRecord, sanitizeText, stripUrl } from './src/sanitizer.js';
 export type {
     RumBreadcrumb,
@@ -11,6 +12,9 @@ export type {
     RumErrorPayload,
     RumHttpContext,
     RumHttpInstrumentationOptions,
+    RumPerfMetric,
+    RumPerfSample,
+    RumPerformanceOptions,
     RumResourceContext,
     RumSessionReplayOptions,
     RumVueAppLike,

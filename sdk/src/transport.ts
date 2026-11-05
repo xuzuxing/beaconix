@@ -1,4 +1,4 @@
-export type RumTransportPath = 'errors' | 'events' | 'replays';
+export type RumTransportPath = 'errors' | 'events' | 'replays' | 'performance';
 
 export interface RumTransport {
     send(

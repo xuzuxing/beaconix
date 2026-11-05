@@ -51,10 +51,15 @@ export class RumRetentionService implements OnModuleInit {
                 ) *
                     MS_PER_DAY,
         );
+        const perfSampleCutoff = new Date(
+            Date.now() - this.config.perfSampleRetentionDays * MS_PER_DAY,
+        );
         let errors = 0;
         let events = 0;
         let replays = 0;
         let metrics = 0;
+        let perfSamples = 0;
+        let perfBuckets = 0;
 
         for (let batch = 0; batch < MAX_BATCHES; batch += 1) {
             const deleted = await this.prisma.$executeRaw`
@@ -108,8 +113,34 @@ export class RumRetentionService implements OnModuleInit {
             if (deleted < DELETE_BATCH_SIZE) break;
         }
 
+        for (let batch = 0; batch < MAX_BATCHES; batch += 1) {
+            const deleted = await this.prisma.$executeRaw`
+                DELETE FROM "rum_perf_samples" WHERE "id" IN (
+                    SELECT "id" FROM "rum_perf_samples"
+                    WHERE "receivedAt" < ${perfSampleCutoff}
+                    ORDER BY "receivedAt" ASC
+                    LIMIT ${DELETE_BATCH_SIZE}
+                )
+            `;
+            perfSamples += deleted;
+            if (deleted < DELETE_BATCH_SIZE) break;
+        }
+
+        for (let batch = 0; batch < MAX_BATCHES; batch += 1) {
+            const deleted = await this.prisma.$executeRaw`
+                DELETE FROM "rum_perf_buckets" WHERE "id" IN (
+                    SELECT "id" FROM "rum_perf_buckets"
+                    WHERE "bucketStart" < ${metricCutoff}
+                    ORDER BY "bucketStart" ASC
+                    LIMIT ${DELETE_BATCH_SIZE}
+                )
+            `;
+            perfBuckets += deleted;
+            if (deleted < DELETE_BATCH_SIZE) break;
+        }
+
         this.logger.log(
-            `RUM retention removed ${errors} error group(s), ${events} event(s), ${replays} replay session(s), and ${metrics} metric bucket(s)`,
+            `RUM retention removed ${errors} error group(s), ${events} event(s), ${replays} replay session(s), ${metrics} metric bucket(s), ${perfSamples} perf sample(s) and ${perfBuckets} perf bucket(s)`,
         );
     }
 }

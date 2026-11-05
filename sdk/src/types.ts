@@ -51,6 +51,29 @@ export interface RumHttpInstrumentationOptions {
     shouldReportError?: (context: RumHttpContext) => boolean;
 }
 
+export type RumPerfMetric =
+    'LCP' | 'CLS' | 'INP' | 'FCP' | 'TTFB' | 'PAGE_LOAD' | 'RESOURCE' | 'HTTP';
+
+export interface RumPerfSample {
+    metric: RumPerfMetric;
+    value: number;
+    page?: string;
+    release?: string;
+    dimension?: string;
+    success?: boolean;
+    occurredAt?: string;
+}
+
+export interface RumPerformanceOptions {
+    enabled?: boolean;
+    /** Report resource and fetch/XHR timings slower than the threshold. */
+    reportResources?: boolean;
+    resourceThresholdMs?: number;
+    flushIntervalMs?: number;
+    /** Fraction of page loads that collect performance data. Default: 1. */
+    sampleRate?: number;
+}
+
 export interface RumCollectionOptions {
     errors?: boolean;
     rejections?: boolean;
@@ -74,6 +97,7 @@ export interface RumBrowserOptions {
     http?: boolean | RumHttpInstrumentationOptions;
     ignoreUrls?: Array<string | RegExp>;
     sessionReplay?: boolean | RumSessionReplayOptions;
+    performance?: boolean | RumPerformanceOptions;
 }
 
 export interface RumErrorPayload {
@@ -122,6 +146,7 @@ export interface RumPluginContext {
     ): Promise<void>;
     currentPage(): string;
     shouldIgnoreUrl(url: string): boolean;
+    reportPerformance(samples: RumPerfSample[]): Promise<void>;
 }
 
 export interface RumPlugin {

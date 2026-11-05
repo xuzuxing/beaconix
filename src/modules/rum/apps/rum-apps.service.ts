@@ -149,6 +149,35 @@ export class RumAppsService {
         );
     }
 
+    async rotateKey(
+        projectId: string,
+        appId: string,
+        principal: AccessPrincipal,
+    ) {
+        return this.access.withProject(
+            principal,
+            projectId,
+            'app.manage',
+            async (tx, access) => {
+                await this.ensureApp(
+                    tx,
+                    access.organizationId,
+                    projectId,
+                    appId,
+                );
+                // Replacing the unique publicKey invalidates the previous one
+                // immediately: later ingest with the old key gets a 404.
+                return tx.rumApp.update({
+                    where: { id: appId },
+                    data: {
+                        publicKey: this.createPublicKey(),
+                        keyRotatedAt: new Date(),
+                    },
+                });
+            },
+        );
+    }
+
     private async ensureApp(
         db: Pick<PrismaService, 'rumApp'>,
         organizationId: string,
