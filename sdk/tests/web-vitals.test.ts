@@ -37,6 +37,7 @@ function context(samples: RumPerfSample[]): RumPluginContext {
     return {
         addBreadcrumb: () => {},
         captureError: () => Promise.resolve(),
+        captureEvent: () => Promise.resolve(),
         currentPage: () => '/dashboard',
         shouldIgnoreUrl: () => false,
         reportPerformance: (batch) => {
@@ -133,7 +134,6 @@ describe('web vitals plugin', () => {
         assert.deepEqual(metrics.sort(), [
             'CLS',
             'FCP',
-            'HTTP',
             'INP',
             'LCP',
             'PAGE_LOAD',
@@ -144,9 +144,12 @@ describe('web vitals plugin', () => {
             samples.find((sample) => sample.metric === 'RESOURCE')?.dimension,
             'https://cdn.example.com/app.js',
         );
-        assert.equal(
-            samples.find((sample) => sample.metric === 'HTTP')?.success,
-            true,
+        // fetch/XHR are reported by the http plugin (one sample per request,
+        // success included), so this observer must not duplicate them.
+        assert.ok(
+            samples.every(
+                (sample) => sample.dimension !== 'https://api.example.com/users',
+            ),
         );
         assert.ok(samples.every((sample) => sample.page === '/dashboard'));
     });

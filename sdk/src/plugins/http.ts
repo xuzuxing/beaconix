@@ -12,25 +12,29 @@ interface XhrMetadata {
     startedAt: number;
 }
 
+interface HttpSettings {
+    failureStatus: number;
+    reportNetworkErrors: boolean;
+    /** One `HTTP` performance sample per request, used for volume/rate/latency. */
+    reportTimings: boolean;
+    shouldReport?: (http: RumHttpContext) => boolean;
+}
+
 export function createHttpPlugin(
     options: RumHttpInstrumentationOptions = {},
 ): RumPlugin {
-    const failureStatus = options.failureStatus ?? 400;
-    const reportNetworkErrors = options.reportNetworkErrors ?? true;
+    const settings: HttpSettings = {
+        failureStatus: options.failureStatus ?? 400,
+        reportNetworkErrors: options.reportNetworkErrors ?? true,
+        reportTimings: options.reportTimings ?? false,
+        ...(options.shouldReportError
+            ? { shouldReport: options.shouldReportError }
+            : {}),
+    };
     return {
         setup(context) {
-            const restoreFetch = instrumentFetch(
-                context,
-                failureStatus,
-                reportNetworkErrors,
-                options.shouldReportError,
-            );
-            const restoreXhr = instrumentXhr(
-                context,
-                failureStatus,
-                reportNetworkErrors,
-                options.shouldReportError,
-            );
+            const restoreFetch = instrumentFetch(context, settings);
+            const restoreXhr = instrumentXhr(context, settings);
             return () => {
                 restoreFetch();
                 restoreXhr();
@@ -41,9 +45,7 @@ export function createHttpPlugin(
 
 function instrumentFetch(
     context: RumPluginContext,
-    failureStatus: number,
-    reportNetworkErrors: boolean,
-    shouldReport?: (http: RumHttpContext) => boolean,
+    settings: HttpSettings,
 ): () => void {
     if (typeof window.fetch !== 'function') return () => undefined;
     const original = window.fetch;
@@ -69,8 +71,8 @@ function instrumentFetch(
             recordHttp(
                 context,
                 http,
-                response.status >= failureStatus,
-                shouldReport,
+                response.status >= settings.failureStatus,
+                settings,
             );
             return response;
         } catch (error) {
@@ -82,8 +84,8 @@ function instrumentFetch(
                 undefined,
                 'network',
             );
-            if (reportNetworkErrors)
-                reportHttpError(context, http, shouldReport);
+            if (settings.reportNetworkErrors)
+                reportHttpError(context, http, settings);
             throw error;
         }
     };
@@ -94,9 +96,7 @@ function instrumentFetch(
 
 function instrumentXhr(
     context: RumPluginContext,
-    failureStatus: number,
-    reportNetworkErrors: boolean,
-    shouldReport?: (http: RumHttpContext) => boolean,
+    settings: HttpSettings,
 ): () => void {
     if (typeof XMLHttpRequest === 'undefined') return () => undefined;
     const originalOpen = XMLHttpRequest.prototype.open;
@@ -143,13 +143,13 @@ function instrumentXhr(
                 requestId,
                 failureKind,
             );
-            if (this.status >= failureStatus) {
-                reportHttpError(context, http, shouldReport);
+            if (this.status >= settings.failureStatus) {
+                reportHttpError(context, http, settings);
             } else if (this.status === 0) {
-                if (reportNetworkErrors)
-                    reportHttpError(context, http, shouldReport);
+                if (settings.reportNetworkErrors)
+                    reportHttpError(context, http, settings);
             } else {
-                recordHttp(context, http, false, shouldReport);
+                recordHttp(context, http, false, settings);
             }
         };
         this.addEventListener('loadend', onLoadEnd);
@@ -166,12 +166,13 @@ function recordHttp(
     context: RumPluginContext,
     http: RumHttpContext,
     failed: boolean,
-    shouldReport?: (http: RumHttpContext) => boolean,
+    settings: HttpSettings,
 ): void {
     if (failed) {
-        reportHttpError(context, http, shouldReport);
+        reportHttpError(context, http, settings);
         return;
     }
+    reportTiming(context, http, settings, true);
     context.addBreadcrumb({
         type: 'http',
         category: 'request',
@@ -183,9 +184,9 @@ function recordHttp(
 function reportHttpError(
     context: RumPluginContext,
     http: RumHttpContext,
-    shouldReport?: (http: RumHttpContext) => boolean,
+    settings: HttpSettings,
 ): void {
-    if (shouldReport && !shouldReport(http)) {
+    if (settings.shouldReport && !settings.shouldReport(http)) {
         context.addBreadcrumb({
             type: 'http',
             category: 'ignored-failure',
@@ -194,6 +195,7 @@ function reportHttpError(
         });
         return;
     }
+    reportTiming(context, http, settings, false);
     const status = http.status ? ` ${http.status}` : '';
     void context.captureError(
         new Error(`HTTP${status} ${http.method ?? 'GET'} failed`),
@@ -204,6 +206,29 @@ function reportHttpError(
             http,
         },
     );
+}
+
+/**
+ * One sample per request keeps request volume, success rate and latency
+ * measurable. Static assets stay on the web-vitals path so the two plugins
+ * never report the same entry twice.
+ */
+function reportTiming(
+    context: RumPluginContext,
+    http: RumHttpContext,
+    settings: HttpSettings,
+    success: boolean,
+): void {
+    if (!settings.reportTimings) return;
+    void context.reportPerformance([
+        {
+            metric: 'HTTP',
+            value: Math.max(0, Math.round(http.durationMs ?? 0)),
+            ...(http.url ? { dimension: http.url.slice(0, 500) } : {}),
+            success,
+            occurredAt: new Date().toISOString(),
+        },
+    ]);
 }
 
 function createHttpContext(

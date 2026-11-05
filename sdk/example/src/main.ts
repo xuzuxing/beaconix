@@ -32,7 +32,7 @@ start.addEventListener('click', () => {
                 sampleRate: 1,
                 reportResources: true,
             },
-            sessionReplay: false,
+            sessionReplay: true,
         });
         actionButtons.forEach((button) => (button.disabled = false));
         setStatus(`SDK 已初始化，session=${client.getSessionId()}`);

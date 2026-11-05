@@ -29,6 +29,7 @@ import {
     CreateRumErrorNoteDto,
     QueryRumErrorNotesDto,
     QueryRumErrorOccurrencesDto,
+    QueryRumErrorOverviewDto,
     QueryRumErrorsDto,
     UpdateRumErrorDto,
 } from '../dto';
@@ -40,6 +41,8 @@ import {
     RumErrorOccurrenceListEntity,
 } from '../entities';
 import { RumErrorsService } from './rum-errors.service';
+import { RumErrorOverviewEntity } from './rum-error-overview.entity';
+import { RumErrorOverviewService } from './rum-error-overview.service';
 
 @ApiTags('RUM Errors')
 @ApiBearerAuth('access-token')
@@ -50,7 +53,10 @@ import { RumErrorsService } from './rum-errors.service';
     idParam: 'appId',
 })
 export class RumErrorsController {
-    constructor(private readonly errors: RumErrorsService) {}
+    constructor(
+        private readonly errors: RumErrorsService,
+        private readonly overview: RumErrorOverviewService,
+    ) {}
 
     @Get()
     @ApiOperation({ summary: 'List aggregated errors for a RUM app' })
@@ -62,6 +68,23 @@ export class RumErrorsController {
         @CurrentPrincipal() principal: AccessPrincipal,
     ) {
         return this.errors.findAll(projectId, appId, query, principal);
+    }
+
+    // 必须声明在 :errorId 之前，否则 /errors/overview 会被当成错误组 ID
+    @Get('overview')
+    @ApiOperation({
+        summary:
+            'Error overview: occurrence totals, error rate against page views and the matching time series',
+    })
+    @ApiOkResponse({ type: RumErrorOverviewEntity })
+    @ApiNotFoundResponse({ description: 'RUM app not found' })
+    overviewOfErrors(
+        @Param('projectId') projectId: string,
+        @Param('appId') appId: string,
+        @Query() query: QueryRumErrorOverviewDto,
+        @CurrentPrincipal() principal: AccessPrincipal,
+    ) {
+        return this.overview.overview(projectId, appId, query, principal);
     }
 
     @Get(':errorId')

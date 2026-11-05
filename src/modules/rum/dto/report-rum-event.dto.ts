@@ -18,7 +18,7 @@ export class ReportRumEventDto {
 
     @ApiProperty({ example: 'checkout_completed' })
     @IsString()
-    @Matches(/^[A-Za-z0-9._:-]{1,100}$/)
+    @Matches(/^[A-Za-z0-9._:$-]{1,100}$/)
     eventName: string;
 
     @ApiPropertyOptional({ description: 'Application-defined end-user ID' })

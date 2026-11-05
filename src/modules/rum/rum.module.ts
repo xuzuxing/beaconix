@@ -8,10 +8,13 @@ import { RumAlertRulesController } from './alerts/rum-alert-rules.controller';
 import { RumAlertRulesService } from './alerts/rum-alert-rules.service';
 import { RumAppsController } from './apps/rum-apps.controller';
 import { RumAppsService } from './apps/rum-apps.service';
+import { RumAppOverviewController } from './overview/rum-app-overview.controller';
+import { RumAppOverviewService } from './overview/rum-app-overview.service';
 import { RumEventsController } from './events/rum-events.controller';
 import { RumEventsService } from './events/rum-events.service';
 import { RumErrorsController } from './errors/rum-errors.controller';
 import { RumErrorsService } from './errors/rum-errors.service';
+import { RumErrorOverviewService } from './errors/rum-error-overview.service';
 import { RumIngestController } from './ingest/rum-ingest.controller';
 import { RumMaintenanceController } from './maintenance/rum-maintenance.controller';
 import { RumPerformanceController } from './performance/rum-performance.controller';
@@ -34,6 +37,7 @@ import { RumSourceMapsService } from './source-maps/rum-source-maps.service';
     controllers: [
         ProjectRumController,
         RumAppsController,
+        RumAppOverviewController,
         RumErrorsController,
         RumEventsController,
         RumReplaysController,
@@ -47,7 +51,9 @@ import { RumSourceMapsService } from './source-maps/rum-source-maps.service';
     providers: [
         ProjectRumService,
         RumAppsService,
+        RumAppOverviewService,
         RumErrorsService,
+        RumErrorOverviewService,
         RumEventsService,
         RumReplaysService,
         RumReleasesService,

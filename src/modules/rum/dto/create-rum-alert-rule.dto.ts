@@ -55,7 +55,7 @@ export class CreateRumAlertRuleDto {
     @ApiPropertyOptional({ description: 'Required for a specific event count' })
     @IsOptional()
     @IsString()
-    @Matches(/^[A-Za-z0-9._:*:-]{1,100}$/)
+    @Matches(/^[A-Za-z0-9._:*:$-]{1,100}$/)
     eventName?: string;
 
     @ApiProperty({

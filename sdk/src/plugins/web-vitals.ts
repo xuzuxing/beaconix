@@ -110,9 +110,14 @@ export function createWebVitalsPlugin(
                         const duration = resource.duration;
                         if (!duration || duration < resourceThresholdMs)
                             continue;
-                        const isRequest =
+                        // fetch/XHR are reported by the http plugin (one sample
+                        // per request, success included). Skipping them here
+                        // keeps the threshold from hiding fast requests.
+                        if (
                             resource.initiatorType === 'fetch' ||
-                            resource.initiatorType === 'xmlhttprequest';
+                            resource.initiatorType === 'xmlhttprequest'
+                        )
+                            continue;
                         const responseStatus = (
                             resource as PerformanceResourceTiming & {
                                 responseStatus?: number;
@@ -123,7 +128,7 @@ export function createWebVitalsPlugin(
                                 ? responseStatus < 400
                                 : (resource.transferSize ?? 0) > 0;
                         push({
-                            metric: isRequest ? 'HTTP' : 'RESOURCE',
+                            metric: 'RESOURCE',
                             value: Math.round(duration),
                             dimension: stripUrl(resource.name).slice(0, 500),
                             success,

@@ -3,6 +3,7 @@ import { createClickPlugin } from './plugins/click.js';
 import { createConsolePlugin } from './plugins/console.js';
 import { createErrorPlugin } from './plugins/error.js';
 import { createHttpPlugin } from './plugins/http.js';
+import { createPageviewPlugin } from './plugins/pageview.js';
 import { createRejectionPlugin } from './plugins/rejection.js';
 import { createResourcePlugin } from './plugins/resource.js';
 import { createRoutePlugin } from './plugins/route.js';
@@ -211,7 +212,7 @@ export class RumBrowserClient {
         eventName: string,
         properties: Record<string, unknown> = {},
     ): Promise<void> {
-        if (!/^[A-Za-z0-9._:-]{1,100}$/.test(eventName)) {
+        if (!/^[A-Za-z0-9._:$-]{1,100}$/.test(eventName)) {
             throw new Error('Invalid RUM event name');
         }
         await this.transport.send('events', {
@@ -252,8 +253,12 @@ export class RumBrowserClient {
             routes: true,
             console: true,
             clicks: true,
+            pageviews: true,
             ...options.collection,
         };
+        const performanceOptions = normalizePerformanceOptions(
+            options.performance,
+        );
         const plugins: RumPlugin[] = [];
         if (collection.errors) plugins.push(createErrorPlugin());
         if (collection.rejections) plugins.push(createRejectionPlugin());
@@ -261,16 +266,23 @@ export class RumBrowserClient {
         if (collection.routes) plugins.push(createRoutePlugin());
         if (collection.console) plugins.push(createConsolePlugin());
         if (collection.clicks) plugins.push(createClickPlugin());
+        if (collection.pageviews) plugins.push(createPageviewPlugin());
         if (options.http !== false) {
             const httpOptions =
                 typeof options.http === 'object' ? options.http : {};
             if (httpOptions.enabled !== false) {
-                plugins.push(createHttpPlugin(httpOptions));
+                plugins.push(
+                    createHttpPlugin({
+                        ...httpOptions,
+                        // Request telemetry is opt-in with performance
+                        // collection; an explicit value always wins.
+                        reportTimings:
+                            httpOptions.reportTimings ??
+                            performanceOptions.enabled,
+                    }),
+                );
             }
         }
-        const performanceOptions = normalizePerformanceOptions(
-            options.performance,
-        );
         if (performanceOptions.enabled) {
             plugins.push(createWebVitalsPlugin(performanceOptions));
         }
@@ -281,6 +293,8 @@ export class RumBrowserClient {
         return {
             addBreadcrumb: (breadcrumb) => this.addBreadcrumb(breadcrumb),
             captureError: (error, options) => this.captureError(error, options),
+            captureEvent: (eventName, properties) =>
+                this.captureEvent(eventName, properties),
             currentPage: () => this.currentPage(),
             shouldIgnoreUrl: (url) => this.shouldIgnoreUrl(url),
             reportPerformance: (samples) => this.reportPerformance(samples),

@@ -66,6 +66,7 @@ function context(
             captured.push(options ?? {});
             return Promise.resolve();
         },
+        captureEvent: () => Promise.resolve(),
         currentPage: () => 'https://app.example.test/',
         shouldIgnoreUrl: () => false,
         reportPerformance: () => Promise.resolve(),

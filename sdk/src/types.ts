@@ -45,6 +45,12 @@ export interface RumHttpInstrumentationOptions {
     failureStatus?: number;
     reportNetworkErrors?: boolean;
     /**
+     * Report one HTTP performance sample per instrumented request so the console
+     * can chart request volume, success rate and latency. Defaults to
+     * `performance.enabled`, because timings are sampled telemetry.
+     */
+    reportTimings?: boolean;
+    /**
      * Return false to suppress a failed request, for example an intermediate
      * 401 that the host application's token-refresh flow will retry.
      */
@@ -81,6 +87,8 @@ export interface RumCollectionOptions {
     routes?: boolean;
     console?: boolean;
     clicks?: boolean;
+    /** Report `$pageview` on load and after every SPA navigation. */
+    pageviews?: boolean;
 }
 
 export interface RumBrowserOptions {
@@ -143,6 +151,10 @@ export interface RumPluginContext {
     captureError(
         error: unknown,
         options?: RumCaptureErrorOptions,
+    ): Promise<void>;
+    captureEvent(
+        eventName: string,
+        properties?: Record<string, unknown>,
     ): Promise<void>;
     currentPage(): string;
     shouldIgnoreUrl(url: string): boolean;

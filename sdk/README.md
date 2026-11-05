@@ -13,6 +13,17 @@ resource, failed HTTP, Vue and manual errors create error reports. Successful
 HTTP calls, route changes, console calls and clicks are breadcrumbs attached to
 the next report.
 
+Two system events are also sent to `POST /api/rum/events` so the console can draw
+its traffic and error-rate cards:
+
+- `$pageview` — one per page load and per SPA navigation (identical URLs are
+  collapsed), with `{ page }` as properties.
+- `$click` — up to 100 per session, with `{ target, x, y }` as properties.
+
+Both are enabled by default and can be disabled with
+`collection: { pageviews: false, clicks: false }`. They are not sampled by the
+top-level `sampleRate`, because PV is the denominator of the JS error rate.
+
 ## Quick start
 
 ```ts
@@ -59,6 +70,11 @@ and Vue's lifecycle/error info string.
   the same failure can fire in a tight loop.
 - Performance samples are sent to `POST /api/rum/performance`; configure server
   retention with `RUM_PERF_SAMPLE_RETENTION_DAYS`.
+- With performance collection on, the HTTP plugin also sends one `HTTP` sample
+  per instrumented fetch/XHR request (success and failure), which is the source
+  of the console's request volume, success rate and latency cards. Set
+  `http: { reportTimings: false }` to opt out; `reportResources` now covers
+  static assets only, so requests are never counted twice.
 
 ## HTTP retry integration
 
