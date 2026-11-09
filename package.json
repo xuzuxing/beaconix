@@ -2,7 +2,7 @@
   "name": "beaconix",
   "version": "0.0.1",
   "author": "Xuzuxing",
-  "packageManager": "pnpm@11.11.0",
+  "packageManager": "pnpm@12.18.0",
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
