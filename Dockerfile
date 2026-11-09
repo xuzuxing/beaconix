@@ -1,43 +1,37 @@
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 # ==============================================================================
-# Stage 1: Install all dependencies (including dev)
+# Base: 公共 Node 环境
 # ==============================================================================
-FROM node:22-alpine AS deps
+FROM node:22-alpine AS base
 
 ARG NPM_REGISTRY
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME/bin:$PATH"
+
 ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
     pnpm_config_registry=$NPM_REGISTRY
 
 RUN corepack enable
 WORKDIR /app
 
-# 关键：为了减小体积，只拷贝依赖清单
+# ==============================================================================
+# Stage 1: Install all dependencies (including dev)
+# ==============================================================================
+FROM base AS deps
+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-# 安装依赖
-RUN pnpm install --frozen-lockfile \
-        --registry=$NPM_REGISTRY \
-        --network-concurrency=4 \
-        --fetch-retries=5
+RUN pnpm install --frozen-lockfile --registry=$NPM_REGISTRY
 
 # ==============================================================================
 # Stage 2: Build
 # ==============================================================================
-FROM node:22-alpine AS builder
+FROM base AS builder
 
-ARG NPM_REGISTRY
-ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
-    pnpm_config_registry=$NPM_REGISTRY
-
-RUN corepack enable
-WORKDIR /app
-
-# 从 deps 复用 node_modules
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# 生成 Prisma Client，同时只保留当前平台（linux-musl）的引擎
 ENV PRISMA_CLI_QUERY_ENGINE_TYPE=binary
 RUN DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/beaconix" \
     pnpm prisma:generate
@@ -45,51 +39,49 @@ RUN DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/beaconix" 
 RUN pnpm build
 
 # ==============================================================================
-# Stage 3: Production runner (Slim Version)
+# Stage 3: Production dependencies only
 # ==============================================================================
-FROM node:22-alpine AS runner
+FROM base AS prod-deps
 
-ARG NPM_REGISTRY
-ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
-    pnpm_config_registry=$NPM_REGISTRY
+# 只拷贝锁文件，利用 Docker 层缓存加速 fetch
+COPY pnpm-lock.yaml pnpm-workspace.yaml ./
 
-# 1. 替换软件源并安装系统工具
+RUN pnpm fetch --prod --registry=$NPM_REGISTRY
+
+COPY package.json ./
+
+RUN pnpm install --frozen-lockfile --prod --offline \
+        --ignore-scripts \
+        --registry=$NPM_REGISTRY
+
+# ==============================================================================
+# Stage 4: Production runner (Slim Version)
+# ==============================================================================
+FROM base AS runner
+
 RUN apk add --no-cache iputils
 
 WORKDIR /app
 ENV NODE_ENV=production
-RUN corepack enable
 
-# 2. 拷贝编译产物和 Prisma 生成文件
+# 拷贝编译产物和 Prisma 生成文件
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/src/generated ./src/generated
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/.env.example ./env
 COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 
-# 3. 拷贝清单
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# 只复制生产依赖，不复制安装过程的中间文件
+COPY --from=prod-deps /app/node_modules ./node_modules
 
-# 4. 只安装生产依赖并立即清理缓存
-# --ignore-scripts 防止 husky 等脚本报错；完成后立即清理 pnpm store
-RUN pnpm install --frozen-lockfile --prod \
-        --ignore-scripts \
-        --registry=$NPM_REGISTRY \
-        --network-concurrency=4 \
-        --fetch-retries=5 \
-    && pnpm store prune \
-    && rm -rf /root/.local/share/pnpm/store /root/.npm
-
-# 5. 裁剪 Prisma 引擎（可选，但极其有效）
-# 如果你确定只在 alpine 上跑，可以删掉非 linux-musl 的引擎
-RUN find node_modules/.prisma -type f -not -name "*linux-musl*" -name "*.node" -delete || true
+# Prisma 清理：删缓存、CLI、无用引擎，只保留 linux-musl 运行时文件
+RUN rm -rf node_modules/.cache \
+           node_modules/prisma \
+           node_modules/@prisma/engines \
+           /root/.cache/prisma \
+    && find node_modules/.prisma -type f -not -name "*linux-musl*" -name "*.node" -delete || true
 
 ENV PORT=3000
 EXPOSE $PORT
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD node -e "const p=(process.env.GLOBAL_PREFIX??'/api').trim().replace(/^\/+|\/+$/g,'');fetch('http://localhost:'+process.env.PORT+(p?'/'+p:'')+'/health/live',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-
-# Run migrations first, then start the server
-# DATABASE_URL is injected by Render at container startup — not available at build time
-CMD ["sh", "-c", "npx prisma migrate deploy --config prisma.config.ts && node dist/src/main"]
+CMD ["node", "dist/src/main"]
