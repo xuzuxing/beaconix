@@ -61,7 +61,8 @@ stages:
             - mkdir -p /root/.kube
             - echo "$KUBE_CONFIG" > /root/.kube/config
             - chmod 600 /root/.kube/config
-            - kubectl set image deployment/beaconix-app app=registry.xuzuxing.cn/beaconix/beaconix-app:${COMMIT_SHA} -n beaconix
+            - IMAGE_REF="registry.xuzuxing.cn/beaconix/beaconix-app:${CI_COMMIT_ID}"
+            - kubectl set image deployment/beaconix-app app="$IMAGE_REF" -n beaconix
             - kubectl rollout status deployment/beaconix-app -n beaconix --timeout=600s
 
   - id: stg_check
